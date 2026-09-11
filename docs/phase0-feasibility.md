@@ -4,11 +4,13 @@
 - **Updated:** 2026-09-11
 - **Branch at capture:** `main`
 - **Baseline commit:** `fc4695d` (`Merge pull request #172 from saadshabir/dependabot/pip/internal/anomaly/python-minor-patch-974410666c`)
-- **Gate:** **Open** — Linux/Kubernetes feasibility and CI handoff evidence are still required.
+- **Gate:** **Open** — the scoped hosted characterization passed, but the full
+  Phase 0 traffic and lifecycle contract is not yet exercised.
 
 This report distinguishes the clean commit baseline, the already-dirty working
-tree at capture, and the local Phase 0 safety work completed afterward. None of
-the local results prove that the streamlined Linux enforcer is feasible.
+tree at capture, the local Phase 0 safety work completed afterward, and the
+hosted characterization results. Local results alone do not prove that the
+streamlined Linux enforcer is feasible.
 
 ## Baseline identity and working-tree boundary
 
@@ -40,15 +42,17 @@ and fixed a flaky dispatcher test. The safety work is committed locally as
 - `/sys/fs/bpf`, `/sys/fs/cgroup`, `/proc/self/cgroup`, and `/dev/bpf` are
   absent.
 
-Therefore these Phase 0 claims remain unverified:
+The macOS checkout cannot run those kernel-dependent checks. The hosted run
+below verifies a meaningful subset, but these Phase 0 claims remain unverified:
 
 - cgroup v2 and containerd/systemd cgroup layout;
 - the cgroup identity returned by `bpf_get_current_cgroup_id()`;
-- cgroup ingress/egress packet-data offsets;
 - pre- and post-NAT addresses and ports for PodIP and ClusterIP traffic;
-- bpffs pin access, program attachment, CNI coexistence, and required
-  capabilities under the exact target DaemonSet security context;
-- Pod-start-to-classification, restart, and rolling-update enforcement gaps.
+- reply, node, self, rejected-IPv6, CNI coexistence, and unsupported-traffic
+  behavior;
+- the full target DaemonSet lifecycle and security context, including
+  Pod-start-to-classification, restart, and rolling-update enforcement gaps;
+- partial-update atomicity, quarantine behavior, and stable flow lifetime.
 
 ## Local safety work completed
 
@@ -56,30 +60,33 @@ Therefore these Phase 0 claims remain unverified:
   v1.7.12, repository-local caches/tools, race-enabled tests, workflow
   validation, and explicit-path cleanup.
 - Added a non-publishing `Migration CI` workflow with a stable `Required CI`
-  check. It is pushed and green for the branch event; `Required CI` is now a
-  required branch-protection check on `main`.
+  check. Its final push and pull-request runs are green; `Required CI` is a
+  strict required branch-protection check on `main`.
 - Removed approximately 972 MiB of repository-local binaries, test outputs,
   coverage data, Go build data, and lint/Python caches. This includes the
   tracked root `bpfgen` executable; `tools/bpfgen` source is retained, and
   `/bpfgen` is now ignored.
 - Kept the generated eBPF bindings and reverified their pinned clang-18
-  outputs:
+  outputs at the final head:
 
 ```text
-internal/enforcer/bpf_bpfel.go  3930dd0d75a6f7e15ce405af92890d752b97bed4448f9eaf408f2b9053d7829a
-internal/enforcer/bpf_bpfeb.go  ecac0b8d20792d5dcd61a0d1e4822e40716b1143bfae1c0f33a0643ea2f6e278
+internal/enforcer/bpf_bpfel.go  05e332d52427943a3567454ada6ca3b2cc019a5f656bda99d8ced40e22253cfb
+internal/enforcer/bpf_bpfeb.go  fdbcbc42619e9c49f554b32a4e931b004e75b0e51eb8a8fd770854319c25c670
 ```
 
 - Made `TestDispatcherEmitDropsWhenFull` deterministic by filling the queue
   before starting any worker. The prior test raced its worker against its
   second enqueue and could intermittently observe no drop.
 - Added focused Linux-tagged characterization tests for cgroup-v2/bpffs
-  preflight, ingress allow/deny traffic, and flow-map pin/open/cleanup, plus a
-  disposable capability-only Kubernetes probe and PR-triggered workflow in
-  commits `42b7203`, `9056016`, `b4c704a`, `4329ef5`, and `681d571`.
+  preflight, ingress/egress allow/deny traffic, LPM matching, cgroup
+  isolation, graceful reload, and flow-map pin/open/cleanup, plus a disposable
+  capability-only Kubernetes probe and PR-triggered workflow. The parser,
+  address-normalization, and ingress cgroup-identity corrections are recorded
+  in commits through `d25c70e`.
 
-No product feature, architecture, old workflow, release workflow, or target
-DaemonSet was deleted in this local slice.
+The transitional release workflow is deleted. Product features, the old
+specialized CI jobs, and the target DaemonSet were not deleted while the
+remaining Phase 0 contract evidence is open.
 
 ## Test evidence
 
@@ -97,36 +104,36 @@ sockets required them:
 - `make lint` with the pinned linters;
 - `make check`, which runs the complete non-privileged local gate above.
 
-The pushed `Migration CI` run `34564093570` passed on commit `b7f8b5a`; both
-its build/test/vet/lint job and its `Required CI` job were successful. The
-repository now reports `main` as protected with strict `Required CI` status
-checks. The separately dispatched legacy run `34564466189` passed its generic
-Linux integration job, but failed unrelated Proto/Windows jobs and therefore
-skipped its old eBPF verification job; it is not feasibility evidence.
+`Migration CI` runs `34634540864` (push) and `34634544640` (pull request) passed
+on `d25c70e`; their build/test/vet/lint and stable `Required CI` checks were
+successful. `main` is protected with strict `Required CI` status checks, and
+the release workflow has now been removed so transitional commits cannot push
+product images or releases.
 
-The first PR-triggered `Phase 0 Feasibility` run `34565906626` failed before
-the substantive assertions. The Kubernetes job requested
-`kindest/node:v1.36.0`, which is not a published image tag. The Linux job's
-generated-binding check also detected byte drift because the workflow used the
-runner's unpinned clang. Neither failure reached a kernel, packet, cgroup, NAT,
-or security-context assertion, so neither is an architecture contradiction.
-The workflow now pins clang 18 and the available Kubernetes 1.36.4 node image;
-the retry result is the evidence needed for the gate. The next run,
-`34566705931`, passed the cgroup-v2/bpffs preflight and the stricter Kubernetes
-fixture, and exposed a duplicate-map loader defect followed by missing flow
-events from the old Ethernet-header assumption. The duplicate-map defect was
-fixed in `b4c704a`; the cgroup-skb parser now starts at the network-layer
-header in `4329ef5`.
+The failure progression was useful characterization rather than evidence of
+an architectural contradiction: `34565906626` found an unavailable Kind image
+and unpinned clang; `34566705931` found duplicate map assignment and the old
+Ethernet-header assumption; `34631955836` found ingress identity was using the
+current task rather than the attached cgroup; and `34633722039` found that a
+graceful reload needed cgroup-storage map reuse. The fixes are in
+`b4c704a`, `4329ef5`, `834d4c2`, `68c3437`, and `d25c70e`.
 
-Run `34567037096` then verified the corrected source compiled and the stricter
-Kubernetes fixture passed, but its generated-binding check stopped the Linux
-job before the kernel traffic tests. The pinned clang output was recovered from
-the workflow artifact and committed in `681d571`; a fresh run is required to
-execute those tests against the corrected parser.
+The authoritative hosted run is `34634544635`. Its Linux job passed the
+clang-18 generated-binding drift check, cgroup-v2/bpffs preflight, object load
+and attach, cgroup isolation, selected-only semantics, egress CIDR matching,
+real UDP ingress allow/deny, graceful reload, and flow-map pin cleanup. It ran
+on kernel `6.17.0-1022-azure` with cgroup v2 and the required controllers.
 
-This separates locally reproducible source failures from sandbox capability
-failures. The pushed `Migration CI` result covers the non-privileged gate; it
-does not replace the dedicated Linux eBPF and Kubernetes fixture.
+Its Kubernetes job passed with server `v1.36.4`, containerd `2.3.4`,
+`SystemdCgroup = true`, the same kernel family, host-mounted cgroup2 and bpffs,
+and the non-privileged RuntimeDefault probe carrying exactly `BPF`,
+`NET_ADMIN`, `PERFMON`, and `SYS_RESOURCE`. This proves the current fixture's
+runtime and capability assumptions, not the full target DaemonSet contract.
+
+The final run therefore confirms that the retained cgroup eBPF path is
+feasible for the tested packet layout, policy-map behavior, ingress identity,
+reload, and Kubernetes runtime assumptions. It does not replace the open
+traffic/lifecycle fixture listed below.
 
 ## Retained Linux eBPF assertion checklist
 
@@ -145,6 +152,8 @@ Linux integration test suite; they were not run on this macOS host:
   map creation is unavailable.
 - [x] Exercise selected-cgroup ingress allow/deny with real UDP traffic.
 - [x] Open a pinned flow map and verify the pin is removed on shutdown.
+- [x] Exercise the cgroup-skb parser at the network-layer offset with real
+  ingress and egress traffic.
 - [ ] Exercise ingress and egress allow/deny through the replacement contract.
 - [ ] Prove packet offsets independently at ingress and egress.
 - [ ] Record direct PodIP and explicit ClusterIP pre/post-NAT addresses and
@@ -156,6 +165,11 @@ Linux integration test suite; they were not run on this macOS host:
 - [ ] Prove cgroup identity under containerd with the systemd cgroup driver.
 - [ ] Measure Pod-start classification, restart, and rolling-update gaps.
 
+The hosted Kubernetes probe also verifies the current reference fixture's
+non-privileged capability set, host cgroup2/bpffs mounts, and systemd cgroup
+driver. It does not run the eBPF traffic suite inside the target DaemonSet or
+observe Service/CNI/lifecycle traffic.
+
 The existing manifest still uses `hostNetwork`, `privileged: true`,
 `allowPrivilegeEscalation: true`, `ztap:latest`, and an exec-based `status`
 probe. It is characterization input, not the target deployment contract.
@@ -163,30 +177,26 @@ probe. It is characterization input, not the target deployment contract.
 ## CI and branch state
 
 - The current local branch is `codex/streamline-ztap`; `origin` contains it
-  through `681d571`, with the uncommitted Phase 1 implementation intentionally
+  through `d25c70e`, with the uncommitted Phase 1 implementation intentionally
   outside the branch commits.
-- `Migration CI` is green for the pushed branch event and `Required CI` is
-  required on `main`; PR #177's default-branch pull-request event is still
-  running.
-- PR #177 is the review vehicle. Its strict Kubernetes characterization has
-  passed with Kubernetes `v1.36.4`, containerd `2.3.4`, systemd cgroups,
-  kernel `6.17.0-1022-azure`, host-mounted cgroup2/bpffs, and exactly the four
-  requested capabilities. The Linux traffic retry after `681d571` is pending.
-- Existing CI and release workflows are intentionally retained until the
-  required-check handoff can be performed in order. The migration workflow
-  itself has no publishing permissions or steps.
+- `Migration CI` is green for both the final push and pull-request events, and
+  `Required CI` is strict and required on `main`.
+- PR #177 is the review vehicle. Its final Phase 0 run is `34634544635`; the
+  Linux and Kubernetes jobs both passed as recorded above.
+- The release workflow is removed. The migration workflow itself has no
+  publishing permissions or steps; specialized legacy jobs remain pending the
+  still-open feature/contract gate.
 
 ## Gate decision and next evidence
 
-Phase 0 is **not closed**. Safe artifact/tooling cleanup is locally complete,
-but broad feature or architecture deletion and target DaemonSet changes remain
-blocked.
+Phase 0 safety work and the current Linux/Kubernetes characterization runner
+pass. The architecture gate remains **open** because the run did not exercise
+the full contract: independent packet-offset capture, PodIP/ClusterIP
+pre/post-NAT visibility, reply/node/self/rejected-IPv6 cases, CNI behavior,
+stable flow lifetime, partial-update/quarantine behavior, Pod-start delay, or
+restart/rollout recovery. None of the assumptions that were actually tested
+contradicts the planned Linux/Kubernetes cgroup-enforcer architecture.
 
-The next required technical run is the pinned retry of the disposable Linux
-fixture after `681d571`, followed by the Kubernetes traffic/gap fixture. The
-Phase 0 report still needs packet offsets, NAT visibility, cgroup identity,
-CNI behavior, Pod-start classification delay, restart recovery, and
-rolling-update recovery before the gate can close. Separately, the migration
-workflow must be proven green on its branch and default-branch pull-request
-event, made required, and only then used to hand off and remove the old
-publishing/specialized workflows.
+Do not begin broad product deletion or claim Phase 1 readiness until those
+remaining contract items have executable evidence or the plan is explicitly
+revised to narrow the gate.
