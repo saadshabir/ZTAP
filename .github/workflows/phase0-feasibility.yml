@@ -225,9 +225,10 @@ jobs:
               deployments/kubernetes/phase0-traffic-agent.yaml > "$RUNNER_TEMP/phase0-traffic-agent.yaml"
             kubectl apply -f "$RUNNER_TEMP/phase0-traffic-agent.yaml"
             kubectl -n ztap-phase0 rollout status daemonset/phase0-traffic-observer --timeout=180s
+            kubectl -n ztap-phase0 get pods -o wide | tee -a phase0-kubernetes.txt
             observer_pod=''
             for attempt in $(seq 1 90); do
-              observer_pod="$(kubectl -n ztap-phase0 get pods -l app=ztap-phase0-traffic-observer -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
+              observer_pod="$(kubectl -n ztap-phase0 get pods -o name 2>/dev/null | awk -F/ '$2 ~ /^phase0-traffic-observer-/ { print $2; exit }' || true)"
               if test -n "$observer_pod"; then
                 break
               fi
@@ -319,11 +320,11 @@ jobs:
         run: |
           set -euo pipefail
           namespace=ztap-phase0
-          observer_selector='app=ztap-phase0-traffic-observer'
+          observer_prefix='phase0-traffic-observer-'
 
           observer_pod=''
           for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
+            observer_pod="$(kubectl -n "$namespace" get pods -o name 2>/dev/null | awk -F/ -v prefix="$observer_prefix" '$2 ~ ("^" prefix) { print $2; exit }' || true)"
             if test -n "$observer_pod"; then
               break
             fi
@@ -349,7 +350,7 @@ jobs:
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
           observer_pod=''
           for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
+            observer_pod="$(kubectl -n "$namespace" get pods -o name 2>/dev/null | awk -F/ -v prefix="$observer_prefix" '$2 ~ ("^" prefix) { print $2; exit }' || true)"
             if test -n "$observer_pod"; then
               break
             fi
@@ -368,7 +369,7 @@ jobs:
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
           observer_pod=''
           for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
+            observer_pod="$(kubectl -n "$namespace" get pods -o name 2>/dev/null | awk -F/ -v prefix="$observer_prefix" '$2 ~ ("^" prefix) { print $2; exit }' || true)"
             if test -n "$observer_pod"; then
               break
             fi
@@ -390,7 +391,7 @@ jobs:
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
           observer_pod=''
           for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
+            observer_pod="$(kubectl -n "$namespace" get pods -o name 2>/dev/null | awk -F/ -v prefix="$observer_prefix" '$2 ~ ("^" prefix) { print $2; exit }' || true)"
             if test -n "$observer_pod"; then
               break
             fi
