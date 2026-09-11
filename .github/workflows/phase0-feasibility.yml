@@ -191,7 +191,7 @@ jobs:
             server_ip="$(kubectl -n ztap-phase0 get pod phase0-server -o jsonpath='{.status.podIP}')"
             client_ip="$(kubectl -n ztap-phase0 get pod phase0-client -o jsonpath='{.status.podIP}')"
             service_ip="$(kubectl -n ztap-phase0 get service phase0-server -o jsonpath='{.spec.clusterIP}')"
-            node_ip="$(kubectl get node -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')"
+            node_ip="$(kubectl get nodes --no-headers -o wide | awk 'NR == 1 { print $6 }')"
             client_container_id="$(kubectl -n ztap-phase0 get pod phase0-client -o jsonpath='{.status.containerStatuses[0].containerID}')"
             client_container_id="${client_container_id#*://}"
             client_started_at="$(kubectl -n ztap-phase0 get pod phase0-client -o jsonpath='{.status.containerStatuses[0].state.running.startedAt}')"
@@ -227,7 +227,7 @@ jobs:
             kubectl -n ztap-phase0 rollout status daemonset/phase0-traffic-observer --timeout=180s
             observer_pod=''
             for attempt in $(seq 1 90); do
-              observer_pod="$(kubectl -n ztap-phase0 get pods -l app=ztap-phase0-traffic-observer -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+              observer_pod="$(kubectl -n ztap-phase0 get pods -l app=ztap-phase0-traffic-observer -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
               if test -n "$observer_pod"; then
                 break
               fi
@@ -323,7 +323,7 @@ jobs:
 
           observer_pod=''
           for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
             if test -n "$observer_pod"; then
               break
             fi
@@ -349,7 +349,7 @@ jobs:
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
           observer_pod=''
           for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
             if test -n "$observer_pod"; then
               break
             fi
@@ -368,7 +368,7 @@ jobs:
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
           observer_pod=''
           for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
             if test -n "$observer_pod"; then
               break
             fi
@@ -390,7 +390,7 @@ jobs:
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
           observer_pod=''
           for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o name 2>/dev/null | sed -n '1s#^pod/##p' || true)"
             if test -n "$observer_pod"; then
               break
             fi
