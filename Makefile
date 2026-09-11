@@ -9,9 +9,13 @@ GOLANGCI_LINT_VERSION := v2.12.2
 GOLANGCI_LINT := $(TOOLS_DIR)/golangci-lint
 ACTIONLINT_VERSION := v1.7.12
 ACTIONLINT := $(TOOLS_DIR)/actionlint
-GO_FILES := $(shell find . -type f -name '*.go' -not -path './vendor/*')
+GO_FILES := $(shell find . -type f -name '*.go' \
+	-not -path './vendor/*' \
+	-not -path './.cache/*' \
+	-not -path './bin/*' \
+	-not -path './dist/*')
 
-.PHONY: build test vet fmt-check lint check generate check-generated integration docker clean
+.PHONY: build test vet fmt-check lint check generate check-generated integration docker phase0-fixture clean
 
 build:
 	@mkdir -p "$(BIN_DIR)"
@@ -56,6 +60,9 @@ integration:
 
 docker:
 	docker build -t ztap:dev .
+
+phase0-fixture:
+	sh scripts/phase0_reference_fixture.sh --output "$(CURDIR)/dist/phase0-v0.1.0" --force
 
 clean:
 	rm -f -- ./ztap ./ztap-operator ./bpfgen ./*.exe ./*.test ./coverage*.out ./coverage.html

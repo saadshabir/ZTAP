@@ -87,10 +87,19 @@ internal/enforcer/bpf_bpfeb.go  fdbcbc42619e9c49f554b32a4e931b004e75b0e51eb8a8fd
   capability-only Kubernetes probe and PR-triggered workflow. The parser,
   address-normalization, and ingress cgroup-identity corrections are recorded
   in commits through `d25c70e`.
+- Added a still-pending Linux fixture for consecutive flow-tuple decoding and
+  explicit selected-cgroup IPv6 rejection. Added the deterministic
+  `v0.1.0` reference-fixture generator and extended the kind workflow with a
+  disposable PodIP/ClusterIP, node, self, reply, rejected-IPv6, CNI, and
+  lifecycle probe. It records the client cgroup observation and policy-ready
+  timestamps, separate workload/agent/rollout timings, the cgroup-visible
+  tuple, and node traffic for Service DNAT comparison. These additions are
+  instrumentation only; they do not close the gate until the hosted Linux/kind
+  run produces and reviews the raw evidence.
 
-The transitional release workflow is deleted. Product features, the old
-specialized CI jobs, and the target DaemonSet were not deleted while the
-remaining Phase 0 contract evidence is open.
+The transitional release workflow and the old feature-only CI jobs are deleted
+from the Phase 0 working tree. Product features and the target DaemonSet remain
+in place while the remaining Phase 0 contract evidence is open.
 
 ## Test evidence
 
@@ -107,6 +116,8 @@ sockets required them:
 - `make vet`;
 - `make lint` with the pinned linters;
 - `make check`, which runs the complete non-privileged local gate above.
+- `make phase0-fixture` generated the 250-Pod/25-policy/2,500-rule fixture,
+  and `make clean` removed its generated output successfully.
 
 `Migration CI` runs `34634540864` (push) and `34634544640` (pull request) passed
 on `d25c70e`; their build/test/vet/lint and stable `Required CI` checks were
@@ -158,6 +169,10 @@ Linux integration test suite; they were not run on this macOS host:
 - [x] Open a pinned flow map and verify the pin is removed on shutdown.
 - [x] Exercise the cgroup-skb parser at the network-layer offset with real
   ingress and egress traffic.
+- [x] Decode consecutive IPv4 flow tuples from one pinned reader and keep the
+  pin present until enforcer shutdown.
+- [x] Emit and block a selected-cgroup IPv6 packet when only IPv4 policy is
+  configured.
 - [ ] Exercise ingress and egress allow/deny through the replacement contract.
 - [ ] Prove packet offsets independently at ingress and egress.
 - [ ] Record direct PodIP and explicit ClusterIP pre/post-NAT addresses and
@@ -187,9 +202,9 @@ probe. It is characterization input, not the target deployment contract.
   `Required CI` is strict and required on `main`.
 - PR #177 is the review vehicle. Its final Phase 0 run is `34634544635`; the
   Linux and Kubernetes jobs both passed as recorded above.
-- The release workflow is removed. The migration workflow itself has no
-  publishing permissions or steps; specialized legacy jobs remain pending the
-  still-open feature/contract gate.
+- The release workflow and the feature-only legacy CI jobs are removed. The
+  migration workflow itself has no publishing permissions or steps; the
+  architecture gate still depends on hosted traffic/lifecycle evidence.
 
 ## Gate decision and next evidence
 

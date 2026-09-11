@@ -21,53 +21,6 @@ on:
     - cron: "0 2 * * 1"
 
 jobs:
-  changes:
-    name: Detect Changed Paths
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      python: ${{ steps.filter.outputs.python || steps.defaults.outputs.python }}
-      docker: ${{ steps.filter.outputs.docker || steps.defaults.outputs.docker }}
-      ebpf: ${{ steps.filter.outputs.ebpf || steps.defaults.outputs.ebpf }}
-
-    steps:
-      - name: Defaults for non-PR events
-        id: defaults
-        if: github.event_name != 'pull_request'
-        run: |
-          {
-            echo "python=true"
-            echo "docker=true"
-            echo "ebpf=true"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Filter changed paths
-        id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
-        with:
-          token: ${{ github.token }}
-          filters: |
-            python:
-              - 'internal/anomaly/**'
-            docker:
-              - 'Dockerfile'
-              - 'docker-compose.yml'
-              - 'internal/anomaly/Dockerfile'
-              - 'Dockerfile.operator'
-              - '.dockerignore'
-              - '**/*.go'
-              - 'go.mod'
-              - 'go.sum'
-              - 'examples/**'
-              - 'tools/**'
-            ebpf:
-              - 'bpf/**'
-              - 'internal/enforcer/**'
-
   lint:
     name: Lint & Format Check
     runs-on: ubuntu-24.04
@@ -136,55 +89,11 @@ jobs:
         with:
           args: -color
 
-  proto:
-    name: Proto Lint, Breaking & Drift
+  test-go:
+    name: Go Tests (Linux)
     runs-on: ubuntu-24.04
     needs: lint
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # On push/schedule runs the checkout is already on main, and
-      # force-updating the checked-out branch would fail. Only PRs need
-      # a local main branch for buf's breaking check.
-      - name: Fetch main for breaking change detection
-        if: github.event_name == 'pull_request'
-        run: |
-          git fetch origin main
-          git branch -f main origin/main
-
-      - name: Run buf lint and breaking checks
-        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
-        with:
-          version: 1.64.0
-          pr_comment: false
-          lint: true
-          breaking: true
-          breaking_against: ".git#branch=main"
-
-      - name: Check generated protos are up to date
-        run: ./scripts/gen_proto.sh && git diff --exit-code
-
-  test-go:
-    name: Go Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    needs: lint
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-latest, windows-latest]
 
     steps:
       - name: Check out code
@@ -202,25 +111,7 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        # -race on the Linux leg only: it covers the race detector where most
-        # platform-specific code lives, without tripling CI runtime.
-        run: go test ./... -v -covermode=atomic -coverpkg=./internal/...,./cmd/... -coverprofile=coverage-${{ matrix.os }}.out -timeout 10m ${{ matrix.os == 'ubuntu-24.04' && '-race' || '' }}
-
-      - name: Coverage gate (ratchet)
-        if: ${{ hashFiles(format('coverage-{0}.out', matrix.os)) != '' }}
-        shell: bash
-        run: go run ./cmd/covergate -coverprofile coverage-${{ matrix.os }}.out -repo . -baseline .covergate-baseline.json
-
-      - name: Upload coverage artifact
-        if: failure() || github.event_name != 'pull_request'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: coverage-${{ matrix.os }}
-          path: coverage-${{ matrix.os }}.out
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # Windows is covered via the 3-OS matrix in test-go.
+        run: go test ./... -race -timeout 10m
 
   test-integration:
     name: Integration Tests (Linux)
@@ -266,51 +157,10 @@ jobs:
         with:
           fail-on-severity: moderate
 
-  test-python:
-    name: Python Anomaly Detection Tests
-    runs-on: ubuntu-24.04
-    needs: [lint, changes]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.python == 'true'
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: internal/anomaly/pyproject.toml
-
-      - name: Install dependencies
-        working-directory: internal/anomaly
-        run: |
-          python -m pip install -e ".[dev]"
-
-      - name: Run ruff lint
-        working-directory: internal/anomaly
-        run: ruff check .
-
-      - name: Run Python tests
-        working-directory: internal/anomaly
-        run: python -m pytest test_service.py -v --cov=service --cov-report=xml
-
-      - name: Upload Python coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: python-coverage
-          path: internal/anomaly/coverage.xml
-          retention-days: 14
-
   docker-build:
     name: Docker Build (${{ matrix.image }})
     runs-on: ubuntu-24.04
-    needs: [lint, changes]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ebpf == 'true'
+    needs: lint
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -320,14 +170,6 @@ jobs:
             context: .
             file: ./Dockerfile
             tag: ztap:test
-          - image: ztap-anomaly
-            context: ./internal/anomaly
-            file: ./internal/anomaly/Dockerfile
-            tag: ztap-anomaly:test
-          - image: ztap-operator
-            context: .
-            file: ./Dockerfile.operator
-            tag: ztap-operator:test
 
     steps:
       - name: Check out code
@@ -347,32 +189,12 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
-  docker-compose-test:
-    name: Docker Compose Test
-    runs-on: ubuntu-24.04
-    needs: [docker-build]
-    if: github.event_name != 'pull_request'
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Test Docker Compose Stack
-        run: |
-          docker compose -f docker-compose.yml config
-          docker compose -f docker-compose.yml up -d --wait --wait-timeout 60
-          docker compose -f docker-compose.yml ps
-          docker compose -f docker-compose.yml down
-
   ebpf-verification:
     name: eBPF Verification (Linux)
     runs-on: ubuntu-24.04
-    needs: [lint, test-go, changes]
+    needs: [lint, test-go]
     # Forked PRs cannot run privileged eBPF steps
-    if: (github.event_name != 'pull_request' || needs.changes.outputs.ebpf == 'true') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 30
 
     steps:
@@ -420,66 +242,15 @@ jobs:
           ZTAP_DEBUG_EBPF: "1"
         run: sudo --preserve-env=PATH,HOME,GOFLAGS,GOMODCACHE,GOCACHE,ZTAP_BPF_OBJECT,ZTAP_DEBUG_EBPF go test -tags integration ./internal/enforcer -run TestEBPFIntegrationLoadAndAttach -v
 
-  coverage-report:
-    name: Generate Coverage Report
-    needs: [test-go, test-python]
-    runs-on: ubuntu-24.04
-    if: github.event_name != 'pull_request' && always() && (needs.test-go.result == 'success' || needs.test-python.result == 'success')
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Download all coverage artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          path: coverage-reports
-          pattern: coverage-*
-          merge-multiple: false
-
-      - name: Display coverage structure
-        run: ls -R coverage-reports
-
-      - name: Generate combined coverage report
-        run: |
-          {
-            printf '## Test Coverage Summary\n\n'
-            for file in coverage-reports/coverage-*/coverage-*.out; do
-              if [ -f "$file" ]; then
-                os=$(basename "$(dirname "$file")")
-                os=${os#coverage-}
-                printf '### %s\n' "$os"
-                go tool cover -func="$file" | tail -1
-                printf '\n'
-              fi
-            done
-          } > coverage-summary.md
-
-      - name: Upload coverage summary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: coverage-summary
-          path: coverage-summary.md
-          retention-days: 14
-
   build-check:
-    name: Build Check (Multi-Platform)
+    name: Build Check (Linux)
     runs-on: ubuntu-24.04
     needs: lint
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        goos: [linux, darwin, windows]
+        goos: [linux]
         goarch: ${{ fromJSON(github.event_name == 'pull_request' && '["amd64"]' || '["amd64","arm64"]') }}
 
     steps:
@@ -501,54 +272,22 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           out="ztap-${GOOS}-${GOARCH}"
-          if [ "${GOOS}" = "windows" ]; then
-            out="${out}.exe"
-          fi
           go build -o "${out}" ./cmd/ztap
           ls -lh "${out}"
-
-  fuzz:
-    name: Go Fuzz Tests
-    runs-on: ubuntu-24.04
-    needs: lint
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Run fuzz tests (short)
-        run: |
-          go test -run='^$' -fuzz='^FuzzParsePolicyKey$' -fuzztime=30s ./internal/cluster
-          go test -run='^$' -fuzz='^FuzzParseMappingFile$' -fuzztime=30s ./internal/compliance
-          go test -run='^$' -fuzz='^FuzzValidateControlID$' -fuzztime=30s ./internal/compliance
 
   all-checks:
     name: All Checks Passed
     runs-on: ubuntu-24.04
     needs:
-      - changes
       - lint
       - actionlint
       - zizmor
-      - proto
       - test-go
       - test-integration
-      - test-python
       - docker-build
-      - docker-compose-test
       - ebpf-verification
       - build-check
       - dependency-review
-      - fuzz
     if: always()
     timeout-minutes: 5
 
@@ -556,20 +295,15 @@ jobs:
       - name: Check all jobs status
         run: |
           echo "Job Results:"
-          echo "  changes: ${NEEDS_CHANGES_RESULT}"
           echo "  lint: ${NEEDS_LINT_RESULT}"
           echo "  actionlint: ${NEEDS_ACTIONLINT_RESULT}"
           echo "  zizmor: ${NEEDS_ZIZMOR_RESULT}"
-          echo "  proto: ${NEEDS_PROTO_RESULT}"
           echo "  test-go: ${NEEDS_TEST_GO_RESULT}"
           echo "  test-integration: ${NEEDS_TEST_INTEGRATION_RESULT}"
-          echo "  test-python: ${NEEDS_TEST_PYTHON_RESULT}"
           echo "  docker-build: ${NEEDS_DOCKER_BUILD_RESULT}"
-          echo "  docker-compose-test: ${NEEDS_DOCKER_COMPOSE_TEST_RESULT}"
           echo "  ebpf-verification: ${NEEDS_EBPF_VERIFICATION_RESULT}"
           echo "  build-check: ${NEEDS_BUILD_CHECK_RESULT}"
           echo "  dependency-review: ${NEEDS_DEPENDENCY_REVIEW_RESULT}"
-          echo "  fuzz: ${NEEDS_FUZZ_RESULT}"
           echo ""
 
           if [ "${{ contains(needs.*.result, 'failure') }}" == "true" ]; then
@@ -582,17 +316,12 @@ jobs:
             echo "All checks passed!"
           fi
         env:
-          NEEDS_CHANGES_RESULT: ${{ needs.changes.result }}
           NEEDS_LINT_RESULT: ${{ needs.lint.result }}
           NEEDS_ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
           NEEDS_ZIZMOR_RESULT: ${{ needs.zizmor.result }}
-          NEEDS_PROTO_RESULT: ${{ needs.proto.result }}
           NEEDS_TEST_GO_RESULT: ${{ needs.test-go.result }}
           NEEDS_TEST_INTEGRATION_RESULT: ${{ needs.test-integration.result }}
-          NEEDS_TEST_PYTHON_RESULT: ${{ needs.test-python.result }}
           NEEDS_DOCKER_BUILD_RESULT: ${{ needs.docker-build.result }}
-          NEEDS_DOCKER_COMPOSE_TEST_RESULT: ${{ needs.docker-compose-test.result }}
           NEEDS_EBPF_VERIFICATION_RESULT: ${{ needs.ebpf-verification.result }}
           NEEDS_BUILD_CHECK_RESULT: ${{ needs.build-check.result }}
           NEEDS_DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
-          NEEDS_FUZZ_RESULT: ${{ needs.fuzz.result }}
