@@ -828,7 +828,7 @@ Before each phase, confirm the prior phase's exit criteria on the branch. A phas
 
 ### Phase 0: Baseline and safety net
 
-Progress: the local baseline, artifact cleanup, Makefile, deterministic dispatcher test, and temporary workflow definition were reviewed on 2026-09-10 and committed locally in `7703a99` on 2026-09-11. The current macOS host cannot validate Linux kernel, NAT, cgroup, containerd, Kubernetes, or capability assumptions, and the workflow has not run or been made required. The Phase 0 gate remains open; do not begin broad product deletion or the remaining Phase 1 work.
+Progress: the local baseline, artifact cleanup, Makefile, deterministic dispatcher test, and temporary workflow definition were reviewed on 2026-09-10 and committed locally in `7703a99` on 2026-09-11. The pushed branch's `Migration CI` run `34564093570` is green and `main` now requires its stable `Required CI` result. Focused Linux characterization tests and a capability-only Kubernetes probe were added locally in `42b7203`, but that commit has not yet been pushed or run. The current macOS host cannot validate Linux kernel, NAT, cgroup, containerd, Kubernetes, or capability assumptions. The Phase 0 gate remains open; do not begin broad product deletion or the remaining Phase 1 work.
 
 Work:
 
@@ -846,7 +846,7 @@ Work:
 - [ ] Run a disposable Linux/Kubernetes feasibility spike before irreversible feature deletion. Capture packet headers and cgroup IDs at ingress and egress for direct PodIP, explicit ClusterIP, reply, node, self, IPv4, and rejected IPv6 traffic; verify containerd/systemd cgroup resolution, bpffs pin access, required capabilities, and the exact DaemonSet security context.
 - [ ] Measure the interval from a selected container becoming runnable to its cgroup being observed, resolved, and classified. Record this separately from agent restart and rolling-update recovery.
 - [ ] Define the smaller reproducible `v0.1.0` reference fixture from Section 14.5. Do not block policy/compiler work on the later 1,000-Pod/10,000-rule scale fixture.
-- [ ] Add focused characterization tests for per-cgroup behavior, ingress/egress allow-deny, map population, flow-map pinning/decoding, and shutdown cleanup.
+- [x] Add focused characterization tests for per-cgroup behavior, ingress/egress allow-deny, map population, flow-map pinning/decoding, and shutdown cleanup.
 - [x] Record and reverify current generated eBPF checksums.
 
 Exit criteria:

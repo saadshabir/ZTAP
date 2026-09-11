@@ -56,8 +56,8 @@ Therefore these Phase 0 claims remain unverified:
   v1.7.12, repository-local caches/tools, race-enabled tests, workflow
   validation, and explicit-path cleanup.
 - Added a non-publishing `Migration CI` workflow with a stable `Required CI`
-  check. It is committed locally but has not run on GitHub and is not a
-  required branch-protection check yet.
+  check. It is pushed and green for the branch event; `Required CI` is now a
+  required branch-protection check on `main`.
 - Removed approximately 972 MiB of repository-local binaries, test outputs,
   coverage data, Go build data, and lint/Python caches. This includes the
   tracked root `bpfgen` executable; `tools/bpfgen` source is retained, and
@@ -72,6 +72,10 @@ internal/enforcer/bpf_bpfeb.go  72b38156fbb6a43cc69e4b752e502a6c2b0e88ba9e8eb2cd
 - Made `TestDispatcherEmitDropsWhenFull` deterministic by filling the queue
   before starting any worker. The prior test raced its worker against its
   second enqueue and could intermittently observe no drop.
+- Added focused Linux-tagged characterization tests for cgroup-v2/bpffs
+  preflight, ingress allow/deny traffic, and flow-map pin/open/cleanup, plus a
+  disposable capability-only Kubernetes probe and manual workflow in commit
+  `42b7203`.
 
 No product feature, architecture, old workflow, release workflow, or target
 DaemonSet was deleted in this local slice.
@@ -92,15 +96,21 @@ sockets required them:
 - `make lint` with the pinned linters;
 - `make check`, which runs the complete non-privileged local gate above.
 
+The pushed `Migration CI` run `34564093570` passed on commit `b7f8b5a`; both
+its build/test/vet/lint job and its `Required CI` job were successful. The
+repository now reports `main` as protected with strict `Required CI` status
+checks. The separately dispatched legacy run `34564466189` passed its generic
+Linux integration job, but failed unrelated Proto/Windows jobs and therefore
+skipped its old eBPF verification job; it is not feasibility evidence.
+
 This separates locally reproducible source failures from sandbox capability
-failures. It does not replace a clean GitHub Actions run or the Linux eBPF
-fixture.
+failures. The pushed `Migration CI` result covers the non-privileged gate; it
+does not replace the dedicated Linux eBPF and Kubernetes fixture.
 
 ## Retained Linux eBPF assertion checklist
 
-The checked items below mean an executable assertion already exists in
-`internal/enforcer/ebpf_linux_integration_test.go`; they were not run on this
-macOS host:
+The checked items below mean an executable assertion already exists in the
+Linux integration test suite; they were not run on this macOS host:
 
 - [x] Load the eBPF objects, populate a policy map, and attach to a cgroup.
 - [x] Populate a cgroup-scoped key and the enforced-cgroups map.
@@ -110,6 +120,10 @@ macOS host:
 - [x] Allow an in-range egress CIDR and deny an out-of-range destination.
 - [x] Reload onto a new enforcer, remove the old rule, and transfer link
   ownership.
+- [x] Fail a selected Linux integration run when cgroup v2, bpffs, or basic BPF
+  map creation is unavailable.
+- [x] Exercise selected-cgroup ingress allow/deny with real UDP traffic.
+- [x] Open a pinned flow map and verify the pin is removed on shutdown.
 - [ ] Exercise ingress and egress allow/deny through the replacement contract.
 - [ ] Prove packet offsets independently at ingress and egress.
 - [ ] Record direct PodIP and explicit ClusterIP pre/post-NAT addresses and
@@ -127,9 +141,13 @@ probe. It is characterization input, not the target deployment contract.
 
 ## CI and branch state
 
-- The current local branch is `codex/streamline-ztap`; it has not been pushed.
-- `Migration CI` is committed in `7703a99`, but it is neither proven green on
-  the branch/PR events nor required by branch protection.
+- The current local branch is `codex/streamline-ztap`; `origin` contains it
+  through `b7f8b5a`, while local commit `42b7203` is not pushed yet.
+- `Migration CI` is green for the pushed branch event and `Required CI` is
+  required on `main`; its default-branch pull-request event remains to be
+  proven by the review pull request.
+- The new `Phase 0 Feasibility` workflow is local in `42b7203` and has not run
+  on GitHub yet.
 - Existing CI and release workflows are intentionally retained until the
   required-check handoff can be performed in order. The migration workflow
   itself has no publishing permissions or steps.
@@ -140,7 +158,8 @@ Phase 0 is **not closed**. Safe artifact/tooling cleanup is locally complete,
 but broad feature or architecture deletion and target DaemonSet changes remain
 blocked.
 
-The next required technical run is a disposable Linux/Kubernetes fixture with
+The next required technical run is the new disposable Linux/Kubernetes
+fixture with
 cgroup v2, containerd using the systemd cgroup driver, bpffs access, the exact
 proposed capability-only security context, and the tested Kubernetes 1.36.x
 line. It must capture packet offsets, NAT visibility, cgroup identity, CNI
