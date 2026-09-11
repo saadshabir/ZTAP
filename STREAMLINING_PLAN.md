@@ -828,7 +828,7 @@ Before each phase, confirm the prior phase's exit criteria on the branch. A phas
 
 ### Phase 0: Baseline and safety net
 
-Progress: the local baseline, artifact cleanup, Makefile, deterministic dispatcher test, and temporary workflow definition were reviewed on 2026-09-10. The current macOS host cannot validate Linux kernel, NAT, cgroup, containerd, Kubernetes, or capability assumptions, and the workflow has not run or been made required. The Phase 0 gate remains open; do not begin broad product deletion or the remaining Phase 1 work.
+Progress: the local baseline, artifact cleanup, Makefile, deterministic dispatcher test, and temporary workflow definition were reviewed on 2026-09-10 and committed locally in `7703a99` on 2026-09-11. The current macOS host cannot validate Linux kernel, NAT, cgroup, containerd, Kubernetes, or capability assumptions, and the workflow has not run or been made required. The Phase 0 gate remains open; do not begin broad product deletion or the remaining Phase 1 work.
 
 Work:
 

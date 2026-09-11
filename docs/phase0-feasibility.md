@@ -1,6 +1,7 @@
 # Phase 0 Baseline and Gate Status
 
 - **Captured:** 2026-09-10
+- **Updated:** 2026-09-11
 - **Branch at capture:** `main`
 - **Baseline commit:** `fc4695d` (`Merge pull request #172 from saadshabir/dependabot/pip/internal/anomaly/python-minor-patch-974410666c`)
 - **Gate:** **Open** — Linux/Kubernetes feasibility and CI handoff evidence are still required.
@@ -26,7 +27,8 @@ of the clean commit baseline.
 
 The Phase 0 review then moved the unchanged working tree to
 `codex/streamline-ztap`, added the local safety-net files, removed build debris,
-and fixed a flaky dispatcher test. There is not yet a Phase 0 commit.
+and fixed a flaky dispatcher test. The safety work is committed locally as
+`7703a99` (`chore: establish Phase 0 migration gate`).
 
 ## Host and runtime observations
 
@@ -54,8 +56,8 @@ Therefore these Phase 0 claims remain unverified:
   v1.7.12, repository-local caches/tools, race-enabled tests, workflow
   validation, and explicit-path cleanup.
 - Added a non-publishing `Migration CI` workflow with a stable `Required CI`
-  check. It exists only in this working tree; it has not run on GitHub and
-  is not a required branch-protection check yet.
+  check. It is committed locally but has not run on GitHub and is not a
+  required branch-protection check yet.
 - Removed approximately 972 MiB of repository-local binaries, test outputs,
   coverage data, Go build data, and lint/Python caches. This includes the
   tracked root `bpfgen` executable; `tools/bpfgen` source is retained, and
@@ -79,8 +81,8 @@ DaemonSet was deleted in this local slice.
 The initial managed-sandbox run mixed one real test race with environmental
 failures: loopback IPv4/IPv6 listeners were denied, and a test could not write
 the default audit path outside the workspace. After fixing the dispatcher test,
-the following checks passed with host permissions where local sockets required
-them:
+the following checks passed on 2026-09-11 with host permissions where local
+sockets required them:
 
 - `TestDispatcherEmitDropsWhenFull`, 1,000 consecutive runs;
 - `make build`;
@@ -126,8 +128,8 @@ probe. It is characterization input, not the target deployment contract.
 ## CI and branch state
 
 - The current local branch is `codex/streamline-ztap`; it has not been pushed.
-- `Migration CI` exists only as an untracked local workflow. It is neither
-  proven green on the branch/PR events nor required by branch protection.
+- `Migration CI` is committed in `7703a99`, but it is neither proven green on
+  the branch/PR events nor required by branch protection.
 - Existing CI and release workflows are intentionally retained until the
   required-check handoff can be performed in order. The migration workflow
   itself has no publishing permissions or steps.
