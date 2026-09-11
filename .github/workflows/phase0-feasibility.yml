@@ -225,7 +225,15 @@ jobs:
               deployments/kubernetes/phase0-traffic-agent.yaml > "$RUNNER_TEMP/phase0-traffic-agent.yaml"
             kubectl apply -f "$RUNNER_TEMP/phase0-traffic-agent.yaml"
             kubectl -n ztap-phase0 rollout status daemonset/phase0-traffic-observer --timeout=180s
-            observer_pod="$(kubectl -n ztap-phase0 get pods -l app=ztap-phase0-traffic-observer -o jsonpath='{.items[0].metadata.name}')"
+            observer_pod=''
+            for attempt in $(seq 1 90); do
+              observer_pod="$(kubectl -n ztap-phase0 get pods -l app=ztap-phase0-traffic-observer -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+              if test -n "$observer_pod"; then
+                break
+              fi
+              sleep 2
+            done
+            test -n "$observer_pod"
             kubectl -n ztap-phase0 wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
 
             docker exec "$node_container" sh -c \
@@ -313,7 +321,15 @@ jobs:
           namespace=ztap-phase0
           observer_selector='app=ztap-phase0-traffic-observer'
 
-          observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}')"
+          observer_pod=''
+          for attempt in $(seq 1 90); do
+            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            if test -n "$observer_pod"; then
+              break
+            fi
+            sleep 2
+          done
+          test -n "$observer_pod"
           printf '%s\n' '--- initial lifecycle timing ---' | tee phase0-lifecycle.txt
           kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | tee -a phase0-lifecycle.txt
 
@@ -331,7 +347,15 @@ jobs:
           kubectl -n "$namespace" set env daemonset/phase0-traffic-observer \
             CLIENT_CONTAINER_ID="$restarted_container_id"
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
-          observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}')"
+          observer_pod=''
+          for attempt in $(seq 1 90); do
+            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            if test -n "$observer_pod"; then
+              break
+            fi
+            sleep 2
+          done
+          test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
           restarted_classified_epoch="$(kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | sed -n 's/.*phase0_policy_classified_epoch=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
           test -n "$restarted_classified_epoch"
@@ -342,7 +366,15 @@ jobs:
           agent_restart_started="$(date +%s)"
           kubectl -n "$namespace" delete pod "$observer_pod" --wait=true
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
-          observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}')"
+          observer_pod=''
+          for attempt in $(seq 1 90); do
+            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            if test -n "$observer_pod"; then
+              break
+            fi
+            sleep 2
+          done
+          test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
           agent_restarted_classified_epoch="$(kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | sed -n 's/.*phase0_policy_classified_epoch=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
           test -n "$agent_restarted_classified_epoch"
@@ -356,7 +388,15 @@ jobs:
           kubectl -n "$namespace" patch daemonset/phase0-traffic-observer --type=strategic \
             -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"phase0-rollout\":\"$rollout_token\"}}}}}"
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
-          observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}')"
+          observer_pod=''
+          for attempt in $(seq 1 90); do
+            observer_pod="$(kubectl -n "$namespace" get pods -l "$observer_selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            if test -n "$observer_pod"; then
+              break
+            fi
+            sleep 2
+          done
+          test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
           rollout_classified_epoch="$(kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | sed -n 's/.*phase0_policy_classified_epoch=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
           test -n "$rollout_classified_epoch"
