@@ -272,23 +272,19 @@ static __always_inline void emit_flow_event(__u32 *src_ip, __u32 *dest_ip,
     bpf_ringbuf_submit(event, 0);
 }
 
-// Helper to parse IPv4 packet and extract addresses and ports
+// cgroup_skb programs receive an skb whose data starts at the network-layer
+// header, not at an Ethernet header. Keep the offset explicit here: assuming
+// an Ethernet header makes every cgroup ingress/egress flow look unparsable.
 static __always_inline int parse_ipv4(struct __sk_buff *skb, __u32 *src_ip, __u32 *dest_ip,
                                       __u8 *protocol, __u16 *src_port, __u16 *dest_port)
 {
-    struct ethhdr eth;
     struct iphdr ip;
 
-    // Load ethernet header
-    if (bpf_skb_load_bytes(skb, 0, &eth, sizeof(eth)) < 0)
+    if (bpf_skb_load_bytes(skb, 0, &ip, sizeof(ip)) < 0)
         return -1;
 
-    // Check if IPv4
-    if (eth.h_proto != bpf_htons(ETH_P_IP))
-        return -1;
-
-    // Load IP header
-    if (bpf_skb_load_bytes(skb, sizeof(eth), &ip, sizeof(ip)) < 0)
+    // Check the network-layer version before interpreting the header.
+    if ((ip.version_ihl >> 4) != 4)
         return -1;
 
     *src_ip = ip.saddr;
@@ -304,7 +300,7 @@ static __always_inline int parse_ipv4(struct __sk_buff *skb, __u32 *src_ip, __u3
     if (ip.protocol == IPPROTO_TCP)
     {
         struct tcphdr tcp;
-        if (bpf_skb_load_bytes(skb, sizeof(eth) + ihl, &tcp, sizeof(tcp)) < 0)
+        if (bpf_skb_load_bytes(skb, ihl, &tcp, sizeof(tcp)) < 0)
             return -1;
         *src_port = bpf_ntohs(tcp.source);
         *dest_port = bpf_ntohs(tcp.dest);
@@ -312,7 +308,7 @@ static __always_inline int parse_ipv4(struct __sk_buff *skb, __u32 *src_ip, __u3
     else if (ip.protocol == IPPROTO_UDP)
     {
         struct udphdr udp;
-        if (bpf_skb_load_bytes(skb, sizeof(eth) + ihl, &udp, sizeof(udp)) < 0)
+        if (bpf_skb_load_bytes(skb, ihl, &udp, sizeof(udp)) < 0)
             return -1;
         *src_port = bpf_ntohs(udp.source);
         *dest_port = bpf_ntohs(udp.dest);
@@ -330,19 +326,12 @@ static __always_inline int parse_ipv4(struct __sk_buff *skb, __u32 *src_ip, __u3
 static __always_inline int parse_ipv6(struct __sk_buff *skb, __u32 *src_ip, __u32 *dest_ip,
                                       __u8 *protocol, __u16 *src_port, __u16 *dest_port)
 {
-    struct ethhdr eth;
     struct ipv6hdr ip;
 
-    // Load ethernet header
-    if (bpf_skb_load_bytes(skb, 0, &eth, sizeof(eth)) < 0)
+    if (bpf_skb_load_bytes(skb, 0, &ip, sizeof(ip)) < 0)
         return -1;
 
-    // Check if IPv6
-    if (eth.h_proto != bpf_htons(ETH_P_IPV6))
-        return -1;
-
-    // Load IPv6 header
-    if (bpf_skb_load_bytes(skb, sizeof(eth), &ip, sizeof(ip)) < 0)
+    if ((ip.priority_version >> 4) != 6)
         return -1;
 
     for (int i = 0; i < 4; i++)
@@ -356,7 +345,7 @@ static __always_inline int parse_ipv6(struct __sk_buff *skb, __u32 *src_ip, __u3
     if (ip.nexthdr == IPPROTO_TCP)
     {
         struct tcphdr tcp;
-        if (bpf_skb_load_bytes(skb, sizeof(eth) + sizeof(struct ipv6hdr), &tcp, sizeof(tcp)) < 0)
+        if (bpf_skb_load_bytes(skb, sizeof(struct ipv6hdr), &tcp, sizeof(tcp)) < 0)
             return -1;
         *src_port = bpf_ntohs(tcp.source);
         *dest_port = bpf_ntohs(tcp.dest);
@@ -364,7 +353,7 @@ static __always_inline int parse_ipv6(struct __sk_buff *skb, __u32 *src_ip, __u3
     else if (ip.nexthdr == IPPROTO_UDP)
     {
         struct udphdr udp;
-        if (bpf_skb_load_bytes(skb, sizeof(eth) + sizeof(struct ipv6hdr), &udp, sizeof(udp)) < 0)
+        if (bpf_skb_load_bytes(skb, sizeof(struct ipv6hdr), &udp, sizeof(udp)) < 0)
             return -1;
         *src_port = bpf_ntohs(udp.source);
         *dest_port = bpf_ntohs(udp.dest);
