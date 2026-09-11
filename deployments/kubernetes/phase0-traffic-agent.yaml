@@ -128,7 +128,11 @@ spec:
               /usr/local/bin/ztap flows --follow --output json \
                 >/run/ztap-phase0/flows.jsonl 2>&1 &
               flow_pid=$!
-              wait "$enforce_pid"
+              if ! wait "$enforce_pid"; then
+                cat /run/ztap-phase0/enforce.log
+                exit 1
+              fi
+              wait "$flow_pid"
           env:
             - name: CLIENT_CONTAINER_ID
               value: __CLIENT_CONTAINER_ID__
