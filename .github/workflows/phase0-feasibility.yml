@@ -360,6 +360,21 @@ jobs:
           printf '%s\n' '--- initial lifecycle timing ---' | tee phase0-lifecycle.txt
           kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | tee -a phase0-lifecycle.txt
 
+          wait_for_policy_classification() {
+            local pod="$1"
+            local classified_epoch=''
+            for attempt in $(seq 1 90); do
+              classified_epoch="$(kubectl -n "$namespace" exec "$pod" -- cat /run/ztap-phase0/timing.log 2>/dev/null \
+                | sed -n 's/.*phase0_policy_classified_epoch=\([0-9][0-9]*\).*/\1/p' | head -n 1 || true)"
+              if test -n "$classified_epoch"; then
+                printf '%s\n' "$classified_epoch"
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+
           client_pod="$(kubectl -n "$namespace" get pods -l app=phase0-client -o jsonpath='{.items[0].metadata.name}')"
           test -n "$client_pod"
           workload_restart_started="$(date +%s)"
@@ -388,7 +403,7 @@ jobs:
           done
           test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
-          restarted_classified_epoch="$(kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | sed -n 's/.*phase0_policy_classified_epoch=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+          restarted_classified_epoch="$(wait_for_policy_classification "$observer_pod")"
           test -n "$restarted_classified_epoch"
           printf 'phase0_workload_restart_to_classification_seconds=%s\n' \
             "$((restarted_classified_epoch - restarted_started_epoch))" | tee -a phase0-lifecycle.txt
@@ -407,7 +422,7 @@ jobs:
           done
           test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
-          agent_restarted_classified_epoch="$(kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | sed -n 's/.*phase0_policy_classified_epoch=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+          agent_restarted_classified_epoch="$(wait_for_policy_classification "$observer_pod")"
           test -n "$agent_restarted_classified_epoch"
           printf 'phase0_agent_restart_requested_epoch=%s\n' "$agent_restart_started" | tee -a phase0-lifecycle.txt
           printf 'phase0_agent_restart_to_classification_seconds=%s\n' \
@@ -429,7 +444,7 @@ jobs:
           done
           test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
-          rollout_classified_epoch="$(kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | sed -n 's/.*phase0_policy_classified_epoch=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+          rollout_classified_epoch="$(wait_for_policy_classification "$observer_pod")"
           test -n "$rollout_classified_epoch"
           printf 'phase0_daemonset_rollout_requested_epoch=%s\n' "$rollout_started" | tee -a phase0-lifecycle.txt
           printf 'phase0_daemonset_rollout_to_classification_seconds=%s\n' \
