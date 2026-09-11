@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 )
 
 type recordingSink struct {
@@ -23,13 +22,11 @@ func TestDispatcherEmitDropsWhenFull(t *testing.T) {
 	t.Parallel()
 
 	sink := &recordingSink{}
-	d, err := NewDispatcher(DispatcherOptions{Sinks: []Sink{sink}, QueueSize: 1, Workers: 1, Timeout: 100 * time.Millisecond})
+	d, err := NewDispatcher(DispatcherOptions{Sinks: []Sink{sink}, QueueSize: 1})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	d.Start(ctx)
+	t.Cleanup(d.Close)
 
 	ok1 := d.Emit(Alert{Source: "test", Severity: SeverityInfo, Title: "a", Message: "b"})
 	ok2 := d.Emit(Alert{Source: "test", Severity: SeverityInfo, Title: "a", Message: "b"})
