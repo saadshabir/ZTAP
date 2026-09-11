@@ -257,7 +257,7 @@ jobs:
             printf '%s\n' '--- self request ---' | tee -a phase0-kubernetes.txt
             self_request_status=0
             kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
-              'wget -qO- http://127.0.0.1:18081/' > "$RUNNER_TEMP/phase0-self-response.txt" 2>&1 || self_request_status=$?
+              'wget -qO- -T 3 -t 1 http://127.0.0.1:18081/' > "$RUNNER_TEMP/phase0-self-response.txt" 2>&1 || self_request_status=$?
             cat "$RUNNER_TEMP/phase0-self-response.txt" | tee -a phase0-kubernetes.txt
             printf 'phase0_self_request_status=%s\n' "$self_request_status" | tee -a phase0-kubernetes.txt
             if test "$self_request_status" -ne 0; then
