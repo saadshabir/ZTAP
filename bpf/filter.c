@@ -244,11 +244,12 @@ static __always_inline void emit_flow_event(__u32 *src_ip, __u32 *dest_ip,
 
     if (family == 4)
     {
-        event->src_ip[0] = src_ip[0];
+        // IPv4 flow consumers decode this field as a network-order uint32.
+        event->src_ip[0] = bpf_ntohl(src_ip[0]);
         event->src_ip[1] = 0;
         event->src_ip[2] = 0;
         event->src_ip[3] = 0;
-        event->dest_ip[0] = dest_ip[0];
+        event->dest_ip[0] = bpf_ntohl(dest_ip[0]);
         event->dest_ip[1] = 0;
         event->dest_ip[2] = 0;
         event->dest_ip[3] = 0;
@@ -420,13 +421,12 @@ int filter_egress(struct __sk_buff *skb)
         // Lookup policy in map (egress uses destination IP/port)
         __u8 lookup_proto = protocol;
         __u32 meta = PACK_META(DIRECTION_EGRESS, lookup_proto, dest_port);
-        __u32 ip_host = bpf_ntohl(dest_ip[0]);
         struct policy_key key = {
             .prefixlen = LPM_LOOKUP_PREFIXLEN_V4,
             .meta = meta,
             .cgroup_id = cgid,
         };
-        __builtin_memcpy(key.ip, &ip_host, sizeof(key.ip));
+        __builtin_memcpy(key.ip, &dest_ip[0], sizeof(key.ip));
 
         struct policy_value *value = bpf_map_lookup_elem(&policy_map, &key);
         if (!value)
@@ -479,8 +479,7 @@ int filter_egress(struct __sk_buff *skb)
         };
         for (int i = 0; i < 4; i++)
         {
-            __u32 part = bpf_ntohl(dest_ip[i]);
-            __builtin_memcpy(&key.ip[i * 4], &part, sizeof(part));
+            __builtin_memcpy(&key.ip[i * 4], &dest_ip[i], sizeof(dest_ip[i]));
         }
 
         struct policy_value *value = bpf_map_lookup_elem(&policy_map_v6, &key);
@@ -555,13 +554,12 @@ int filter_ingress(struct __sk_buff *skb)
         // Lookup policy in map (ingress uses source IP and destination port)
         __u8 lookup_proto = protocol;
         __u32 meta = PACK_META(DIRECTION_INGRESS, lookup_proto, dest_port);
-        __u32 ip_host = bpf_ntohl(src_ip[0]);
         struct policy_key key = {
             .prefixlen = LPM_LOOKUP_PREFIXLEN_V4,
             .meta = meta,
             .cgroup_id = cgid,
         };
-        __builtin_memcpy(key.ip, &ip_host, sizeof(key.ip));
+        __builtin_memcpy(key.ip, &src_ip[0], sizeof(key.ip));
 
         struct policy_value *value = bpf_map_lookup_elem(&policy_map, &key);
         if (!value)
@@ -614,8 +612,7 @@ int filter_ingress(struct __sk_buff *skb)
         };
         for (int i = 0; i < 4; i++)
         {
-            __u32 part = bpf_ntohl(src_ip[i]);
-            __builtin_memcpy(&key.ip[i * 4], &part, sizeof(part));
+            __builtin_memcpy(&key.ip[i * 4], &src_ip[i], sizeof(src_ip[i]));
         }
 
         struct policy_value *value = bpf_map_lookup_elem(&policy_map_v6, &key);
@@ -661,13 +658,12 @@ int filter_egress_permissive(struct __sk_buff *skb)
     }
 
     __u32 meta = PACK_META(DIRECTION_EGRESS, protocol, dest_port);
-    __u32 ip_host = bpf_ntohl(dest_ip);
     struct policy_key key = {
         .prefixlen = LPM_LOOKUP_PREFIXLEN_V4,
         .meta = meta,
         .cgroup_id = bpf_get_current_cgroup_id(),
     };
-    __builtin_memcpy(key.ip, &ip_host, sizeof(key.ip));
+    __builtin_memcpy(key.ip, &dest_ip, sizeof(key.ip));
 
     struct policy_value *value = bpf_map_lookup_elem(&policy_map, &key);
     if (!value)
@@ -699,13 +695,12 @@ int filter_ingress_permissive(struct __sk_buff *skb)
     }
 
     __u32 meta = PACK_META(DIRECTION_INGRESS, protocol, dest_port);
-    __u32 ip_host = bpf_ntohl(src_ip);
     struct policy_key key = {
         .prefixlen = LPM_LOOKUP_PREFIXLEN_V4,
         .meta = meta,
         .cgroup_id = bpf_get_current_cgroup_id(),
     };
-    __builtin_memcpy(key.ip, &ip_host, sizeof(key.ip));
+    __builtin_memcpy(key.ip, &src_ip, sizeof(key.ip));
 
     struct policy_value *value = bpf_map_lookup_elem(&policy_map, &key);
     if (!value)
