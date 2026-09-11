@@ -1,6 +1,9 @@
 name: Phase 0 Feasibility
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       kubernetes_version:
@@ -113,7 +116,7 @@ jobs:
       - name: Create disposable Kubernetes cluster
         env:
           KIND_CLUSTER: ztap-phase0
-          KUBERNETES_VERSION: ${{ inputs.kubernetes_version }}
+          KUBERNETES_VERSION: ${{ inputs.kubernetes_version || 'v1.36.0' }}
         run: kind create cluster --name "$KIND_CLUSTER" --image "kindest/node:${KUBERNETES_VERSION}" --wait 180s
 
       - name: Characterize runtime and capability-only DaemonSet
