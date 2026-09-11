@@ -62,8 +62,9 @@ spec:
         - |
           mkdir -p /www
           printf 'phase0-self\n' > /www/index.html
-          httpd -f -p 18081 -h /www >/tmp/phase0-self-httpd.log 2>&1 &
-          exec sleep 3600
+          httpd -f -p 0.0.0.0:18081 -h /www >/tmp/phase0-self-httpd.log 2>&1 &
+          httpd_pid=$!
+          wait "$httpd_pid"
       ports:
         - name: self-http
           containerPort: 18081
