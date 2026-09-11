@@ -44,35 +44,42 @@ spec:
       port: 18080
       targetPort: http
 ---
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: phase0-client
   namespace: ztap-phase0
-  labels:
-    app: phase0-client
 spec:
-  containers:
-    - name: client
-      image: busybox:1.36.1
-      imagePullPolicy: IfNotPresent
-      command:
-        - /bin/sh
-        - -c
-        - |
-          mkdir -p /www
-          printf 'phase0-self\n' > /www/index.html
-          httpd -f -p 0.0.0.0:18081 -h /www >/tmp/phase0-self-httpd.log 2>&1 &
-          httpd_pid=$!
-          wait "$httpd_pid"
-      ports:
-        - name: self-http
-          containerPort: 18081
-      readinessProbe:
-        httpGet:
-          path: /
-          port: self-http
-        periodSeconds: 1
+  replicas: 1
+  selector:
+    matchLabels:
+      app: phase0-client
+  template:
+    metadata:
+      labels:
+        app: phase0-client
+    spec:
+      containers:
+        - name: client
+          image: busybox:1.36.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mkdir -p /www
+              printf 'phase0-self\n' > /www/index.html
+              httpd -f -p 0.0.0.0:18081 -h /www >/tmp/phase0-self-httpd.log 2>&1 &
+              httpd_pid=$!
+              wait "$httpd_pid"
+          ports:
+            - name: self-http
+              containerPort: 18081
+          readinessProbe:
+            httpGet:
+              path: /
+              port: self-http
+            periodSeconds: 1
 ---
 apiVersion: v1
 kind: Pod

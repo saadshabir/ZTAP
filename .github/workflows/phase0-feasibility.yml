@@ -185,16 +185,19 @@ jobs:
 
             kubectl apply -f deployments/kubernetes/phase0-traffic.yaml
             kubectl -n ztap-phase0 wait --for=condition=Ready pod/phase0-server --timeout=180s
-            kubectl -n ztap-phase0 wait --for=condition=Ready pod/phase0-client --timeout=180s
+            kubectl -n ztap-phase0 wait --for=condition=Available deployment/phase0-client --timeout=180s
+            client_pod="$(kubectl -n ztap-phase0 get pods -l app=phase0-client -o jsonpath='{.items[0].metadata.name}')"
+            test -n "$client_pod"
+            kubectl -n ztap-phase0 wait --for=condition=Ready pod/"$client_pod" --timeout=180s
             kubectl -n ztap-phase0 wait --for=condition=Ready pod/phase0-node-server --timeout=180s
 
             server_ip="$(kubectl -n ztap-phase0 get pod phase0-server -o jsonpath='{.status.podIP}')"
-            client_ip="$(kubectl -n ztap-phase0 get pod phase0-client -o jsonpath='{.status.podIP}')"
+            client_ip="$(kubectl -n ztap-phase0 get pod "$client_pod" -o jsonpath='{.status.podIP}')"
             service_ip="$(kubectl -n ztap-phase0 get service phase0-server -o jsonpath='{.spec.clusterIP}')"
             node_ip="$(kubectl get nodes --no-headers -o wide | awk 'NR == 1 { print $6 }')"
-            client_container_id="$(kubectl -n ztap-phase0 get pod phase0-client -o jsonpath='{.status.containerStatuses[0].containerID}')"
+            client_container_id="$(kubectl -n ztap-phase0 get pod "$client_pod" -o jsonpath='{.status.containerStatuses[0].containerID}')"
             client_container_id="${client_container_id#*://}"
-            client_started_at="$(kubectl -n ztap-phase0 get pod phase0-client -o jsonpath='{.status.containerStatuses[0].state.running.startedAt}')"
+            client_started_at="$(kubectl -n ztap-phase0 get pod "$client_pod" -o jsonpath='{.status.containerStatuses[0].state.running.startedAt}')"
             client_started_epoch="$(date --date="$client_started_at" +%s)"
 
             printf 'phase0_fixture server_ip=%s client_ip=%s service_ip=%s node_ip=%s\n' \
@@ -246,29 +249,29 @@ jobs:
             sleep 2
 
             printf '%s\n' '--- direct PodIP request ---' | tee -a phase0-kubernetes.txt
-            kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
+            kubectl -n ztap-phase0 exec "$client_pod" -c client -- sh -c \
               "printf 'GET / HTTP/1.0\\r\\nHost: phase0-direct\\r\\n\\r\\n' | nc -w 3 -p 30080 $server_ip 8080" | tee -a phase0-kubernetes.txt
             printf '%s\n' '--- ClusterIP request ---' | tee -a phase0-kubernetes.txt
-            kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
+            kubectl -n ztap-phase0 exec "$client_pod" -c client -- sh -c \
               "printf 'GET / HTTP/1.0\\r\\nHost: phase0-service\\r\\n\\r\\n' | nc -w 3 -p 30081 $service_ip 18080" | tee -a phase0-kubernetes.txt
             printf '%s\n' '--- node request ---' | tee -a phase0-kubernetes.txt
-            kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
+            kubectl -n ztap-phase0 exec "$client_pod" -c client -- sh -c \
               "printf 'GET / HTTP/1.0\\r\\nHost: phase0-node\\r\\n\\r\\n' | nc -w 3 -p 30082 $node_ip 18082" | tee -a phase0-kubernetes.txt
             printf '%s\n' '--- self PodIP request ---' | tee -a phase0-kubernetes.txt
             self_request_status=0
-            kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
+            kubectl -n ztap-phase0 exec "$client_pod" -c client -- sh -c \
               "printf 'GET / HTTP/1.0\\r\\nHost: phase0-self\\r\\n\\r\\n' | nc -w 3 -p 30083 $client_ip 18081" > "$RUNNER_TEMP/phase0-self-response.txt" 2>&1 || self_request_status=$?
             cat "$RUNNER_TEMP/phase0-self-response.txt" | tee -a phase0-kubernetes.txt
             printf 'phase0_self_request_status=%s\n' "$self_request_status" | tee -a phase0-kubernetes.txt
             if test "$self_request_status" -ne 0; then
               printf '%s\n' '--- self listener diagnostics ---' | tee -a phase0-kubernetes.txt
-              kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
+              kubectl -n ztap-phase0 exec "$client_pod" -c client -- sh -c \
                 'cat /tmp/phase0-self-httpd.log; cat /proc/net/tcp; cat /proc/net/tcp6' | tee -a phase0-kubernetes.txt || true
               printf 'phase0_self_behavior=probe_failed_status_%s\n' "$self_request_status" | tee -a phase0-kubernetes.txt
             fi
             printf '%s\n' '--- rejected IPv6 request ---' | tee -a phase0-kubernetes.txt
             ipv6_request_status=0
-            kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
+            kubectl -n ztap-phase0 exec "$client_pod" -c client -- sh -c \
               'wget -qO- -T 3 -t 1 "http://[::1]:18081/"' > "$RUNNER_TEMP/phase0-ipv6-response.txt" 2>&1 || ipv6_request_status=$?
             cat "$RUNNER_TEMP/phase0-ipv6-response.txt" | tee -a phase0-kubernetes.txt
             printf 'phase0_ipv6_request_status=%s\n' "$ipv6_request_status" | tee -a phase0-kubernetes.txt
@@ -357,12 +360,16 @@ jobs:
           printf '%s\n' '--- initial lifecycle timing ---' | tee phase0-lifecycle.txt
           kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | tee -a phase0-lifecycle.txt
 
+          client_pod="$(kubectl -n "$namespace" get pods -l app=phase0-client -o jsonpath='{.items[0].metadata.name}')"
+          test -n "$client_pod"
           workload_restart_started="$(date +%s)"
-          kubectl -n "$namespace" delete pod phase0-client --wait=true
-          kubectl -n "$namespace" wait --for=condition=Ready pod/phase0-client --timeout=180s
-          restarted_container_id="$(kubectl -n "$namespace" get pod phase0-client -o jsonpath='{.status.containerStatuses[0].containerID}')"
+          kubectl -n "$namespace" delete pod "$client_pod" --wait=true
+          kubectl -n "$namespace" wait --for=condition=Ready pod -l app=phase0-client --timeout=180s
+          client_pod="$(kubectl -n "$namespace" get pods -l app=phase0-client -o jsonpath='{.items[0].metadata.name}')"
+          test -n "$client_pod"
+          restarted_container_id="$(kubectl -n "$namespace" get pod "$client_pod" -o jsonpath='{.status.containerStatuses[0].containerID}')"
           restarted_container_id="${restarted_container_id#*://}"
-          restarted_started_at="$(kubectl -n "$namespace" get pod phase0-client -o jsonpath='{.status.containerStatuses[0].state.running.startedAt}')"
+          restarted_started_at="$(kubectl -n "$namespace" get pod "$client_pod" -o jsonpath='{.status.containerStatuses[0].state.running.startedAt}')"
           restarted_started_epoch="$(date --date="$restarted_started_at" +%s)"
           printf 'phase0_workload_restart_requested_epoch=%s\n' "$workload_restart_started" | tee -a phase0-lifecycle.txt
           printf 'phase0_workload_restart_started_epoch=%s\n' "$restarted_started_epoch" | tee -a phase0-lifecycle.txt
