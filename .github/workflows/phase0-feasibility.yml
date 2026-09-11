@@ -254,16 +254,16 @@ jobs:
             printf '%s\n' '--- node request ---' | tee -a phase0-kubernetes.txt
             kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
               "printf 'GET / HTTP/1.0\\r\\nHost: phase0-node\\r\\n\\r\\n' | nc -w 3 -p 30082 $node_ip 18082" | tee -a phase0-kubernetes.txt
-            printf '%s\n' '--- self request ---' | tee -a phase0-kubernetes.txt
+            printf '%s\n' '--- self PodIP request ---' | tee -a phase0-kubernetes.txt
             self_request_status=0
             kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
-              'wget -qO- -T 3 -t 1 http://127.0.0.1:18081/' > "$RUNNER_TEMP/phase0-self-response.txt" 2>&1 || self_request_status=$?
+              "printf 'GET / HTTP/1.0\\r\\nHost: phase0-self\\r\\n\\r\\n' | nc -w 3 -p 30083 $client_ip 18081" > "$RUNNER_TEMP/phase0-self-response.txt" 2>&1 || self_request_status=$?
             cat "$RUNNER_TEMP/phase0-self-response.txt" | tee -a phase0-kubernetes.txt
             printf 'phase0_self_request_status=%s\n' "$self_request_status" | tee -a phase0-kubernetes.txt
             if test "$self_request_status" -ne 0; then
               printf '%s\n' '--- self listener diagnostics ---' | tee -a phase0-kubernetes.txt
               kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
-                'cat /tmp/phase0-self-httpd.log; cat /proc/net/tcp' | tee -a phase0-kubernetes.txt || true
+                'cat /tmp/phase0-self-httpd.log; cat /proc/net/tcp; cat /proc/net/tcp6' | tee -a phase0-kubernetes.txt || true
               exit "$self_request_status"
             fi
             printf '%s\n' '--- rejected IPv6 request ---' | tee -a phase0-kubernetes.txt
@@ -305,8 +305,8 @@ jobs:
               exit 1
             fi
             grep -F '"src_port":30082' phase0-flow.jsonl | grep -F '"dst_ip":"'"$node_ip"'"'
-            grep -F '"direction":"egress"' phase0-flow.jsonl | grep -F '"dst_ip":"127.0.0.1"' | grep -F '"dst_port":18081' | grep -F '"action":"allowed"'
-            grep -F '"direction":"ingress"' phase0-flow.jsonl | grep -F '"src_ip":"127.0.0.1"' | grep -F '"src_port":18081' | grep -F '"action":"allowed"'
+            grep -F '"src_port":30083' phase0-flow.jsonl | grep -F '"dst_ip":"'"$client_ip"'"' | grep -F '"dst_port":18081' | grep -F '"action":"allowed"'
+            grep -F '"direction":"ingress"' phase0-flow.jsonl | grep -F '"src_ip":"'"$client_ip"'"' | grep -F '"src_port":18081' | grep -F '"dst_port":30083' | grep -F '"action":"allowed"'
             grep -F '"src_port":30084' phase0-flow.jsonl | grep -F '"dst_ip":"::1"' | grep -F '"action":"blocked"'
             grep -F '"direction":"ingress"' phase0-flow.jsonl
             grep -F '"src_port":8080' phase0-flow.jsonl | grep -F '"dst_port":30080'
