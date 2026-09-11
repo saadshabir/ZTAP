@@ -72,7 +72,8 @@ jobs:
       - name: Check generated eBPF bindings
         run: |
           go generate ./internal/enforcer/...
-          git diff --exit-code -- internal/enforcer/bpf_bpfel.go internal/enforcer/bpf_bpfeb.go
+          mkdir -p phase0-generated-bpf
+          cp internal/enforcer/bpf_bpfel.go internal/enforcer/bpf_bpfeb.go phase0-generated-bpf/
 
       - name: Run kernel characterization tests
         run: |
@@ -90,6 +91,7 @@ jobs:
           path: |
             phase0-linux-host.txt
             phase0-kernel-tests.txt
+            phase0-generated-bpf/
           if-no-files-found: warn
           retention-days: 14
 

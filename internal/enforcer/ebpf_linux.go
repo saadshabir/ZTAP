@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"ztap/internal/logging"
 	"ztap/internal/policy"
@@ -668,7 +669,50 @@ func (e *eBPFEnforcer) Attach(cgroupPath string) error {
 		logging.Infof("eBPF ingress filter attached to cgroup: %s", safeCgroupPath)
 	}
 
+	// cgroup_skb ingress cannot derive the receiving cgroup from the skb or
+	// current task on every path. Populate the cgroup-local context after the
+	// links exist so the BPF program can use the cgroup to which this link is
+	// attached as its policy scope.
+	if err := e.setAttachedCgroupID(cgroupPath); err != nil {
+		if e.ingressLink != nil {
+			_ = e.ingressLink.Close()
+			e.ingressLink = nil
+		}
+		if e.egressLink != nil {
+			_ = e.egressLink.Close()
+			e.egressLink = nil
+		}
+		return err
+	}
+
 	return nil
+}
+
+func (e *eBPFEnforcer) setAttachedCgroupID(cgroupPath string) error {
+	if e.objs == nil || e.objs.AttachedCgroup == nil {
+		return errors.New("attached cgroup storage map not available")
+	}
+
+	cgid, err := cgroupInodeID(cgroupPath)
+	if err != nil {
+		return fmt.Errorf("resolve attached cgroup %s: %w", cgroupPath, err)
+	}
+	if err := e.objs.AttachedCgroup.Put(&cgid, &cgid); err != nil {
+		return fmt.Errorf("record attached cgroup %d: %w", cgid, err)
+	}
+	return nil
+}
+
+func cgroupInodeID(cgroupPath string) (uint64, error) {
+	info, err := os.Stat(cgroupPath)
+	if err != nil {
+		return 0, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("unexpected stat type %T", info.Sys())
+	}
+	return uint64(stat.Ino), nil
 }
 
 // UpdateFrom transfers and updates eBPF links from an old enforcer.
@@ -850,6 +894,11 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 				return fmt.Errorf("failed to attach eBPF program: %w", err)
 			}
 		} else {
+			if err := newEnforcer.setAttachedCgroupID(opts.CgroupPath); err != nil {
+				_ = newEnforcer.Close()
+				activeEBPFEnforcer = nil
+				return fmt.Errorf("failed to record attached cgroup: %w", err)
+			}
 			// Clean up old maps and programs from the previous enforcer instance.
 			// Ownership of links was already transferred in UpdateFrom.
 			_ = activeEBPFEnforcer.Close()
@@ -906,6 +955,11 @@ func EnforceWithEBPFRealScoped(opts ScopedEnforcementOptions) error {
 				return fmt.Errorf("failed to attach eBPF program: %w", err)
 			}
 		} else {
+			if err := newEnforcer.setAttachedCgroupID(opts.CgroupPath); err != nil {
+				_ = newEnforcer.Close()
+				activeEBPFEnforcer = nil
+				return fmt.Errorf("failed to record attached cgroup: %w", err)
+			}
 			_ = activeEBPFEnforcer.Close()
 		}
 	} else {

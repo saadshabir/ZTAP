@@ -11,6 +11,7 @@ typedef unsigned long long __u64;
 // BPF map types
 #define BPF_MAP_TYPE_HASH 1
 #define BPF_MAP_TYPE_ARRAY 2
+#define BPF_MAP_TYPE_CGROUP_STORAGE 19
 #define BPF_MAP_TYPE_LPM_TRIE 11
 #define BPF_MAP_TYPE_RINGBUF 27
 
@@ -31,6 +32,7 @@ static long (*bpf_map_update_elem)(void *map, void *key, void *value, unsigned l
 static long (*bpf_skb_load_bytes)(const void *skb, __u32 offset, void *to, __u32 len) = (void *)26;
 static __u64 (*bpf_ktime_get_ns)(void) = (void *)5;
 static __u64 (*bpf_get_current_cgroup_id)(void) = (void *)80;
+static void *(*bpf_get_local_storage)(void *map, __u64 flags) = (void *)81;
 static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) = (void *)131;
 static void (*bpf_ringbuf_submit)(void *data, __u64 flags) = (void *)132;
 static void (*bpf_ringbuf_discard)(void *data, __u64 flags) = (void *)133;
@@ -207,6 +209,18 @@ struct
     __type(value, struct enforcement_config);
 } enforcement_config_map SEC(".maps");
 
+// A cgroup_skb ingress hook cannot use bpf_skb_cgroup_id(): that helper is
+// unavailable on ingress. Local storage is associated with the cgroup to
+// which the program is attached, so user space records that cgroup's inode
+// ID here after attaching the links. This avoids using the current task's
+// cgroup, which is not the receiving socket's cgroup on every ingress path.
+struct
+{
+    __uint(type, BPF_MAP_TYPE_CGROUP_STORAGE);
+    __type(key, __u64);
+    __type(value, __u64);
+} attached_cgroup SEC(".maps");
+
 // Flow event structure for real-time monitoring (must match Go struct in internal/flow/types.go)
 struct flow_event
 {
@@ -271,6 +285,12 @@ static __always_inline void emit_flow_event(__u32 *src_ip, __u32 *dest_ip,
     event->family = family;
 
     bpf_ringbuf_submit(event, 0);
+}
+
+static __always_inline __u64 attached_cgroup_id(void)
+{
+    __u64 *cgid = bpf_get_local_storage(&attached_cgroup, 0);
+    return cgid ? *cgid : 0;
 }
 
 // cgroup_skb programs receive an skb whose data starts at the network-layer
@@ -540,7 +560,7 @@ int filter_ingress(struct __sk_buff *skb)
         __u32 cfg_k = 0;
         struct enforcement_config *cfg = bpf_map_lookup_elem(&enforcement_config_map, &cfg_k);
         __u8 selected_only = cfg ? cfg->selected_only : 0;
-        __u64 cgid = bpf_get_current_cgroup_id();
+        __u64 cgid = attached_cgroup_id();
         if (selected_only)
         {
             __u8 *present = bpf_map_lookup_elem(&enforced_cgroups, &cgid);
@@ -590,7 +610,7 @@ int filter_ingress(struct __sk_buff *skb)
         __u32 cfg_k = 0;
         struct enforcement_config *cfg = bpf_map_lookup_elem(&enforcement_config_map, &cfg_k);
         __u8 selected_only = cfg ? cfg->selected_only : 0;
-        __u64 cgid = bpf_get_current_cgroup_id();
+        __u64 cgid = attached_cgroup_id();
         if (selected_only)
         {
             __u8 *present = bpf_map_lookup_elem(&enforced_cgroups, &cgid);
