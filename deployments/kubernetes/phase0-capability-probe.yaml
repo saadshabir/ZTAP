@@ -37,6 +37,8 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
+              drop:
+                - ALL
               add:
                 - BPF
                 - NET_ADMIN
@@ -46,10 +48,11 @@ spec:
               type: RuntimeDefault
           volumeMounts:
             - name: cgroup
-              mountPath: /sys/fs/cgroup
+              mountPath: /host/sys/fs/cgroup
               readOnly: true
             - name: bpffs
-              mountPath: /sys/fs/bpf
+              mountPath: /host/sys/fs/bpf
+              readOnly: false
             - name: run-dir
               mountPath: /run/ztap
       volumes:
@@ -60,7 +63,7 @@ spec:
         - name: bpffs
           hostPath:
             path: /sys/fs/bpf
-            type: DirectoryOrCreate
+            type: Directory
         - name: run-dir
           hostPath:
             path: /run/ztap-phase0

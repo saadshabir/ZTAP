@@ -286,16 +286,14 @@ type tenantSemanticsLoad struct {
 }
 
 func loadBpfObjectsWithTenantSemantics(spec *ebpf.CollectionSpec) (*tenantSemanticsLoad, error) {
-	// Use a composite struct so we can access additional maps without regenerating bpf2go bindings.
-	var out struct {
-		bpfObjects
-		EnforcedCgroups      *ebpf.Map `ebpf:"enforced_cgroups"`
-		EnforcementConfigMap *ebpf.Map `ebpf:"enforcement_config_map"`
-	}
+	// The generated bpfObjects already includes the tenant-semantics maps.
+	// Embedding it and declaring the same tagged fields again makes
+	// CollectionSpec.LoadAndAssign see duplicate destinations.
+	var out bpfObjects
 	if err := spec.LoadAndAssign(&out, nil); err != nil {
 		return nil, err
 	}
-	return &tenantSemanticsLoad{objs: out.bpfObjects, enforcedCgroups: out.EnforcedCgroups, enforcementConfigMap: out.EnforcementConfigMap}, nil
+	return &tenantSemanticsLoad{objs: out, enforcedCgroups: out.EnforcedCgroups, enforcementConfigMap: out.EnforcementConfigMap}, nil
 }
 
 type enforcementConfig struct {

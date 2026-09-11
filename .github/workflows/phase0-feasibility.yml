@@ -121,7 +121,7 @@ jobs:
         env:
           KIND_CLUSTER: ztap-phase0
           KUBERNETES_VERSION: ${{ inputs.kubernetes_version || 'v1.36.4' }}
-        run: kind create cluster --name "$KIND_CLUSTER" --image "kindest/node:${KUBERNETES_VERSION}" --wait 180s
+        run: kind create cluster --name "$KIND_CLUSTER" --config deployments/kubernetes/phase0-kind-config.yaml --image "kindest/node:${KUBERNETES_VERSION}" --wait 180s
 
       - name: Characterize runtime and capability-only DaemonSet
         env:
@@ -136,7 +136,7 @@ jobs:
             kubectl -n ztap-phase0 rollout status daemonset/capability-probe --timeout=180s
             kubectl -n ztap-phase0 get pods -o wide
             probe_pod="$(kubectl -n ztap-phase0 get pods -l app=ztap-phase0-capability-probe -o jsonpath='{.items[0].metadata.name}')"
-            kubectl -n ztap-phase0 exec "$probe_pod" -- sh -c 'id; cat /proc/self/cgroup; grep Cap /proc/self/status; stat -fc %T /sys/fs/cgroup; stat -fc %T /sys/fs/bpf; mount | grep -E "cgroup|bpf" || true'
+            kubectl -n ztap-phase0 exec "$probe_pod" -- sh -c 'id; cat /proc/self/cgroup; grep Cap /proc/self/status; stat -fc %T /host/sys/fs/cgroup; stat -fc %T /host/sys/fs/bpf; mount | grep -E "cgroup|bpf" || true'
             node_container="${KIND_CLUSTER}-control-plane"
             docker exec "$node_container" sh -c 'cat /proc/1/cgroup; grep -E "SystemdCgroup|systemd_cgroup" /etc/containerd/config.toml || true; stat -fc %T /sys/fs/cgroup; stat -fc %T /sys/fs/bpf'
           } 2>&1 | tee phase0-kubernetes.txt
