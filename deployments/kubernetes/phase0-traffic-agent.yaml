@@ -97,7 +97,7 @@ spec:
                 client_cgroup="$(find /sys/fs/cgroup -type d -path "*${CLIENT_CONTAINER_ID}*" -print -quit 2>/dev/null || true)"
                 if [ -z "$client_cgroup" ]; then sleep 1; fi
               done
-              printf 'phase0_cgroup_observed_epoch=%s path=%s\n' "$(date +%s)" "$client_cgroup" | tee /run/ztap-phase0/timing.log
+              printf 'phase0_cgroup_observed_epoch=%s path=%s\n' "$(date +%s)" "$client_cgroup" | tee -a /run/ztap-phase0/timing.log
 
               /usr/local/bin/ztap enforce \
                 --file /etc/ztap-phase0/policy.yaml \
