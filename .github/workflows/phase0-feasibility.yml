@@ -267,8 +267,11 @@ jobs:
               printf 'phase0_self_behavior=probe_failed_status_%s\n' "$self_request_status" | tee -a phase0-kubernetes.txt
             fi
             printf '%s\n' '--- rejected IPv6 request ---' | tee -a phase0-kubernetes.txt
+            ipv6_request_status=0
             kubectl -n ztap-phase0 exec phase0-client -c client -- sh -c \
-              "printf 'GET / HTTP/1.0\\r\\nHost: phase0-ipv6\\r\\n\\r\\n' | nc -6 -w 3 -p 30084 ::1 18081 || true" | tee -a phase0-kubernetes.txt
+              'wget -qO- -T 3 -t 1 "http://[::1]:18081/"' > "$RUNNER_TEMP/phase0-ipv6-response.txt" 2>&1 || ipv6_request_status=$?
+            cat "$RUNNER_TEMP/phase0-ipv6-response.txt" | tee -a phase0-kubernetes.txt
+            printf 'phase0_ipv6_request_status=%s\n' "$ipv6_request_status" | tee -a phase0-kubernetes.txt
 
             sleep 2
             kill "$capture_pid" 2>/dev/null || true
@@ -314,7 +317,7 @@ jobs:
             else
               printf '%s\n' 'phase0_self_behavior=no_matching_flow_event' | tee -a phase0-kubernetes.txt
             fi
-            grep -F '"src_port":30084' phase0-flow.jsonl | grep -F '"dst_ip":"::1"' | grep -F '"action":"blocked"'
+            grep -F '"dst_ip":"::1"' phase0-flow.jsonl | grep -F '"dst_port":18081' | grep -F '"action":"blocked"'
             grep -F '"direction":"ingress"' phase0-flow.jsonl
             grep -F '"src_port":8080' phase0-flow.jsonl | grep -F '"dst_port":30080'
             grep -F '"src_port":8080' phase0-flow.jsonl | grep -F '"dst_port":30081'
