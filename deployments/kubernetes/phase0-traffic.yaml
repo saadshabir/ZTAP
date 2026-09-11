@@ -68,11 +68,9 @@ spec:
         - name: self-http
           containerPort: 18081
       readinessProbe:
-        exec:
-          command:
-            - /bin/sh
-            - -c
-            - test -f /www/index.html
+        httpGet:
+          path: /
+          port: self-http
         periodSeconds: 1
 ---
 apiVersion: v1
