@@ -743,7 +743,11 @@ func compileTestBPF(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
 	cmd := exec.Command("make")
 	cmd.Dir = filepath.Join(repoRoot, "bpf")
-	cmd.Env = append(os.Environ(), "BPF_CLANG=clang", "BPF_LLVM_STRIP=llvm-strip")
+	bpfClang := os.Getenv("BPF_CLANG")
+	if bpfClang == "" {
+		bpfClang = "clang"
+	}
+	cmd.Env = append(os.Environ(), "CLANG="+bpfClang)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

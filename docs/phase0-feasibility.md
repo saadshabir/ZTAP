@@ -74,8 +74,8 @@ internal/enforcer/bpf_bpfeb.go  72b38156fbb6a43cc69e4b752e502a6c2b0e88ba9e8eb2cd
   second enqueue and could intermittently observe no drop.
 - Added focused Linux-tagged characterization tests for cgroup-v2/bpffs
   preflight, ingress allow/deny traffic, and flow-map pin/open/cleanup, plus a
-  disposable capability-only Kubernetes probe and manual workflow in commit
-  `42b7203`.
+  disposable capability-only Kubernetes probe and PR-triggered workflow in
+  commits `42b7203` and `9056016`.
 
 No product feature, architecture, old workflow, release workflow, or target
 DaemonSet was deleted in this local slice.
@@ -102,6 +102,15 @@ repository now reports `main` as protected with strict `Required CI` status
 checks. The separately dispatched legacy run `34564466189` passed its generic
 Linux integration job, but failed unrelated Proto/Windows jobs and therefore
 skipped its old eBPF verification job; it is not feasibility evidence.
+
+The first PR-triggered `Phase 0 Feasibility` run `34565906626` failed before
+the substantive assertions. The Kubernetes job requested
+`kindest/node:v1.36.0`, which is not a published image tag. The Linux job's
+generated-binding check also detected byte drift because the workflow used the
+runner's unpinned clang. Neither failure reached a kernel, packet, cgroup, NAT,
+or security-context assertion, so neither is an architecture contradiction.
+The workflow now pins clang 18 and the available Kubernetes 1.36.4 node image;
+the retry result is the evidence needed for the gate.
 
 This separates locally reproducible source failures from sandbox capability
 failures. The pushed `Migration CI` result covers the non-privileged gate; it
@@ -142,12 +151,14 @@ probe. It is characterization input, not the target deployment contract.
 ## CI and branch state
 
 - The current local branch is `codex/streamline-ztap`; `origin` contains it
-  through `b7f8b5a`, while local commit `42b7203` is not pushed yet.
+  through `9056016`, with the uncommitted Phase 1 implementation intentionally
+  outside the branch commits.
 - `Migration CI` is green for the pushed branch event and `Required CI` is
-  required on `main`; its default-branch pull-request event remains to be
-  proven by the review pull request.
-- The new `Phase 0 Feasibility` workflow is local in `42b7203` and has not run
-  on GitHub yet.
+  required on `main`; PR #177's default-branch pull-request event is still
+  running.
+- PR #177 is the review vehicle. Its first `Phase 0 Feasibility` run failed
+  only on the invalid image tag and unpinned generated-bytecode toolchain;
+  the pinned retry is pending.
 - Existing CI and release workflows are intentionally retained until the
   required-check handoff can be performed in order. The migration workflow
   itself has no publishing permissions or steps.
@@ -158,12 +169,12 @@ Phase 0 is **not closed**. Safe artifact/tooling cleanup is locally complete,
 but broad feature or architecture deletion and target DaemonSet changes remain
 blocked.
 
-The next required technical run is the new disposable Linux/Kubernetes
-fixture with
-cgroup v2, containerd using the systemd cgroup driver, bpffs access, the exact
-proposed capability-only security context, and the tested Kubernetes 1.36.x
-line. It must capture packet offsets, NAT visibility, cgroup identity, CNI
-behavior, Pod-start classification delay, restart recovery, and rolling-update
-recovery. Separately, the migration workflow must be pushed, proven green on
-its branch and default-branch pull-request event, made required, and only then
-used to hand off and remove the old publishing/specialized workflows.
+The next required technical run is the pinned retry of the disposable
+Linux/Kubernetes fixture with cgroup v2, containerd using the systemd cgroup
+driver, bpffs access, the exact proposed capability-only security context, and
+the tested Kubernetes 1.36.x line. It must capture packet offsets, NAT
+visibility, cgroup identity, CNI behavior, Pod-start classification delay,
+restart recovery, and rolling-update recovery. Separately, the migration
+workflow must be proven green on its branch and default-branch pull-request
+event, made required, and only then used to hand off and remove the old
+publishing/specialized workflows.
