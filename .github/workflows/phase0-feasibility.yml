@@ -141,7 +141,7 @@ jobs:
 
       - name: Install kind
         run: |
-          GOBIN="$RUNNER_TEMP/bin" go install sigs.k8s.io/kind@v0.31.0
+          GOBIN="$RUNNER_TEMP/bin" go install sigs.k8s.io/kind@v0.32.0
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           kind version
           kubectl version --client
