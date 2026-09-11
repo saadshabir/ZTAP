@@ -46,6 +46,10 @@ type eBPFEnforcer struct {
 	enforcementConfigMap *ebpf.Map
 	// flowEventsPinPath is the bpffs pin path for the flow_events map (if pinned).
 	flowEventsPinPath string
+	// cgroupStorageReplacement reuses the live cgroup-local context during a
+	// graceful program reload so the replacement program sees the same storage
+	// instance as the link it replaces.
+	cgroupStorageReplacement *ebpf.Map
 }
 
 const DefaultFlowEventsPinPath = "/sys/fs/bpf/ztap/flow_events"
@@ -188,6 +192,12 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 	scopedMode := !sawZero
 
 	var objs bpfObjects
+	var loadOptions *ebpf.CollectionOptions
+	if e.cgroupStorageReplacement != nil {
+		loadOptions = &ebpf.CollectionOptions{MapReplacements: map[string]*ebpf.Map{
+			"attached_cgroup": e.cgroupStorageReplacement,
+		}}
+	}
 
 	debug := e.debug || os.Getenv("ZTAP_DEBUG_EBPF") == "1"
 
@@ -208,7 +218,7 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 		if err != nil {
 			return fmt.Errorf("failed to load eBPF object from %s: %w", safeP, err)
 		}
-		loaded, err := loadBpfObjectsWithTenantSemantics(spec)
+		loaded, err := loadBpfObjectsWithTenantSemantics(spec, loadOptions)
 		if err == nil {
 			e.objs = &loaded.objs
 			e.enforcedCgroups = loaded.enforcedCgroups
@@ -217,7 +227,7 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 			if scopedMode {
 				return fmt.Errorf("eBPF object missing tenant isolation maps; rebuild BPF program or set ZTAP_BPF_OBJECT: %w", err)
 			}
-			if err := spec.LoadAndAssign(&objs, nil); err != nil {
+			if err := spec.LoadAndAssign(&objs, loadOptions); err != nil {
 				return fmt.Errorf("failed to load eBPF objects from %s: %w", safeP, err)
 			}
 			e.objs = &objs
@@ -228,7 +238,7 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 		if err != nil {
 			return fmt.Errorf("failed to load embedded eBPF spec: %w", err)
 		}
-		loaded, err := loadBpfObjectsWithTenantSemantics(spec)
+		loaded, err := loadBpfObjectsWithTenantSemantics(spec, loadOptions)
 		if err == nil {
 			e.objs = &loaded.objs
 			e.enforcedCgroups = loaded.enforcedCgroups
@@ -237,7 +247,7 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 			if scopedMode {
 				return fmt.Errorf("embedded eBPF object missing tenant isolation maps; rebuild BPF program or set ZTAP_BPF_OBJECT: %w", err)
 			}
-			if err = loadBpfObjects(&objs, nil); err != nil {
+			if err = loadBpfObjects(&objs, loadOptions); err != nil {
 				return fmt.Errorf("failed to load embedded eBPF objects: %w", err)
 			}
 			e.objs = &objs
@@ -286,12 +296,12 @@ type tenantSemanticsLoad struct {
 	enforcementConfigMap *ebpf.Map
 }
 
-func loadBpfObjectsWithTenantSemantics(spec *ebpf.CollectionSpec) (*tenantSemanticsLoad, error) {
+func loadBpfObjectsWithTenantSemantics(spec *ebpf.CollectionSpec, opts *ebpf.CollectionOptions) (*tenantSemanticsLoad, error) {
 	// The generated bpfObjects already includes the tenant-semantics maps.
 	// Embedding it and declaring the same tagged fields again makes
 	// CollectionSpec.LoadAndAssign see duplicate destinations.
 	var out bpfObjects
-	if err := spec.LoadAndAssign(&out, nil); err != nil {
+	if err := spec.LoadAndAssign(&out, opts); err != nil {
 		return nil, err
 	}
 	return &tenantSemanticsLoad{objs: out, enforcedCgroups: out.EnforcedCgroups, enforcementConfigMap: out.EnforcementConfigMap}, nil
@@ -861,12 +871,18 @@ func protocolToNum(protocol string) uint8 {
 // It implements graceful reload by updating existing links if an enforcer
 // is already active.
 func EnforceWithEBPFReal(opts EnforcementOptions) error {
+	activeEBPFMu.Lock()
+	defer activeEBPFMu.Unlock()
+
 	newEnforcer, err := NewEBPFEnforcer()
 	if err != nil {
 		return fmt.Errorf("failed to create eBPF enforcer: %w", err)
 	}
 	newEnforcer.bpfObjectPath = strings.TrimSpace(opts.BPFObjectPath)
 	newEnforcer.debug = opts.DebugEBPF
+	if activeEBPFEnforcer != nil && activeEBPFEnforcer.objs != nil {
+		newEnforcer.cgroupStorageReplacement = activeEBPFEnforcer.objs.AttachedCgroup
+	}
 
 	if err := newEnforcer.LoadPolicies(opts.Policies); err != nil {
 		_ = newEnforcer.Close()
@@ -878,9 +894,6 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 		_ = newEnforcer.Close()
 		return nil
 	}
-
-	activeEBPFMu.Lock()
-	defer activeEBPFMu.Unlock()
 
 	if activeEBPFEnforcer != nil {
 		// Graceful reload: update existing links
@@ -924,12 +937,18 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 //
 // Policies can be programmed for specific subject cgroups via SubjectCgroupIDs.
 func EnforceWithEBPFRealScoped(opts ScopedEnforcementOptions) error {
+	activeEBPFMu.Lock()
+	defer activeEBPFMu.Unlock()
+
 	newEnforcer, err := NewEBPFEnforcer()
 	if err != nil {
 		return fmt.Errorf("failed to create eBPF enforcer: %w", err)
 	}
 	newEnforcer.bpfObjectPath = strings.TrimSpace(opts.BPFObjectPath)
 	newEnforcer.debug = opts.DebugEBPF
+	if activeEBPFEnforcer != nil && activeEBPFEnforcer.objs != nil {
+		newEnforcer.cgroupStorageReplacement = activeEBPFEnforcer.objs.AttachedCgroup
+	}
 
 	if err := newEnforcer.LoadPoliciesScoped(opts.Policies); err != nil {
 		_ = newEnforcer.Close()
@@ -941,9 +960,6 @@ func EnforceWithEBPFRealScoped(opts ScopedEnforcementOptions) error {
 		_ = newEnforcer.Close()
 		return nil
 	}
-
-	activeEBPFMu.Lock()
-	defer activeEBPFMu.Unlock()
 
 	if activeEBPFEnforcer != nil {
 		if err := newEnforcer.UpdateFrom(activeEBPFEnforcer); err != nil {
