@@ -43,10 +43,14 @@ and fixed a flaky dispatcher test. The safety work is committed locally as
   absent.
 
 The macOS checkout cannot run those kernel-dependent checks. The hosted run
-below verifies a meaningful subset, but these Phase 0 claims remain unverified:
+below verifies cgroup-v2/bpffs availability, the reference containerd/systemd
+runtime layout, capabilities, and a meaningful packet-policy subset. These
+Phase 0 claims remain unverified:
 
-- cgroup v2 and containerd/systemd cgroup layout;
-- the cgroup identity returned by `bpf_get_current_cgroup_id()`;
+- equivalence between filesystem cgroup identity and the production
+  containerd cgroup path under the target DaemonSet; the hosted eBPF traffic
+  test uses disposable host cgroups, while the Kubernetes job verifies the
+  runtime layout and security context separately;
 - pre- and post-NAT addresses and ports for PodIP and ClusterIP traffic;
 - reply, node, self, rejected-IPv6, CNI coexistence, and unsupported-traffic
   behavior;
