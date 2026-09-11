@@ -90,8 +90,6 @@ jobs:
           path: |
             phase0-linux-host.txt
             phase0-kernel-tests.txt
-            internal/enforcer/bpf_bpfel.go
-            internal/enforcer/bpf_bpfeb.go
           if-no-files-found: warn
           retention-days: 14
 
