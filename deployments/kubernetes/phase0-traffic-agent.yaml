@@ -45,6 +45,8 @@ data:
               port: 30082
             - protocol: TCP
               port: 30083
+            - protocol: TCP
+              port: 18081
 ---
 apiVersion: apps/v1
 kind: DaemonSet
