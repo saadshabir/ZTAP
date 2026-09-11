@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -379,6 +380,70 @@ func TestEBPFIntegrationCIDREndToEndEgress(t *testing.T) {
 	}
 }
 
+// TestEBPFIntegrationIngressCgroupTraffic verifies that the ingress hook
+// observes real UDP traffic for a selected cgroup and preserves
+// default-deny behavior for a port without a rule.
+func TestEBPFIntegrationIngressCgroupTraffic(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("integration test only runs on Linux")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("requires root privileges; re-run with sudo or CAP_BPF + CAP_NET_ADMIN")
+	}
+
+	compileTestBPF(t)
+	enf, err := NewEBPFEnforcer()
+	if err != nil {
+		t.Fatalf("failed to create enforcer: %v", err)
+	}
+	t.Cleanup(func() { _ = enf.Close() })
+
+	cgroupPath := createTestCgroup(t)
+	cgid := mustCgroupID(t, cgroupPath)
+	allowedPort := reserveUDPPort(t)
+	policyObj := policy.NetworkPolicy{
+		APIVersion: "ztap/v1",
+		Kind:       "NetworkPolicy",
+		Metadata:   policy.NetworkPolicyMetadata{Name: "allow-ingress"},
+		Spec: policy.NetworkPolicySpec{
+			PodSelector: policy.PodSelectorSpec{MatchLabels: map[string]string{"app": "test"}},
+			Ingress: []policy.IngressRule{{
+				From:  policy.IngressSource{IPBlock: policy.IPBlockSpec{CIDR: "127.0.0.1/32"}},
+				Ports: []policy.PortSpec{{Protocol: "UDP", Port: allowedPort}},
+			}},
+		},
+	}
+	if err := enf.LoadPoliciesScoped([]ScopedPolicy{{Tenant: "default", Policy: policyObj, SubjectCgroupIDs: []uint64{cgid}}}); err != nil {
+		t.Fatalf("failed to load scoped ingress policy: %v", err)
+	}
+	if err := enf.Attach(cgroupPath); err != nil {
+		t.Fatalf("failed to attach programs: %v", err)
+	}
+
+	reader, err := ringbuf.NewReader(enf.objs.FlowEvents)
+	if err != nil {
+		t.Fatalf("failed to create ringbuf reader: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	if !runUDPReceiveHelperInCgroup(t, cgroupPath, allowedPort) {
+		t.Fatal("allowed ingress datagram was not delivered")
+	}
+	evt := readFlowEvent(t, reader, uint16(allowedPort), flow.ProtocolUDP, flow.DirectionIngress, 2*time.Second)
+	if evt.Action != flow.ActionAllowed {
+		t.Fatalf("expected allowed ingress event, got action %d", evt.Action)
+	}
+
+	deniedPort := reserveUDPPort(t)
+	if runUDPReceiveHelperInCgroup(t, cgroupPath, deniedPort) {
+		t.Fatal("unmatched ingress datagram was delivered")
+	}
+	evt = readFlowEvent(t, reader, uint16(deniedPort), flow.ProtocolUDP, flow.DirectionIngress, 2*time.Second)
+	if evt.Action != flow.ActionBlocked {
+		t.Fatalf("expected blocked ingress event, got action %d", evt.Action)
+	}
+}
+
 func TestCgroupUDPSendHelper(t *testing.T) {
 	if os.Getenv("ZTAP_CGROUP_HELPER") != "1" {
 		t.Skip("helper")
@@ -410,6 +475,48 @@ func TestCgroupUDPSendHelper(t *testing.T) {
 	}
 	_, _ = conn.Write([]byte("x"))
 	_ = conn.Close()
+}
+
+func TestCgroupUDPReceiveHelper(t *testing.T) {
+	if os.Getenv("ZTAP_CGROUP_RECEIVE_HELPER") != "1" {
+		t.Skip("helper")
+	}
+	addr := os.Getenv("ZTAP_UDP_ADDR")
+	if addr == "" {
+		t.Fatal("ZTAP_UDP_ADDR not set")
+	}
+	startFile := os.NewFile(uintptr(3), "start")
+	statusFile := os.NewFile(uintptr(4), "status")
+	if startFile == nil || statusFile == nil {
+		t.Fatal("failed to open helper pipes")
+	}
+	defer startFile.Close()
+	defer statusFile.Close()
+
+	if _, err := io.ReadFull(startFile, make([]byte, 1)); err != nil {
+		t.Fatalf("start signal: %v", err)
+	}
+	conn, err := net.ListenPacket("udp4", addr)
+	if err != nil {
+		_, _ = statusFile.Write([]byte{'e'})
+		t.Fatalf("listen: %v", err)
+	}
+	defer conn.Close()
+	if _, err := statusFile.Write([]byte{'r'}); err != nil {
+		t.Fatalf("ready signal: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(1200 * time.Millisecond))
+	_, _, err = conn.ReadFrom(make([]byte, 1))
+	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			_, _ = statusFile.Write([]byte{'0'})
+			return
+		}
+		_, _ = statusFile.Write([]byte{'e'})
+		t.Fatalf("receive: %v", err)
+	}
+	_, _ = statusFile.Write([]byte{'1'})
 }
 
 func allowUDPPolicy(name, cidr string, port int) policy.NetworkPolicy {
@@ -488,6 +595,101 @@ func runUDPSendHelperInCgroup(t *testing.T, cgroupPath, addr string) {
 	}
 }
 
+func runUDPReceiveHelperInCgroup(t *testing.T, cgroupPath string, port int) bool {
+	t.Helper()
+	startR, startW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("start pipe: %v", err)
+	}
+	statusR, statusW, err := os.Pipe()
+	if err != nil {
+		_ = startR.Close()
+		_ = startW.Close()
+		t.Fatalf("status pipe: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = startR.Close()
+		_ = startW.Close()
+		_ = statusR.Close()
+		_ = statusW.Close()
+	})
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestCgroupUDPReceiveHelper$", "-test.v")
+	cmd.Env = append(os.Environ(), "ZTAP_CGROUP_RECEIVE_HELPER=1", "ZTAP_UDP_ADDR="+addr)
+	cmd.ExtraFiles = []*os.File{startR, statusW}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start receive helper: %v", err)
+	}
+	_ = startR.Close()
+	_ = statusW.Close()
+
+	procsPath := filepath.Join(cgroupPath, "cgroup.procs")
+	f, err := os.OpenFile(procsPath, os.O_WRONLY, 0)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("open %s: %v", procsPath, err)
+	}
+	_, writeErr := fmt.Fprintf(f, "%d\n", cmd.Process.Pid)
+	_ = f.Close()
+	if writeErr != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("write %s: %v", procsPath, writeErr)
+	}
+
+	if _, err := startW.Write([]byte{'1'}); err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("release helper: %v", err)
+	}
+	_ = startW.Close()
+
+	status := make([]byte, 2)
+	if _, err := io.ReadFull(statusR, status[:1]); err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("receive helper readiness: %v", err)
+	}
+	if status[0] != 'r' {
+		_ = cmd.Process.Kill()
+		t.Fatalf("receive helper failed before readiness: %q", status[0])
+	}
+
+	conn, err := net.DialTimeout("udp4", addr, 500*time.Millisecond)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("dial receive helper: %v", err)
+	}
+	_, writeErr = conn.Write([]byte{'x'})
+	_ = conn.Close()
+	if writeErr != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("send receive helper datagram: %v", writeErr)
+	}
+
+	if _, err := io.ReadFull(statusR, status[1:]); err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("receive helper result: %v", err)
+	}
+	if err := cmd.Wait(); err != nil && status[1] != '0' {
+		t.Fatalf("receive helper failed: %v", err)
+	}
+	return status[1] == '1'
+}
+
+func reserveUDPPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	if err != nil {
+		t.Fatalf("reserve UDP port: %v", err)
+	}
+	port := listener.LocalAddr().(*net.UDPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release UDP port: %v", err)
+	}
+	return port
+}
+
 func readFlowEvent(t *testing.T, r *ringbuf.Reader, destPort uint16, protocol uint8, direction uint8, timeout time.Duration) flow.RawFlowEvent {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -541,7 +743,11 @@ func compileTestBPF(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
 	cmd := exec.Command("make")
 	cmd.Dir = filepath.Join(repoRoot, "bpf")
-	cmd.Env = append(os.Environ(), "BPF_CLANG=clang", "BPF_LLVM_STRIP=llvm-strip")
+	bpfClang := os.Getenv("BPF_CLANG")
+	if bpfClang == "" {
+		bpfClang = "clang"
+	}
+	cmd.Env = append(os.Environ(), "CLANG="+bpfClang)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

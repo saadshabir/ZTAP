@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ztap-phase0
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: capability-probe
+  namespace: ztap-phase0
+  labels:
+    app: ztap-phase0-capability-probe
+spec:
+  selector:
+    matchLabels:
+      app: ztap-phase0-capability-probe
+  template:
+    metadata:
+      labels:
+        app: ztap-phase0-capability-probe
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+        - name: probe
+          image: busybox:1.36.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - sleep 3600
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - BPF
+                - NET_ADMIN
+                - PERFMON
+                - SYS_RESOURCE
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: cgroup
+              mountPath: /host/sys/fs/cgroup
+              readOnly: true
+            - name: bpffs
+              mountPath: /host/sys/fs/bpf
+              readOnly: false
+            - name: run-dir
+              mountPath: /run/ztap
+      volumes:
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
+            type: Directory
+        - name: run-dir
+          hostPath:
+            path: /run/ztap-phase0
+            type: DirectoryOrCreate

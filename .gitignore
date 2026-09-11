@@ -1,6 +1,7 @@
 # Binaries
 /ztap
 /ztap_*
+/bpfgen
 *_example
 *.exe
 *.dll

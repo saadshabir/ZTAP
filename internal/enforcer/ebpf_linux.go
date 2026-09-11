@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"ztap/internal/logging"
 	"ztap/internal/policy"
@@ -45,6 +46,10 @@ type eBPFEnforcer struct {
 	enforcementConfigMap *ebpf.Map
 	// flowEventsPinPath is the bpffs pin path for the flow_events map (if pinned).
 	flowEventsPinPath string
+	// cgroupStorageReplacement reuses the live cgroup-local context during a
+	// graceful program reload so the replacement program sees the same storage
+	// instance as the link it replaces.
+	cgroupStorageReplacement *ebpf.Map
 }
 
 const DefaultFlowEventsPinPath = "/sys/fs/bpf/ztap/flow_events"
@@ -187,6 +192,12 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 	scopedMode := !sawZero
 
 	var objs bpfObjects
+	var loadOptions *ebpf.CollectionOptions
+	if e.cgroupStorageReplacement != nil {
+		loadOptions = &ebpf.CollectionOptions{MapReplacements: map[string]*ebpf.Map{
+			"attached_cgroup": e.cgroupStorageReplacement,
+		}}
+	}
 
 	debug := e.debug || os.Getenv("ZTAP_DEBUG_EBPF") == "1"
 
@@ -207,7 +218,7 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 		if err != nil {
 			return fmt.Errorf("failed to load eBPF object from %s: %w", safeP, err)
 		}
-		loaded, err := loadBpfObjectsWithTenantSemantics(spec)
+		loaded, err := loadBpfObjectsWithTenantSemantics(spec, loadOptions)
 		if err == nil {
 			e.objs = &loaded.objs
 			e.enforcedCgroups = loaded.enforcedCgroups
@@ -216,7 +227,7 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 			if scopedMode {
 				return fmt.Errorf("eBPF object missing tenant isolation maps; rebuild BPF program or set ZTAP_BPF_OBJECT: %w", err)
 			}
-			if err := spec.LoadAndAssign(&objs, nil); err != nil {
+			if err := spec.LoadAndAssign(&objs, loadOptions); err != nil {
 				return fmt.Errorf("failed to load eBPF objects from %s: %w", safeP, err)
 			}
 			e.objs = &objs
@@ -227,7 +238,7 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 		if err != nil {
 			return fmt.Errorf("failed to load embedded eBPF spec: %w", err)
 		}
-		loaded, err := loadBpfObjectsWithTenantSemantics(spec)
+		loaded, err := loadBpfObjectsWithTenantSemantics(spec, loadOptions)
 		if err == nil {
 			e.objs = &loaded.objs
 			e.enforcedCgroups = loaded.enforcedCgroups
@@ -236,7 +247,7 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 			if scopedMode {
 				return fmt.Errorf("embedded eBPF object missing tenant isolation maps; rebuild BPF program or set ZTAP_BPF_OBJECT: %w", err)
 			}
-			if err = loadBpfObjects(&objs, nil); err != nil {
+			if err = loadBpfObjects(&objs, loadOptions); err != nil {
 				return fmt.Errorf("failed to load embedded eBPF objects: %w", err)
 			}
 			e.objs = &objs
@@ -285,17 +296,15 @@ type tenantSemanticsLoad struct {
 	enforcementConfigMap *ebpf.Map
 }
 
-func loadBpfObjectsWithTenantSemantics(spec *ebpf.CollectionSpec) (*tenantSemanticsLoad, error) {
-	// Use a composite struct so we can access additional maps without regenerating bpf2go bindings.
-	var out struct {
-		bpfObjects
-		EnforcedCgroups      *ebpf.Map `ebpf:"enforced_cgroups"`
-		EnforcementConfigMap *ebpf.Map `ebpf:"enforcement_config_map"`
-	}
-	if err := spec.LoadAndAssign(&out, nil); err != nil {
+func loadBpfObjectsWithTenantSemantics(spec *ebpf.CollectionSpec, opts *ebpf.CollectionOptions) (*tenantSemanticsLoad, error) {
+	// The generated bpfObjects already includes the tenant-semantics maps.
+	// Embedding it and declaring the same tagged fields again makes
+	// CollectionSpec.LoadAndAssign see duplicate destinations.
+	var out bpfObjects
+	if err := spec.LoadAndAssign(&out, opts); err != nil {
 		return nil, err
 	}
-	return &tenantSemanticsLoad{objs: out.bpfObjects, enforcedCgroups: out.EnforcedCgroups, enforcementConfigMap: out.EnforcementConfigMap}, nil
+	return &tenantSemanticsLoad{objs: out, enforcedCgroups: out.EnforcedCgroups, enforcementConfigMap: out.EnforcementConfigMap}, nil
 }
 
 type enforcementConfig struct {
@@ -670,7 +679,50 @@ func (e *eBPFEnforcer) Attach(cgroupPath string) error {
 		logging.Infof("eBPF ingress filter attached to cgroup: %s", safeCgroupPath)
 	}
 
+	// cgroup_skb ingress cannot derive the receiving cgroup from the skb or
+	// current task on every path. Populate the cgroup-local context after the
+	// links exist so the BPF program can use the cgroup to which this link is
+	// attached as its policy scope.
+	if err := e.setAttachedCgroupID(cgroupPath); err != nil {
+		if e.ingressLink != nil {
+			_ = e.ingressLink.Close()
+			e.ingressLink = nil
+		}
+		if e.egressLink != nil {
+			_ = e.egressLink.Close()
+			e.egressLink = nil
+		}
+		return err
+	}
+
 	return nil
+}
+
+func (e *eBPFEnforcer) setAttachedCgroupID(cgroupPath string) error {
+	if e.objs == nil || e.objs.AttachedCgroup == nil {
+		return errors.New("attached cgroup storage map not available")
+	}
+
+	cgid, err := cgroupInodeID(cgroupPath)
+	if err != nil {
+		return fmt.Errorf("resolve attached cgroup %s: %w", cgroupPath, err)
+	}
+	if err := e.objs.AttachedCgroup.Put(&cgid, &cgid); err != nil {
+		return fmt.Errorf("record attached cgroup %d: %w", cgid, err)
+	}
+	return nil
+}
+
+func cgroupInodeID(cgroupPath string) (uint64, error) {
+	info, err := os.Stat(cgroupPath)
+	if err != nil {
+		return 0, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("unexpected stat type %T", info.Sys())
+	}
+	return uint64(stat.Ino), nil
 }
 
 // UpdateFrom transfers and updates eBPF links from an old enforcer.
@@ -819,12 +871,18 @@ func protocolToNum(protocol string) uint8 {
 // It implements graceful reload by updating existing links if an enforcer
 // is already active.
 func EnforceWithEBPFReal(opts EnforcementOptions) error {
+	activeEBPFMu.Lock()
+	defer activeEBPFMu.Unlock()
+
 	newEnforcer, err := NewEBPFEnforcer()
 	if err != nil {
 		return fmt.Errorf("failed to create eBPF enforcer: %w", err)
 	}
 	newEnforcer.bpfObjectPath = strings.TrimSpace(opts.BPFObjectPath)
 	newEnforcer.debug = opts.DebugEBPF
+	if activeEBPFEnforcer != nil && activeEBPFEnforcer.objs != nil {
+		newEnforcer.cgroupStorageReplacement = activeEBPFEnforcer.objs.AttachedCgroup
+	}
 
 	if err := newEnforcer.LoadPolicies(opts.Policies); err != nil {
 		_ = newEnforcer.Close()
@@ -836,9 +894,6 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 		_ = newEnforcer.Close()
 		return nil
 	}
-
-	activeEBPFMu.Lock()
-	defer activeEBPFMu.Unlock()
 
 	if activeEBPFEnforcer != nil {
 		// Graceful reload: update existing links
@@ -852,6 +907,11 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 				return fmt.Errorf("failed to attach eBPF program: %w", err)
 			}
 		} else {
+			if err := newEnforcer.setAttachedCgroupID(opts.CgroupPath); err != nil {
+				_ = newEnforcer.Close()
+				activeEBPFEnforcer = nil
+				return fmt.Errorf("failed to record attached cgroup: %w", err)
+			}
 			// Clean up old maps and programs from the previous enforcer instance.
 			// Ownership of links was already transferred in UpdateFrom.
 			_ = activeEBPFEnforcer.Close()
@@ -877,12 +937,18 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 //
 // Policies can be programmed for specific subject cgroups via SubjectCgroupIDs.
 func EnforceWithEBPFRealScoped(opts ScopedEnforcementOptions) error {
+	activeEBPFMu.Lock()
+	defer activeEBPFMu.Unlock()
+
 	newEnforcer, err := NewEBPFEnforcer()
 	if err != nil {
 		return fmt.Errorf("failed to create eBPF enforcer: %w", err)
 	}
 	newEnforcer.bpfObjectPath = strings.TrimSpace(opts.BPFObjectPath)
 	newEnforcer.debug = opts.DebugEBPF
+	if activeEBPFEnforcer != nil && activeEBPFEnforcer.objs != nil {
+		newEnforcer.cgroupStorageReplacement = activeEBPFEnforcer.objs.AttachedCgroup
+	}
 
 	if err := newEnforcer.LoadPoliciesScoped(opts.Policies); err != nil {
 		_ = newEnforcer.Close()
@@ -895,9 +961,6 @@ func EnforceWithEBPFRealScoped(opts ScopedEnforcementOptions) error {
 		return nil
 	}
 
-	activeEBPFMu.Lock()
-	defer activeEBPFMu.Unlock()
-
 	if activeEBPFEnforcer != nil {
 		if err := newEnforcer.UpdateFrom(activeEBPFEnforcer); err != nil {
 			logging.Warnf("Atomic update failed, falling back to full re-attach: %v", err)
@@ -908,6 +971,11 @@ func EnforceWithEBPFRealScoped(opts ScopedEnforcementOptions) error {
 				return fmt.Errorf("failed to attach eBPF program: %w", err)
 			}
 		} else {
+			if err := newEnforcer.setAttachedCgroupID(opts.CgroupPath); err != nil {
+				_ = newEnforcer.Close()
+				activeEBPFEnforcer = nil
+				return fmt.Errorf("failed to record attached cgroup: %w", err)
+			}
 			_ = activeEBPFEnforcer.Close()
 		}
 	} else {

@@ -11,6 +11,7 @@ typedef unsigned long long __u64;
 // BPF map types
 #define BPF_MAP_TYPE_HASH 1
 #define BPF_MAP_TYPE_ARRAY 2
+#define BPF_MAP_TYPE_CGROUP_STORAGE 19
 #define BPF_MAP_TYPE_LPM_TRIE 11
 #define BPF_MAP_TYPE_RINGBUF 27
 
@@ -31,6 +32,7 @@ static long (*bpf_map_update_elem)(void *map, void *key, void *value, unsigned l
 static long (*bpf_skb_load_bytes)(const void *skb, __u32 offset, void *to, __u32 len) = (void *)26;
 static __u64 (*bpf_ktime_get_ns)(void) = (void *)5;
 static __u64 (*bpf_get_current_cgroup_id)(void) = (void *)80;
+static void *(*bpf_get_local_storage)(void *map, __u64 flags) = (void *)81;
 static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) = (void *)131;
 static void (*bpf_ringbuf_submit)(void *data, __u64 flags) = (void *)132;
 static void (*bpf_ringbuf_discard)(void *data, __u64 flags) = (void *)133;
@@ -207,6 +209,18 @@ struct
     __type(value, struct enforcement_config);
 } enforcement_config_map SEC(".maps");
 
+// A cgroup_skb ingress hook cannot use bpf_skb_cgroup_id(): that helper is
+// unavailable on ingress. Local storage is associated with the cgroup to
+// which the program is attached, so user space records that cgroup's inode
+// ID here after attaching the links. This avoids using the current task's
+// cgroup, which is not the receiving socket's cgroup on every ingress path.
+struct
+{
+    __uint(type, BPF_MAP_TYPE_CGROUP_STORAGE);
+    __type(key, __u64);
+    __type(value, __u64);
+} attached_cgroup SEC(".maps");
+
 // Flow event structure for real-time monitoring (must match Go struct in internal/flow/types.go)
 struct flow_event
 {
@@ -244,11 +258,12 @@ static __always_inline void emit_flow_event(__u32 *src_ip, __u32 *dest_ip,
 
     if (family == 4)
     {
-        event->src_ip[0] = src_ip[0];
+        // IPv4 flow consumers decode this field as a network-order uint32.
+        event->src_ip[0] = bpf_ntohl(src_ip[0]);
         event->src_ip[1] = 0;
         event->src_ip[2] = 0;
         event->src_ip[3] = 0;
-        event->dest_ip[0] = dest_ip[0];
+        event->dest_ip[0] = bpf_ntohl(dest_ip[0]);
         event->dest_ip[1] = 0;
         event->dest_ip[2] = 0;
         event->dest_ip[3] = 0;
@@ -272,23 +287,25 @@ static __always_inline void emit_flow_event(__u32 *src_ip, __u32 *dest_ip,
     bpf_ringbuf_submit(event, 0);
 }
 
-// Helper to parse IPv4 packet and extract addresses and ports
+static __always_inline __u64 attached_cgroup_id(void)
+{
+    __u64 *cgid = bpf_get_local_storage(&attached_cgroup, 0);
+    return cgid ? *cgid : 0;
+}
+
+// cgroup_skb programs receive an skb whose data starts at the network-layer
+// header, not at an Ethernet header. Keep the offset explicit here: assuming
+// an Ethernet header makes every cgroup ingress/egress flow look unparsable.
 static __always_inline int parse_ipv4(struct __sk_buff *skb, __u32 *src_ip, __u32 *dest_ip,
                                       __u8 *protocol, __u16 *src_port, __u16 *dest_port)
 {
-    struct ethhdr eth;
     struct iphdr ip;
 
-    // Load ethernet header
-    if (bpf_skb_load_bytes(skb, 0, &eth, sizeof(eth)) < 0)
+    if (bpf_skb_load_bytes(skb, 0, &ip, sizeof(ip)) < 0)
         return -1;
 
-    // Check if IPv4
-    if (eth.h_proto != bpf_htons(ETH_P_IP))
-        return -1;
-
-    // Load IP header
-    if (bpf_skb_load_bytes(skb, sizeof(eth), &ip, sizeof(ip)) < 0)
+    // Check the network-layer version before interpreting the header.
+    if ((ip.version_ihl >> 4) != 4)
         return -1;
 
     *src_ip = ip.saddr;
@@ -304,7 +321,7 @@ static __always_inline int parse_ipv4(struct __sk_buff *skb, __u32 *src_ip, __u3
     if (ip.protocol == IPPROTO_TCP)
     {
         struct tcphdr tcp;
-        if (bpf_skb_load_bytes(skb, sizeof(eth) + ihl, &tcp, sizeof(tcp)) < 0)
+        if (bpf_skb_load_bytes(skb, ihl, &tcp, sizeof(tcp)) < 0)
             return -1;
         *src_port = bpf_ntohs(tcp.source);
         *dest_port = bpf_ntohs(tcp.dest);
@@ -312,7 +329,7 @@ static __always_inline int parse_ipv4(struct __sk_buff *skb, __u32 *src_ip, __u3
     else if (ip.protocol == IPPROTO_UDP)
     {
         struct udphdr udp;
-        if (bpf_skb_load_bytes(skb, sizeof(eth) + ihl, &udp, sizeof(udp)) < 0)
+        if (bpf_skb_load_bytes(skb, ihl, &udp, sizeof(udp)) < 0)
             return -1;
         *src_port = bpf_ntohs(udp.source);
         *dest_port = bpf_ntohs(udp.dest);
@@ -330,19 +347,12 @@ static __always_inline int parse_ipv4(struct __sk_buff *skb, __u32 *src_ip, __u3
 static __always_inline int parse_ipv6(struct __sk_buff *skb, __u32 *src_ip, __u32 *dest_ip,
                                       __u8 *protocol, __u16 *src_port, __u16 *dest_port)
 {
-    struct ethhdr eth;
     struct ipv6hdr ip;
 
-    // Load ethernet header
-    if (bpf_skb_load_bytes(skb, 0, &eth, sizeof(eth)) < 0)
+    if (bpf_skb_load_bytes(skb, 0, &ip, sizeof(ip)) < 0)
         return -1;
 
-    // Check if IPv6
-    if (eth.h_proto != bpf_htons(ETH_P_IPV6))
-        return -1;
-
-    // Load IPv6 header
-    if (bpf_skb_load_bytes(skb, sizeof(eth), &ip, sizeof(ip)) < 0)
+    if ((ip.priority_version >> 4) != 6)
         return -1;
 
     for (int i = 0; i < 4; i++)
@@ -356,7 +366,7 @@ static __always_inline int parse_ipv6(struct __sk_buff *skb, __u32 *src_ip, __u3
     if (ip.nexthdr == IPPROTO_TCP)
     {
         struct tcphdr tcp;
-        if (bpf_skb_load_bytes(skb, sizeof(eth) + sizeof(struct ipv6hdr), &tcp, sizeof(tcp)) < 0)
+        if (bpf_skb_load_bytes(skb, sizeof(struct ipv6hdr), &tcp, sizeof(tcp)) < 0)
             return -1;
         *src_port = bpf_ntohs(tcp.source);
         *dest_port = bpf_ntohs(tcp.dest);
@@ -364,7 +374,7 @@ static __always_inline int parse_ipv6(struct __sk_buff *skb, __u32 *src_ip, __u3
     else if (ip.nexthdr == IPPROTO_UDP)
     {
         struct udphdr udp;
-        if (bpf_skb_load_bytes(skb, sizeof(eth) + sizeof(struct ipv6hdr), &udp, sizeof(udp)) < 0)
+        if (bpf_skb_load_bytes(skb, sizeof(struct ipv6hdr), &udp, sizeof(udp)) < 0)
             return -1;
         *src_port = bpf_ntohs(udp.source);
         *dest_port = bpf_ntohs(udp.dest);
@@ -431,13 +441,12 @@ int filter_egress(struct __sk_buff *skb)
         // Lookup policy in map (egress uses destination IP/port)
         __u8 lookup_proto = protocol;
         __u32 meta = PACK_META(DIRECTION_EGRESS, lookup_proto, dest_port);
-        __u32 ip_host = bpf_ntohl(dest_ip[0]);
         struct policy_key key = {
             .prefixlen = LPM_LOOKUP_PREFIXLEN_V4,
             .meta = meta,
             .cgroup_id = cgid,
         };
-        __builtin_memcpy(key.ip, &ip_host, sizeof(key.ip));
+        __builtin_memcpy(key.ip, &dest_ip[0], sizeof(key.ip));
 
         struct policy_value *value = bpf_map_lookup_elem(&policy_map, &key);
         if (!value)
@@ -490,8 +499,7 @@ int filter_egress(struct __sk_buff *skb)
         };
         for (int i = 0; i < 4; i++)
         {
-            __u32 part = bpf_ntohl(dest_ip[i]);
-            __builtin_memcpy(&key.ip[i * 4], &part, sizeof(part));
+            __builtin_memcpy(&key.ip[i * 4], &dest_ip[i], sizeof(dest_ip[i]));
         }
 
         struct policy_value *value = bpf_map_lookup_elem(&policy_map_v6, &key);
@@ -552,7 +560,7 @@ int filter_ingress(struct __sk_buff *skb)
         __u32 cfg_k = 0;
         struct enforcement_config *cfg = bpf_map_lookup_elem(&enforcement_config_map, &cfg_k);
         __u8 selected_only = cfg ? cfg->selected_only : 0;
-        __u64 cgid = bpf_get_current_cgroup_id();
+        __u64 cgid = attached_cgroup_id();
         if (selected_only)
         {
             __u8 *present = bpf_map_lookup_elem(&enforced_cgroups, &cgid);
@@ -566,13 +574,12 @@ int filter_ingress(struct __sk_buff *skb)
         // Lookup policy in map (ingress uses source IP and destination port)
         __u8 lookup_proto = protocol;
         __u32 meta = PACK_META(DIRECTION_INGRESS, lookup_proto, dest_port);
-        __u32 ip_host = bpf_ntohl(src_ip[0]);
         struct policy_key key = {
             .prefixlen = LPM_LOOKUP_PREFIXLEN_V4,
             .meta = meta,
             .cgroup_id = cgid,
         };
-        __builtin_memcpy(key.ip, &ip_host, sizeof(key.ip));
+        __builtin_memcpy(key.ip, &src_ip[0], sizeof(key.ip));
 
         struct policy_value *value = bpf_map_lookup_elem(&policy_map, &key);
         if (!value)
@@ -603,7 +610,7 @@ int filter_ingress(struct __sk_buff *skb)
         __u32 cfg_k = 0;
         struct enforcement_config *cfg = bpf_map_lookup_elem(&enforcement_config_map, &cfg_k);
         __u8 selected_only = cfg ? cfg->selected_only : 0;
-        __u64 cgid = bpf_get_current_cgroup_id();
+        __u64 cgid = attached_cgroup_id();
         if (selected_only)
         {
             __u8 *present = bpf_map_lookup_elem(&enforced_cgroups, &cgid);
@@ -625,8 +632,7 @@ int filter_ingress(struct __sk_buff *skb)
         };
         for (int i = 0; i < 4; i++)
         {
-            __u32 part = bpf_ntohl(src_ip[i]);
-            __builtin_memcpy(&key.ip[i * 4], &part, sizeof(part));
+            __builtin_memcpy(&key.ip[i * 4], &src_ip[i], sizeof(src_ip[i]));
         }
 
         struct policy_value *value = bpf_map_lookup_elem(&policy_map_v6, &key);
@@ -672,13 +678,12 @@ int filter_egress_permissive(struct __sk_buff *skb)
     }
 
     __u32 meta = PACK_META(DIRECTION_EGRESS, protocol, dest_port);
-    __u32 ip_host = bpf_ntohl(dest_ip);
     struct policy_key key = {
         .prefixlen = LPM_LOOKUP_PREFIXLEN_V4,
         .meta = meta,
         .cgroup_id = bpf_get_current_cgroup_id(),
     };
-    __builtin_memcpy(key.ip, &ip_host, sizeof(key.ip));
+    __builtin_memcpy(key.ip, &dest_ip, sizeof(key.ip));
 
     struct policy_value *value = bpf_map_lookup_elem(&policy_map, &key);
     if (!value)
@@ -710,13 +715,12 @@ int filter_ingress_permissive(struct __sk_buff *skb)
     }
 
     __u32 meta = PACK_META(DIRECTION_INGRESS, protocol, dest_port);
-    __u32 ip_host = bpf_ntohl(src_ip);
     struct policy_key key = {
         .prefixlen = LPM_LOOKUP_PREFIXLEN_V4,
         .meta = meta,
         .cgroup_id = bpf_get_current_cgroup_id(),
     };
-    __builtin_memcpy(key.ip, &ip_host, sizeof(key.ip));
+    __builtin_memcpy(key.ip, &src_ip, sizeof(key.ip));
 
     struct policy_value *value = bpf_map_lookup_elem(&policy_map, &key);
     if (!value)
