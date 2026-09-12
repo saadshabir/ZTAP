@@ -4,6 +4,7 @@
 package enforcer
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -19,6 +20,15 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 )
+
+type failingUpdateLink struct {
+	link.Link
+	err error
+}
+
+func (l *failingUpdateLink) Update(*ebpf.Program) error {
+	return l.err
+}
 
 // TestEBPFIntegrationPhase0FlowTupleAndLifetime exercises the flow map with
 // more than one real packet. The earlier Phase 0 test only proved that a pin
@@ -400,12 +410,14 @@ func TestEBPFIntegrationPhase0IngressLinkFailureRollsBackEgress(t *testing.T) {
 		t.Fatalf("load candidate policy: %v", err)
 	}
 
-	originalIngress := newEnforcer.objs.FilterIngress
-	newEnforcer.objs.FilterIngress = newEnforcer.objs.FilterEgress
+	injectedErr := errors.New("injected ingress link update failure")
+	oldEnforcer.ingressLink = &failingUpdateLink{
+		Link: oldEnforcer.ingressLink,
+		err:  injectedErr,
+	}
 	updateErr := newEnforcer.UpdateFrom(oldEnforcer)
-	newEnforcer.objs.FilterIngress = originalIngress
-	if updateErr == nil {
-		t.Fatal("ingress link accepted an egress-typed replacement program")
+	if !errors.Is(updateErr, injectedErr) {
+		t.Fatalf("update error = %v, want injected ingress failure", updateErr)
 	}
 	if oldEnforcer.egressLink == nil || oldEnforcer.ingressLink == nil {
 		t.Fatal("old enforcer lost link ownership after rolled-back update")
