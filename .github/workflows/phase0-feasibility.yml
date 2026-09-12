@@ -224,7 +224,8 @@ jobs:
               iptables-save -t nat
             ' | tee -a phase0-kubernetes.txt
 
-            sed "s/__CLIENT_CONTAINER_ID__/$client_container_id/g" \
+            sed -e "s/__CLIENT_CONTAINER_ID__/$client_container_id/g" \
+              -e "s/__CLIENT_IP__/$client_ip/g" \
               deployments/kubernetes/phase0-traffic-agent.yaml > "$RUNNER_TEMP/phase0-traffic-agent.yaml"
             kubectl apply -f "$RUNNER_TEMP/phase0-traffic-agent.yaml"
             kubectl -n ztap-phase0 rollout status daemonset/phase0-traffic-observer --timeout=180s
@@ -267,7 +268,6 @@ jobs:
               printf '%s\n' '--- self listener diagnostics ---' | tee -a phase0-kubernetes.txt
               kubectl -n ztap-phase0 exec "$client_pod" -c client -- sh -c \
                 'cat /tmp/phase0-self-httpd.log; cat /proc/net/tcp; cat /proc/net/tcp6' | tee -a phase0-kubernetes.txt || true
-              printf 'phase0_self_behavior=probe_failed_status_%s\n' "$self_request_status" | tee -a phase0-kubernetes.txt
             fi
             printf '%s\n' '--- rejected IPv6 request ---' | tee -a phase0-kubernetes.txt
             ipv6_request_status=0
@@ -311,18 +311,20 @@ jobs:
               exit 1
             fi
             grep -F '"src_port":30082' phase0-flow.jsonl | grep -F '"dst_ip":"'"$node_ip"'"'
-            if test "$self_request_status" -eq 0; then
-              grep -F '"src_port":30083' phase0-flow.jsonl | grep -F '"dst_ip":"'"$client_ip"'"' | grep -F '"dst_port":18081' | grep -F '"action":"allowed"'
-              grep -F '"direction":"ingress"' phase0-flow.jsonl | grep -F '"src_ip":"'"$client_ip"'"' | grep -F '"src_port":18081' | grep -F '"dst_port":30083' | grep -F '"action":"allowed"'
-              printf '%s\n' 'phase0_self_behavior=allowed' | tee -a phase0-kubernetes.txt
+            self_behavior='no_matching_flow_event'
+            if test "$self_request_status" -eq 0 \
+              && grep -F '"direction":"egress"' phase0-flow.jsonl | grep -F '"src_port":30083' | grep -F '"dst_ip":"'"$client_ip"'"' | grep -F '"dst_port":18081' | grep -F '"action":"allowed"' \
+              && grep -F '"direction":"ingress"' phase0-flow.jsonl | grep -F '"src_port":30083' | grep -F '"dst_ip":"'"$client_ip"'"' | grep -F '"dst_port":18081' | grep -F '"action":"allowed"' \
+              && grep -F '"direction":"egress"' phase0-flow.jsonl | grep -F '"src_ip":"'"$client_ip"'"' | grep -F '"src_port":18081' | grep -F '"dst_port":30083' | grep -F '"action":"allowed"' \
+              && grep -F '"direction":"ingress"' phase0-flow.jsonl | grep -F '"src_ip":"'"$client_ip"'"' | grep -F '"src_port":18081' | grep -F '"dst_port":30083' | grep -F '"action":"allowed"'; then
+              self_behavior='allowed'
             elif grep -F '"src_port":30083' phase0-flow.jsonl | grep -F '"dst_ip":"'"$client_ip"'"' | grep -F '"dst_port":18081' | grep -F '"action":"blocked"'; then
-              printf '%s\n' 'phase0_self_behavior=blocked_by_ztap' | tee -a phase0-kubernetes.txt
+              self_behavior='blocked_by_ztap'
             elif grep -F '"src_port":30083' phase0-flow.jsonl | grep -F '"dst_ip":"'"$client_ip"'"' | grep -F '"dst_port":18081' | grep -F '"action":"allowed"' \
               && grep -F '"src_port":18081' phase0-flow.jsonl | grep -F '"dst_port":30083' | grep -F '"action":"blocked"'; then
-              printf '%s\n' 'phase0_self_behavior=reply_blocked_by_ztap' | tee -a phase0-kubernetes.txt
-            else
-              printf '%s\n' 'phase0_self_behavior=no_matching_flow_event' | tee -a phase0-kubernetes.txt
+              self_behavior='reply_blocked_by_ztap'
             fi
+            printf 'phase0_self_behavior=%s\n' "$self_behavior" | tee -a phase0-kubernetes.txt
             grep -F '"dst_ip":"::1"' phase0-flow.jsonl | grep -F '"dst_port":18081' | grep -F '"action":"blocked"'
             grep -F '"direction":"ingress"' phase0-flow.jsonl
             grep -F '"src_port":8080' phase0-flow.jsonl | grep -F '"dst_port":30080'
@@ -335,6 +337,7 @@ jobs:
             grep -F '"dst_port":30083' phase0-flow.jsonl
             grep -F "$service_ip.18080" phase0-nat.txt
             grep -F "$server_ip.8080" phase0-nat.txt
+            test "$self_behavior" = allowed
           } 2>&1 | tee -a phase0-kubernetes.txt
           test_status=${PIPESTATUS[0]}
           printf 'traffic_test_status=%s\n' "$test_status" | tee -a phase0-kubernetes.txt

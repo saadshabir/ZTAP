@@ -102,6 +102,7 @@ spec:
               /usr/local/bin/ztap enforce \
                 --file /etc/ztap-phase0/policy.yaml \
                 --cgroup "$client_cgroup" \
+                --self-ip "__CLIENT_IP__" \
                 >/run/ztap-phase0/enforce.log 2>&1 &
               enforce_pid=$!
 

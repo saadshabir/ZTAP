@@ -200,6 +200,35 @@ struct
     __type(value, __u8);
 } enforced_cgroups SEC(".maps");
 
+// quarantined_cgroups stores a direction bitmask for subjects whose selected
+// policy cannot be represented safely. A quarantined direction fails closed,
+// while unrelated cgroups and directions continue to use accepted policy.
+struct
+{
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 16384);
+    __type(key, __u64);
+    __type(value, __u8);
+} quarantined_cgroups SEC(".maps");
+
+struct self_bypass_key_v4
+{
+    __u64 cgroup_id;
+    __u8 ip[4];
+    __u8 _padding[4];
+};
+
+// self_bypass_v4 contains only Pod IPs explicitly associated with a subject
+// cgroup by user space. Requiring the packet addresses to match one another
+// and this map avoids turning arbitrary same-address traffic into a bypass.
+struct
+{
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 16384);
+    __type(key, struct self_bypass_key_v4);
+    __type(value, __u8);
+} self_bypass_v4 SEC(".maps");
+
 // enforcement_config_map is a single-element array map storing enforcement_config.
 struct
 {
@@ -391,12 +420,31 @@ static __always_inline int parse_ipv6(struct __sk_buff *skb, __u32 *src_ip, __u3
 // Direction constants
 #define DIRECTION_EGRESS 0
 #define DIRECTION_INGRESS 1
+#define DIRECTION_MASK(direction) ((__u8)(1U << (direction)))
 
 #define LPM_FIXED_BITS 96
 #define LPM_LOOKUP_PREFIXLEN_V4 (LPM_FIXED_BITS + 32)
 #define LPM_LOOKUP_PREFIXLEN_V6 (LPM_FIXED_BITS + 128)
 
 #define PACK_META(direction, protocol, port) (((__u32)(direction) << 24) | ((__u32)(protocol) << 16) | (__u32)(port))
+
+static __always_inline int is_quarantined(__u64 cgid, __u8 direction)
+{
+    __u8 *mask = bpf_map_lookup_elem(&quarantined_cgroups, &cgid);
+    return mask && (*mask & DIRECTION_MASK(direction));
+}
+
+static __always_inline int is_self_ipv4(__u64 cgid, __u32 src_ip, __u32 dest_ip)
+{
+    if (src_ip != dest_ip)
+        return 0;
+
+    struct self_bypass_key_v4 key = {
+        .cgroup_id = cgid,
+    };
+    __builtin_memcpy(key.ip, &src_ip, sizeof(key.ip));
+    return bpf_map_lookup_elem(&self_bypass_v4, &key) != 0;
+}
 
 // Main eBPF program for egress filtering
 SEC("cgroup_skb/egress")
@@ -436,6 +484,17 @@ int filter_egress(struct __sk_buff *skb)
                 emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_EGRESS, 1, 4);
                 return 1;
             }
+        }
+
+        if (is_self_ipv4(cgid, src_ip[0], dest_ip[0]))
+        {
+            emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_EGRESS, 1, 4);
+            return 1;
+        }
+        if (is_quarantined(cgid, DIRECTION_EGRESS))
+        {
+            emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_EGRESS, 0, 4);
+            return 0;
         }
 
         // Lookup policy in map (egress uses destination IP/port)
@@ -486,6 +545,12 @@ int filter_egress(struct __sk_buff *skb)
                 emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_EGRESS, 1, 6);
                 return 1;
             }
+        }
+
+        if (is_quarantined(cgid, DIRECTION_EGRESS))
+        {
+            emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_EGRESS, 0, 6);
+            return 0;
         }
 
         __u8 lookup_proto = protocol;
@@ -571,6 +636,17 @@ int filter_ingress(struct __sk_buff *skb)
             }
         }
 
+        if (is_self_ipv4(cgid, src_ip[0], dest_ip[0]))
+        {
+            emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_INGRESS, 1, 4);
+            return 1;
+        }
+        if (is_quarantined(cgid, DIRECTION_INGRESS))
+        {
+            emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_INGRESS, 0, 4);
+            return 0;
+        }
+
         // Lookup policy in map (ingress uses source IP and destination port)
         __u8 lookup_proto = protocol;
         __u32 meta = PACK_META(DIRECTION_INGRESS, lookup_proto, dest_port);
@@ -619,6 +695,12 @@ int filter_ingress(struct __sk_buff *skb)
                 emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_INGRESS, 1, 6);
                 return 1;
             }
+        }
+
+        if (is_quarantined(cgid, DIRECTION_INGRESS))
+        {
+            emit_flow_event(src_ip, dest_ip, src_port, dest_port, protocol, DIRECTION_INGRESS, 0, 6);
+            return 0;
         }
 
         __u8 lookup_proto = protocol;

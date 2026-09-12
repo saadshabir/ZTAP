@@ -28,6 +28,9 @@ type EnforcementOptions struct {
 	Policies   []policy.NetworkPolicy
 	DryRun     bool
 	CgroupPath string // Used for Linux eBPF
+	// SelfIPs are IPv4 workload addresses explicitly associated with CgroupPath.
+	// They are allowed only when both packet endpoints equal the mapped address.
+	SelfIPs []string
 	// BPFObjectPath optionally overrides the embedded eBPF object on Linux.
 	BPFObjectPath string
 	// DebugEBPF enables extra debug logging for eBPF loading/attachment.
@@ -47,6 +50,9 @@ type ScopedPolicy struct {
 	Tenant           string
 	Policy           policy.NetworkPolicy
 	SubjectCgroupIDs []uint64
+	// QuarantinedDirections is a Direction*Mask bitset. Quarantine takes
+	// precedence over ordinary rules but not the explicit self bypass.
+	QuarantinedDirections uint8
 }
 
 // ScopedEnforcementOptions is the tenant-aware enforcement request.

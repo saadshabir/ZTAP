@@ -10,6 +10,12 @@
   artifacts were reviewed, but self-to-own-PodIP reply traffic is blocked by
   ZTAP, which contradicts the stated `v0.1.0` self-traffic contract.
 
+A follow-up review retains that contract and adds an explicit `(cgroup, PodIP)`
+self-bypass plus hard hosted assertions. It also adds executable quarantine,
+failed-candidate, and multi-subject ingress-identity checks. Those changes are
+not accepted as Phase 0 evidence until a new hosted run passes and its raw
+artifacts are reviewed.
+
 This report distinguishes the clean commit baseline, the already-dirty working
 tree at capture, the local Phase 0 safety work completed afterward, and the
 hosted characterization results. Local results alone do not prove that the
@@ -68,8 +74,8 @@ characterized but non-conforming rather than untested.
   outputs at the final head:
 
 ```text
-internal/enforcer/bpf_bpfel.go  05e332d52427943a3567454ada6ca3b2cc019a5f656bda99d8ced40e22253cfb
-internal/enforcer/bpf_bpfeb.go  fdbcbc42619e9c49f554b32a4e931b004e75b0e51eb8a8fd770854319c25c670
+internal/enforcer/bpf_bpfel.go  f24a2a5e8db62d607af2e6bf137b0bb3c25e683458a1be92ff8bbe8bb2bae846
+internal/enforcer/bpf_bpfeb.go  40023e6a99d897d0fe67cb83d028caedd2898199775f54fb8b3b428e6fe6998a
 ```
 
 - Made `TestDispatcherEmitDropsWhenFull` deterministic by filling the queue
@@ -205,14 +211,19 @@ Linux integration test suite; they were not run on this macOS host:
 - [x] Verify flow-map pinning, decoding, and stable lifetime.
 - [x] Verify shutdown link and pin cleanup.
 - [ ] Verify partial-update atomicity and per-subject quarantine behavior.
+- [ ] Verify distinct ingress identity when two subject cgroups share one
+  program/map collection and have separate link pairs.
+- [ ] Verify mapped Pod self traffic is allowed at all four egress/ingress
+  request/reply hook events.
 - [x] Prove cgroup identity under containerd with the systemd cgroup driver.
 - [x] Measure Pod-start classification, restart, and rolling-update gaps.
 
 The latest hosted Kubernetes probe verifies the reference fixture's
 non-privileged capability set, host cgroup2/bpffs mounts, systemd cgroup
 driver, kindnet CNI configuration, Service DNAT, traffic classes, and
-workload/agent/rollout timing. It leaves partial-update atomicity and
-per-subject quarantine outside this run.
+workload/agent/rollout timing. The follow-up hosted run must add
+partial-update, per-subject quarantine, multi-attachment ingress identity, and
+conforming mapped-self evidence.
 
 The existing manifest still uses `hostNetwork`, `privileged: true`,
 `allowPrivilegeEscalation: true`, `ztap:latest`, and an exec-based `status`
@@ -233,16 +244,18 @@ probe. It is characterization input, not the target deployment contract.
 
 ## Gate decision and next evidence
 
-Phase 0 safety work and the complete hosted Linux/Kubernetes characterization
-runner pass as an evidence-collection gate. The final Phase 0 evidence
-criterion is closed: the report now records packet offsets, NAT/CNI and
-traffic-class behavior, cgroup identity, Pod-start classification, restart and
-rollout timing, capability/runtime evidence, the reproducible fixture, and the
-raw artifacts. The architecture gate remains **open** because the self-reply
-result contradicts the required `v0.1.0` self-traffic bypass. Partial-update
-atomicity and quarantine are also still outside this run.
+Phase 0 safety work and hosted run `34653218849` remain valid evidence for the
+packet-offset, NAT/CNI, traffic-class, runtime, capability, and lifecycle
+claims recorded above. The follow-up code review found two blockers that the
+old run cannot close: its self result violates the retained contract, and its
+single direct cgroup attachment does not prove the root-only attachment model
+previously described in the plan. Kernel cgroup storage is bound to the
+attachment cgroup, so the plan now requires per-subject link pairs.
 
-Do not begin broad product deletion or claim Phase 1 readiness until the
-self-reply non-conformance is resolved in the plan and implementation, and the
-remaining atomicity/quarantine evidence is either added or explicitly
-removed from the gate.
+The revised runner makes mapped self traffic a hard failure and the Linux
+suite now exercises per-direction quarantine, a partially populated failed
+candidate that must leave active rules unchanged, and two subject cgroups
+sharing a program/map collection with distinct ingress identity. The
+architecture gate remains **open** until those tests pass on the hosted Linux
+runner and the new raw artifacts are reviewed. Do not begin broad product
+deletion or resume Phase 1 before that result is recorded here.
