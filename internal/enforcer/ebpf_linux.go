@@ -50,6 +50,9 @@ type eBPFEnforcer struct {
 	// graceful program reload so the replacement program sees the same storage
 	// instance as the link it replaces.
 	cgroupStorageReplacement *ebpf.Map
+	// cgroupPath is the attachment scope. Reloads may replace programs at this
+	// link, but they must not silently retarget the retained links.
+	cgroupPath string
 }
 
 const DefaultFlowEventsPinPath = "/sys/fs/bpf/ztap/flow_events"
@@ -58,6 +61,10 @@ const DefaultFlowEventsPinPath = "/sys/fs/bpf/ztap/flow_events"
 const (
 	DirectionEgress  uint8 = 0
 	DirectionIngress uint8 = 1
+
+	DirectionEgressMask  uint8 = 1 << DirectionEgress
+	DirectionIngressMask uint8 = 1 << DirectionIngress
+	validDirectionMask         = DirectionEgressMask | DirectionIngressMask
 )
 
 type policyMapMode uint8
@@ -140,6 +147,13 @@ type policyValue struct {
 	_      [3]uint8 // padding
 }
 
+// selfBypassKeyV4 matches struct self_bypass_key_v4 in bpf/filter.c.
+type selfBypassKeyV4 struct {
+	CgroupID uint64
+	IP       [4]byte
+	_        [4]byte
+}
+
 // NewEBPFEnforcer creates a new eBPF enforcer
 func NewEBPFEnforcer() (*eBPFEnforcer, error) {
 	// Remove resource limits for loading eBPF programs
@@ -174,14 +188,22 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 	sawZero := false
 	sawNonZero := false
 	cgroupSet := make(map[uint64]struct{})
+	quarantineSet := make(map[uint64]uint8)
 	for _, sp := range policies {
+		if sp.QuarantinedDirections&^validDirectionMask != 0 {
+			return fmt.Errorf("invalid quarantine direction mask %#x", sp.QuarantinedDirections)
+		}
 		for _, id := range sp.SubjectCgroupIDs {
 			if id == 0 {
+				if sp.QuarantinedDirections != 0 {
+					return errors.New("quarantine requires a non-zero subject cgroup ID")
+				}
 				sawZero = true
 				continue
 			}
 			sawNonZero = true
 			cgroupSet[id] = struct{}{}
+			quarantineSet[id] |= sp.QuarantinedDirections
 		}
 	}
 	if sawZero && sawNonZero {
@@ -270,6 +292,9 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 		if err := e.populateEnforcedCgroups(cgroupSet); err != nil {
 			return err
 		}
+		if err := e.populateQuarantinedCgroups(quarantineSet); err != nil {
+			return err
+		}
 	} else {
 		// Legacy behavior: selected_only = 0 if config map exists.
 		_ = e.setSelectedOnlyMode(false)
@@ -279,11 +304,8 @@ func (e *eBPFEnforcer) LoadPoliciesScoped(policies []ScopedPolicy) error {
 	for _, sp := range policies {
 		p := sp.Policy
 		if err := e.addPolicyToMapScoped(p, sp.SubjectCgroupIDs); err != nil {
-			safeName := strings.ReplaceAll(p.Metadata.Name, "\n", "")
-			safeName = strings.ReplaceAll(safeName, "\r", "")
-			safeErr := strings.ReplaceAll(err.Error(), "\n", "")
-			safeErr = strings.ReplaceAll(safeErr, "\r", "")
-			logging.Warnf("Failed to add policy '%s': %s", safeName, safeErr)
+			safeName := sanitizeForLogPlain(p.Metadata.Name)
+			return fmt.Errorf("program policy %q: %w", safeName, err)
 		}
 	}
 
@@ -339,6 +361,53 @@ func (e *eBPFEnforcer) populateEnforcedCgroups(cgroupSet map[uint64]struct{}) er
 		}
 	}
 	return nil
+}
+
+func (e *eBPFEnforcer) populateQuarantinedCgroups(quarantineSet map[uint64]uint8) error {
+	if e.objs == nil || e.objs.QuarantinedCgroups == nil {
+		if len(quarantineSet) == 0 {
+			return nil
+		}
+		return errors.New("quarantined_cgroups map not available")
+	}
+	for id, mask := range quarantineSet {
+		if mask == 0 {
+			continue
+		}
+		key := id
+		value := mask
+		if err := e.objs.QuarantinedCgroups.Put(&key, &value); err != nil {
+			return fmt.Errorf("updating quarantined_cgroups map: %w", err)
+		}
+	}
+	return nil
+}
+
+func (e *eBPFEnforcer) populateSelfBypasses(selfBypassSet map[selfBypassKeyV4]struct{}) error {
+	if e.objs == nil || e.objs.SelfBypassV4 == nil {
+		if len(selfBypassSet) == 0 {
+			return nil
+		}
+		return errors.New("self_bypass_v4 map not available")
+	}
+	value := uint8(1)
+	for key := range selfBypassSet {
+		key := key
+		if err := e.objs.SelfBypassV4.Put(&key, &value); err != nil {
+			return fmt.Errorf("updating self_bypass_v4 map: %w", err)
+		}
+	}
+	return nil
+}
+
+func makeSelfBypassKeyV4(cgroupID uint64, rawIP string) (selfBypassKeyV4, error) {
+	ip := net.ParseIP(strings.TrimSpace(rawIP)).To4()
+	if ip == nil {
+		return selfBypassKeyV4{}, fmt.Errorf("self IP %q is not a valid IPv4 address", sanitizeForLogPlain(rawIP))
+	}
+	key := selfBypassKeyV4{CgroupID: cgroupID}
+	copy(key.IP[:], ip)
+	return key, nil
 }
 
 func normalizeCgroupIDs(ids []uint64) []uint64 {
@@ -673,6 +742,10 @@ func (e *eBPFEnforcer) Attach(cgroupPath string) error {
 			Program: e.objs.FilterIngress,
 		})
 		if err != nil {
+			if e.egressLink != nil {
+				_ = e.egressLink.Close()
+				e.egressLink = nil
+			}
 			return fmt.Errorf("failed to attach ingress filter to cgroup: %w", err)
 		}
 		e.ingressLink = l
@@ -694,6 +767,7 @@ func (e *eBPFEnforcer) Attach(cgroupPath string) error {
 		}
 		return err
 	}
+	e.cgroupPath = filepath.Clean(cgroupPath)
 
 	return nil
 }
@@ -732,25 +806,36 @@ func (e *eBPFEnforcer) UpdateFrom(old *eBPFEnforcer) error {
 		return nil
 	}
 
-	// Update Egress Link
+	updatedEgress := false
+
+	// Keep link ownership with old until both direction updates succeed. If the
+	// second update fails, restore the first direction before returning.
 	if old.egressLink != nil && e.objs.FilterEgress != nil {
 		if err := old.egressLink.Update(e.objs.FilterEgress); err != nil {
 			return fmt.Errorf("failed to update egress link: %w", err)
 		}
-		e.egressLink = old.egressLink
-		old.egressLink = nil // Steal ownership
-		logging.Info("eBPF egress link updated atomically", nil)
+		updatedEgress = true
 	}
 
 	// Update Ingress Link
 	if old.ingressLink != nil && e.objs.FilterIngress != nil {
 		if err := old.ingressLink.Update(e.objs.FilterIngress); err != nil {
+			if updatedEgress && old.objs != nil && old.objs.FilterEgress != nil {
+				if rollbackErr := old.egressLink.Update(old.objs.FilterEgress); rollbackErr != nil {
+					return errors.Join(fmt.Errorf("failed to update ingress link: %w", err), fmt.Errorf("failed to roll back egress link: %w", rollbackErr))
+				}
+			}
 			return fmt.Errorf("failed to update ingress link: %w", err)
 		}
-		e.ingressLink = old.ingressLink
-		old.ingressLink = nil // Steal ownership
-		logging.Info("eBPF ingress link updated atomically", nil)
 	}
+
+	e.egressLink = old.egressLink
+	e.ingressLink = old.ingressLink
+	e.cgroupPath = old.cgroupPath
+	old.egressLink = nil
+	old.ingressLink = nil
+	old.cgroupPath = ""
+	logging.Info("eBPF links updated with rollback protection", nil)
 
 	return nil
 }
@@ -778,18 +863,9 @@ func (e *eBPFEnforcer) Close() error {
 		}
 		e.objs = nil
 	}
-	if e.enforcedCgroups != nil {
-		if err := e.enforcedCgroups.Close(); err != nil {
-			logging.Warnf("Failed to close enforced_cgroups map: %v", err)
-		}
-		e.enforcedCgroups = nil
-	}
-	if e.enforcementConfigMap != nil {
-		if err := e.enforcementConfigMap.Close(); err != nil {
-			logging.Warnf("Failed to close enforcement_config_map: %v", err)
-		}
-		e.enforcementConfigMap = nil
-	}
+	// These are aliases of fields already closed by bpfObjects.Close.
+	e.enforcedCgroups = nil
+	e.enforcementConfigMap = nil
 
 	if e.flowEventsPinPath != "" {
 		if err := os.Remove(e.flowEventsPinPath); err != nil && !os.IsNotExist(err) {
@@ -873,6 +949,9 @@ func protocolToNum(protocol string) uint8 {
 func EnforceWithEBPFReal(opts EnforcementOptions) error {
 	activeEBPFMu.Lock()
 	defer activeEBPFMu.Unlock()
+	if activeEBPFEnforcer != nil && activeEBPFEnforcer.cgroupPath != filepath.Clean(opts.CgroupPath) {
+		return fmt.Errorf("cannot change active eBPF cgroup attachment from %q to %q during reload", activeEBPFEnforcer.cgroupPath, filepath.Clean(opts.CgroupPath))
+	}
 
 	newEnforcer, err := NewEBPFEnforcer()
 	if err != nil {
@@ -888,6 +967,26 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 		_ = newEnforcer.Close()
 		return fmt.Errorf("failed to load policies: %w", err)
 	}
+	if len(opts.SelfIPs) != 0 {
+		cgid, err := cgroupInodeID(opts.CgroupPath)
+		if err != nil {
+			_ = newEnforcer.Close()
+			return fmt.Errorf("resolve self-bypass cgroup: %w", err)
+		}
+		selfBypassSet := make(map[selfBypassKeyV4]struct{}, len(opts.SelfIPs))
+		for _, rawIP := range opts.SelfIPs {
+			key, err := makeSelfBypassKeyV4(cgid, rawIP)
+			if err != nil {
+				_ = newEnforcer.Close()
+				return err
+			}
+			selfBypassSet[key] = struct{}{}
+		}
+		if err := newEnforcer.populateSelfBypasses(selfBypassSet); err != nil {
+			_ = newEnforcer.Close()
+			return err
+		}
+	}
 
 	if opts.DryRun {
 		logging.Infof("[DRY-RUN] eBPF: Validated %d policies, skipping attachment and pinning", len(opts.Policies))
@@ -898,20 +997,9 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 	if activeEBPFEnforcer != nil {
 		// Graceful reload: update existing links
 		if err := newEnforcer.UpdateFrom(activeEBPFEnforcer); err != nil {
-			logging.Warnf("Atomic update failed, falling back to full re-attach: %v", err)
-			// Fallback: stop old and start new (non-graceful)
-			_ = activeEBPFEnforcer.Close()
-			if err := newEnforcer.Attach(opts.CgroupPath); err != nil {
-				_ = newEnforcer.Close()
-				activeEBPFEnforcer = nil
-				return fmt.Errorf("failed to attach eBPF program: %w", err)
-			}
+			_ = newEnforcer.Close()
+			return fmt.Errorf("failed to replace active eBPF programs; previous enforcement retained: %w", err)
 		} else {
-			if err := newEnforcer.setAttachedCgroupID(opts.CgroupPath); err != nil {
-				_ = newEnforcer.Close()
-				activeEBPFEnforcer = nil
-				return fmt.Errorf("failed to record attached cgroup: %w", err)
-			}
 			// Clean up old maps and programs from the previous enforcer instance.
 			// Ownership of links was already transferred in UpdateFrom.
 			_ = activeEBPFEnforcer.Close()
@@ -939,6 +1027,9 @@ func EnforceWithEBPFReal(opts EnforcementOptions) error {
 func EnforceWithEBPFRealScoped(opts ScopedEnforcementOptions) error {
 	activeEBPFMu.Lock()
 	defer activeEBPFMu.Unlock()
+	if activeEBPFEnforcer != nil && activeEBPFEnforcer.cgroupPath != filepath.Clean(opts.CgroupPath) {
+		return fmt.Errorf("cannot change active eBPF cgroup attachment from %q to %q during reload", activeEBPFEnforcer.cgroupPath, filepath.Clean(opts.CgroupPath))
+	}
 
 	newEnforcer, err := NewEBPFEnforcer()
 	if err != nil {
@@ -963,19 +1054,9 @@ func EnforceWithEBPFRealScoped(opts ScopedEnforcementOptions) error {
 
 	if activeEBPFEnforcer != nil {
 		if err := newEnforcer.UpdateFrom(activeEBPFEnforcer); err != nil {
-			logging.Warnf("Atomic update failed, falling back to full re-attach: %v", err)
-			_ = activeEBPFEnforcer.Close()
-			if err := newEnforcer.Attach(opts.CgroupPath); err != nil {
-				_ = newEnforcer.Close()
-				activeEBPFEnforcer = nil
-				return fmt.Errorf("failed to attach eBPF program: %w", err)
-			}
+			_ = newEnforcer.Close()
+			return fmt.Errorf("failed to replace active eBPF programs; previous enforcement retained: %w", err)
 		} else {
-			if err := newEnforcer.setAttachedCgroupID(opts.CgroupPath); err != nil {
-				_ = newEnforcer.Close()
-				activeEBPFEnforcer = nil
-				return fmt.Errorf("failed to record attached cgroup: %w", err)
-			}
 			_ = activeEBPFEnforcer.Close()
 		}
 	} else {

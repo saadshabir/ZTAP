@@ -29,6 +29,7 @@ func newEnforceCmd(app *App) *cobra.Command {
 			cgroupPath, _ := cmd.Flags().GetString("cgroup")
 			bpfObject, _ := cmd.Flags().GetString("bpf-object")
 			debugEBPF, _ := cmd.Flags().GetBool("debug-ebpf")
+			selfIPs, _ := cmd.Flags().GetStringSlice("self-ip")
 
 			// Flags take precedence over config (flag > env > config > default).
 			dryRun := central.Enforcement.DryRun
@@ -152,6 +153,7 @@ func newEnforceCmd(app *App) *cobra.Command {
 					Policies:      policies,
 					DryRun:        dryRun,
 					CgroupPath:    cgroupPath,
+					SelfIPs:       selfIPs,
 					BPFObjectPath: bpfObject,
 					DebugEBPF:     debugEBPF,
 					DefaultAction: defaultAction,
@@ -271,6 +273,7 @@ func newEnforceCmd(app *App) *cobra.Command {
 	}
 	c.Flags().StringP("file", "f", "policy.yaml", "Path to policy YAML file")
 	c.Flags().String("cgroup", "", "Cgroup v2 path for eBPF attachment (Linux only)")
+	c.Flags().StringSlice("self-ip", nil, "IPv4 workload address allowed as explicit self traffic (Linux only)")
 	c.Flags().String("bpf-object", "", "Optional path to compiled eBPF object file (overrides embedded bytecode; Linux only)")
 	c.Flags().Bool("debug-ebpf", false, "Enable debug logging for eBPF object loading (Linux only)")
 	c.Flags().Bool("resolve-labels", false, "Resolve pod selectors to IP blocks using configured discovery backend (auto-enabled when policies use podSelector targets)")

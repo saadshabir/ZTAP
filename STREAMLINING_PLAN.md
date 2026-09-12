@@ -1,8 +1,8 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Draft — blocked on Phase 0 feasibility and the correctness gates in this plan
+- **Status:** Draft — Phase 0 complete; Phase 1 may resume
 - **Prepared:** 2026-09-10
-- **Last reviewed:** 2026-09-10
+- **Last reviewed:** 2026-09-11
 - **Change type:** Intentional clean break
 - **Target:** Linux/Kubernetes eBPF network-policy enforcer
 
@@ -454,8 +454,10 @@ type Engine interface {
 
 Required behavior:
 
-- The engine loads one program collection, attaches ingress and egress once, and keeps those links for the process lifetime. Ordinary policy changes must not reload programs or update links.
-- Attach the programs to the mounted cgroup v2 root so descendants are covered. Use link-based multi-attach when the supported kernel provides it; never replace or detach an unknown pre-existing cgroup program. An incompatible existing attachment is a fatal startup error.
+- The engine loads one program collection and keeps its programs and maps for the process lifetime. Ordinary policy changes must not reload programs or update existing links.
+- Maintain one owned ingress/egress link pair for every resolved subject container cgroup. Do not attach the policy programs only at the mounted cgroup v2 root: [`BPF_MAP_TYPE_CGROUP_STORAGE` is bound to the attachment cgroup](https://docs.kernel.org/bpf/map_cgroup_storage.html) even when a parent program triggers for a descendant, so a root-only attachment cannot provide the receiving subject identity required for ingress. Phase 0 must exercise two subject attachments sharing one program/map collection before this design is accepted.
+- Add newly selected subject links after the inactive candidate is complete but before the slot/epoch flip. Before the flip, the old slot has no classification for a new subject and therefore allows it; after the flip, the subject is enforced. If any new attachment or cgroup-storage initialization fails, close only the links created for that candidate and leave the old slot and link set active. Detach removed subjects only after a successful flip.
+- Use link-based multi-attach when the supported kernel provides it; never replace or detach an unknown pre-existing cgroup program. An incompatible existing attachment on a selected subject is a fatal apply error.
 - After the agent lock is acquired, startup removes the exact known ZTAP pin names left by any prior agent instance beneath `<bpffs-root>/ztap`; it never recursively traverses or deletes unrelated bpffs entries. Policy state is rebuilt from Kubernetes, not inherited from stale pins.
 - The flow-event and small agent-status maps are pinned at stable paths for `ztap flows` and remain the same maps for the process lifetime. The status record contains schema version, agent epoch, lifecycle state, and a monotonic heartbeat updated once per second.
 - Replace the enforced-cgroup set with a subject-state map whose value contains separate ingress/egress `isolated` and `quarantined` masks. For each packet:
@@ -828,7 +830,9 @@ Before each phase, confirm the prior phase's exit criteria on the branch. A phas
 
 ### Phase 0: Baseline and safety net
 
-Progress: the local baseline, artifact cleanup, Makefile, deterministic dispatcher test, and temporary workflow definition were reviewed on 2026-09-10 and committed in `7703a99` on 2026-09-11. Focused Linux characterization, the capability-only Kubernetes probe, the PR trigger, pinned toolchains, parser/address fixes, attached-cgroup identity, reload map reuse, and pinned generated bindings are now pushed through `d25c70e` on `codex/streamline-ztap`. `Migration CI` push run `34634540864` and PR run `34634544640` are green; `main` strictly requires `Required CI`; and the transitional release workflow is removed. The authoritative hosted Phase 0 run `34634544635` passed its Linux and Kubernetes jobs, including cgroup-v2/bpffs preflight, real ingress/egress policy traffic, graceful reload, flow-map cleanup, the pinned binding check, Kubernetes `v1.36.4`, containerd `2.3.4`, systemd cgroups, kernel `6.17.0-1022-azure`, and the exact four requested capabilities. Earlier runs exposed and fixed duplicate map assignment, cgroup-skb network-layer offsets, packet-address normalization, ingress cgroup identity, and reload map replacement. The current macOS host still cannot validate Linux kernel, NAT, cgroup, containerd, Kubernetes, or capability assumptions locally. The scoped safety gate passes, but the architecture gate remains open for the unexercised NAT, traffic-class, CNI, lifecycle, flow-lifetime, atomicity, and quarantine contract items; do not begin broad product deletion or claim Phase 1 readiness.
+Progress: **complete**. The local baseline, artifact cleanup, Makefile, deterministic dispatcher test, and temporary workflow definition were committed in `7703a99`. Focused Linux characterization, the capability-only Kubernetes probe, pinned toolchains, parser/address fixes, attached-cgroup identity, reload map reuse, and pinned generated bindings followed through `d25c70e`. `main` strictly requires `Required CI`, and the transitional release workflow is removed. Hosted run `34653218849` completed the original evidence collection and exposed the self-reply contract failure during raw artifact review.
+
+The follow-up review retained the `v0.1.0` self-traffic contract and added an explicit `(cgroup, PodIP)` bypass, a hard hosted self assertion, per-direction quarantine, failed-candidate preservation, partial link-update rollback, and multi-subject ingress-identity coverage in `bc636f5`. Test injection was corrected in `3b198a4`, and the hosted DaemonSet observer-selection race was fixed in `091310f`. Final hosted run `34665388860` from `091310f` passed all three jobs, and its raw artifacts were reviewed. Final Migration CI push run `34665381636` is also green. The attachment target is now one link pair per subject cgroup, sharing programs/maps, because cgroup local storage identifies the attachment cgroup. The Phase 0 architecture gate is closed; Phase 1 may resume.
 
 Work:
 
@@ -838,28 +842,35 @@ Work:
 - [x] Add the temporary non-publishing `Migration CI` definition with a stable `Required CI` result.
 - [x] Push `Migration CI`, prove its branch and default-branch pull-request events green, make `Required CI` required, and remove obsolete required-check names.
 - [x] Delete the release workflow after the required-check handoff and before pushing transitional product deletions.
-- [ ] Remove specialized jobs tied only to features that this plan deletes.
+- [x] Remove specialized jobs tied only to features that this plan deletes, including the Python, proto/buf, multi-OS, anomaly/operator image, custom coverage, compose, and feature-only fuzz paths.
 - [x] Delete the tracked root `bpfgen` executable and ignored root build/test/coverage artifacts, add `/bpfgen` to `.gitignore`, and keep generated Go bindings.
 - [x] Add the small Makefile with safe `clean`, current `check`, and pinned-tool targets.
 - [x] Run the existing build, race, vet, formatting, and pinned-lint gates in a writable repository-local cache environment.
 - [x] Identify retained Linux eBPF integration tests and copy their existing and missing assertions into `docs/phase0-feasibility.md`.
-- [ ] Complete the full disposable Linux/Kubernetes feasibility spike before irreversible feature deletion. The scoped runner now passes packet-policy, cgroup identity, reload, bpffs, capability, and runtime checks; direct PodIP/ClusterIP NAT, reply/node/self/rejected-IPv6, CNI, and exact DaemonSet lifecycle/security-context cases remain.
-- [ ] Measure the interval from a selected container becoming runnable to its cgroup being observed, resolved, and classified. Record this separately from agent restart and rolling-update recovery.
-- [ ] Define the smaller reproducible `v0.1.0` reference fixture from Section 14.5. Do not block policy/compiler work on the later 1,000-Pod/10,000-rule scale fixture.
+- [x] Complete the full disposable Linux/Kubernetes feasibility spike before irreversible feature deletion. Hosted run `34653218849` exposed the self-reply contract failure; final run `34665388860` verifies the fix while retaining direct PodIP/ClusterIP NAT, reply/node/self/rejected-IPv6, CNI, and DaemonSet lifecycle/security-context evidence.
+- [x] Measure the interval from a selected container becoming runnable to its cgroup being observed, resolved, and classified. Final hosted run `34665388860` records this separately from workload restart, agent restart, and rolling-update recovery.
+- [x] Add the executable Phase 0 evidence harness for consecutive flow decoding,
+  selected-cgroup IPv6 rejection, PodIP/ClusterIP, reply, node, self, CNI, and
+  lifecycle characterization. Hosted run `34665388860` completed and its raw
+  evidence is recorded in `docs/phase0-feasibility.md`.
+- [x] Define the smaller reproducible `v0.1.0` reference fixture from Section 14.5 in `scripts/phase0_reference_fixture.sh` and `testdata/phase0-v0.1.0/README.md`. Do not block policy/compiler work on the later 1,000-Pod/10,000-rule scale fixture.
 - [x] Add focused characterization tests for per-cgroup behavior, ingress/egress allow-deny, map population, flow-map pinning/decoding, and shutdown cleanup.
 - [x] Record and reverify current generated eBPF checksums.
+- [x] Review the completed Phase 0 implementation and retain the stronger self-traffic contract. Add explicit self-bypass, per-subject quarantine, failed-candidate preservation, reload rollback protection, and multi-subject ingress-identity coverage.
+- [x] Run the revised Linux/Kubernetes characterization on the hosted runner and review the raw self, quarantine, failed-update, and multi-attachment evidence. Run `34665388860` passed all three jobs.
 
 Exit criteria:
 
 - [x] Retained kernel behavior covered by the current scope has executable tests before its surrounding packages are removed; the remaining contract cases stay open below.
 - [x] Failures that depend on unavailable host capabilities are explicitly separated from source failures.
 - [x] `Migration CI` is required and green, and no workflow can publish transitional artifacts.
-- [ ] The feasibility report records the complete required packet-offset, NAT, cgroup-identity, Pod-start classification, restart/rollout, capability, and supported kernel/runtime evidence. The current report records the passing subset and explicitly keeps the untested contract open; if any core assumption fails, update this plan and its tests before Phase 1.
-- [ ] Immediate artifact cleanup is committed separately and `make clean` leaves the repository root clean.
+- [x] The feasibility report records the complete required packet-offset, NAT, cgroup-identity, Pod-start classification, restart/rollout, capability, and supported kernel/runtime evidence. It records the original self-reply failure from `34653218849` and the conforming final result from `34665388860`.
+- [x] Immediate artifact cleanup is committed separately in `7703a99`, and `make phase0-fixture` followed by `make clean` leaves no generated repository-root artifacts.
+- [x] Hosted run `34665388860` proves mapped self traffic in all four request/reply hook events, per-direction quarantine without blocking unrelated subjects, failed-candidate last-known-good behavior, partial link-update rollback, and distinct ingress identity for two subject attachments sharing one collection.
 
 ### Phase 1: Native policy model and compiler
 
-Progress: the additive native input-contract slice was implemented and reviewed on 2026-09-10. Phase 1 remains open until Phase 0 is confirmed, the kernel-neutral compiler, resolution inputs, quarantine behavior, and deterministic object-order tests are complete, and every phase exit criterion passes. Do not begin the remaining Phase 1 work before closing the Phase 0 gate.
+Progress: the additive native input-contract slice was implemented and reviewed on 2026-09-10. Phase 0 is confirmed complete, so the remaining Phase 1 work may resume. Phase 1 remains open until the kernel-neutral compiler, resolution inputs, quarantine behavior, deterministic object-order tests, and every phase exit criterion pass.
 
 Work:
 

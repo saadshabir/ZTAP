@@ -1,0 +1,184 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: phase0-traffic-agent
+  namespace: ztap-phase0
+data:
+  config.yaml: |
+    logging:
+      level: info
+      format: json
+    enforcement:
+      default_action: block
+  policy.yaml: |
+    apiVersion: ztap/v1
+    kind: NetworkPolicy
+    metadata:
+      name: phase0-client-traffic
+    spec:
+      podSelector:
+        matchLabels:
+          app: phase0-client
+      egress:
+        - to:
+            ipBlock:
+              cidr: 0.0.0.0/0
+          ports:
+            - protocol: TCP
+              port: 8080
+            - protocol: TCP
+              port: 18080
+            - protocol: TCP
+              port: 18081
+            - protocol: TCP
+              port: 18082
+      ingress:
+        - from:
+            ipBlock:
+              cidr: 0.0.0.0/0
+          ports:
+            - protocol: TCP
+              port: 30080
+            - protocol: TCP
+              port: 30081
+            - protocol: TCP
+              port: 30082
+            - protocol: TCP
+              port: 30083
+            - protocol: TCP
+              port: 18081
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: phase0-traffic-observer
+  namespace: ztap-phase0
+  labels:
+    app: phase0-traffic-observer
+spec:
+  selector:
+    matchLabels:
+      app: phase0-traffic-observer
+  template:
+    metadata:
+      labels:
+        app: phase0-traffic-observer
+    spec:
+      hostNetwork: true
+      terminationGracePeriodSeconds: 5
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: observer
+          image: ztap:phase0
+          imagePullPolicy: Never
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              mkdir -p /run/ztap-phase0
+              enforce_pid=""
+              flow_pid=""
+              cleanup() {
+                if [ -n "$flow_pid" ]; then kill "$flow_pid" 2>/dev/null || true; fi
+                if [ -n "$enforce_pid" ]; then kill "$enforce_pid" 2>/dev/null || true; fi
+              }
+              trap cleanup INT TERM EXIT
+
+              printf 'phase0_agent_started_epoch=%s\n' "$(date +%s)" | tee /run/ztap-phase0/timing.log
+              client_cgroup=""
+              while [ -z "$client_cgroup" ]; do
+                client_cgroup="$(find /sys/fs/cgroup -type d -path "*${CLIENT_CONTAINER_ID}*" -print -quit 2>/dev/null || true)"
+                if [ -z "$client_cgroup" ]; then sleep 1; fi
+              done
+              printf 'phase0_cgroup_observed_epoch=%s path=%s\n' "$(date +%s)" "$client_cgroup" | tee -a /run/ztap-phase0/timing.log
+
+              /usr/local/bin/ztap enforce \
+                --file /etc/ztap-phase0/policy.yaml \
+                --cgroup "$client_cgroup" \
+                --self-ip "__CLIENT_IP__" \
+                >/run/ztap-phase0/enforce.log 2>&1 &
+              enforce_pid=$!
+
+              classified=""
+              while kill -0 "$enforce_pid" 2>/dev/null; do
+                if grep -q 'Successfully enforced' /run/ztap-phase0/enforce.log 2>/dev/null; then
+                  classified=1
+                  printf 'phase0_policy_classified_epoch=%s\n' "$(date +%s)" | tee -a /run/ztap-phase0/timing.log
+                  break
+                fi
+                sleep 1
+              done
+              if [ -z "$classified" ]; then
+                cat /run/ztap-phase0/enforce.log
+                wait "$enforce_pid"
+                exit 1
+              fi
+
+              while [ ! -e /sys/fs/bpf/ztap/flow_events ]; do
+                if ! kill -0 "$enforce_pid" 2>/dev/null; then
+                  cat /run/ztap-phase0/enforce.log
+                  exit 1
+                fi
+                sleep 1
+              done
+              /usr/local/bin/ztap flows --follow --output json \
+                >/run/ztap-phase0/flows.jsonl 2>&1 &
+              flow_pid=$!
+              if ! wait "$enforce_pid"; then
+                cat /run/ztap-phase0/enforce.log
+                exit 1
+              fi
+              wait "$flow_pid"
+          env:
+            - name: CLIENT_CONTAINER_ID
+              value: __CLIENT_CONTAINER_ID__
+            - name: ZTAP_CONFIG
+              value: /etc/ztap-phase0/config.yaml
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - BPF
+                - NET_ADMIN
+                - PERFMON
+                - SYS_RESOURCE
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: policy
+              mountPath: /etc/ztap-phase0
+              readOnly: true
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+              readOnly: true
+            - name: bpffs
+              mountPath: /sys/fs/bpf
+            - name: run-dir
+              mountPath: /run/ztap-phase0
+      volumes:
+        - name: policy
+          configMap:
+            name: phase0-traffic-agent
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
+            type: Directory
+        - name: run-dir
+          emptyDir: {}
