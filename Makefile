@@ -65,6 +65,7 @@ phase0-fixture:
 	sh scripts/phase0_reference_fixture.sh --output "$(CURDIR)/dist/phase0-v0.1.0" --force
 
 clean:
+	@if [ -d ./.cache ]; then chmod -R u+w ./.cache; fi
 	rm -f -- ./ztap ./ztap-operator ./bpfgen ./*.exe ./*.test ./coverage*.out ./coverage.html
 	rm -rf -- ./bin ./dist ./.cache ./.pytest_cache ./.ruff_cache ./internal/anomaly/.pytest_cache ./internal/anomaly/.ruff_cache
 	$(MAKE) -C bpf clean
