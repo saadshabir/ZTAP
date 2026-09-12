@@ -4,17 +4,17 @@
 - **Updated:** 2026-09-11
 - **Branch at capture:** `main`
 - **Baseline commit:** `fc4695d` (`Merge pull request #172 from saadshabir/dependabot/pip/internal/anomaly/python-minor-patch-974410666c`)
-- **Latest hosted run:** [`34653218849`](https://github.com/saadshabir/ZTAP/actions/runs/34653218849),
-  run from `3f4ff4c`
-- **Gate:** **Open** — the complete Phase 0 evidence run passed and its raw
-  artifacts were reviewed, but self-to-own-PodIP reply traffic is blocked by
-  ZTAP, which contradicts the stated `v0.1.0` self-traffic contract.
+- **Latest hosted run:** [`34665388860`](https://github.com/saadshabir/ZTAP/actions/runs/34665388860),
+  run from `091310f`
+- **Gate:** **Closed / pass** — the revised hosted run passed all three jobs,
+  and its raw reference, Linux, and Kubernetes artifacts were reviewed.
 
-A follow-up review retains that contract and adds an explicit `(cgroup, PodIP)`
-self-bypass plus hard hosted assertions. It also adds executable quarantine,
-failed-candidate, and multi-subject ingress-identity checks. Those changes are
-not accepted as Phase 0 evidence until a new hosted run passes and its raw
-artifacts are reviewed.
+A follow-up review retained the stronger self-traffic contract and added an
+explicit `(cgroup, PodIP)` self-bypass plus hard hosted assertions. It also
+added executable quarantine, failed-candidate, link-update rollback, and
+multi-subject ingress-identity checks. Hosted run `34665388860` passed those
+checks, and its raw artifacts confirm the expected behavior. Phase 1 may now
+resume from the already-present additive input-contract work.
 
 This report distinguishes the clean commit baseline, the already-dirty working
 tree at capture, the local Phase 0 safety work completed afterward, and the
@@ -54,9 +54,9 @@ and fixed a flaky dispatcher test. The safety work is committed locally as
 The macOS checkout cannot run those kernel-dependent checks. The hosted runs
 verify cgroup-v2/bpffs availability, the reference containerd/systemd runtime
 layout, the Phase 0 DaemonSet security context, the kindnet CNI profile, and
-the packet/lifecycle behavior listed below. The remaining Phase 0 contract
-item is partial-update atomicity and quarantine; the self-traffic result is
-characterized but non-conforming rather than untested.
+the packet/lifecycle behavior listed below. The final run also verifies
+failed-candidate preservation, partial link-update rollback, per-subject
+quarantine, multi-subject ingress identity, and conforming mapped self traffic.
 
 ## Local safety work completed
 
@@ -94,13 +94,14 @@ internal/enforcer/bpf_bpfeb.go  40023e6a99d897d0fe67cb83d028caedd2898199775f54fb
   lifecycle probe. It records the client cgroup observation and policy-ready
   timestamps, separate workload/agent/rollout timings, the cgroup-visible
   tuple, and node traffic for Service DNAT comparison. Hosted run
-  `34653218849` produced and reviewed the raw evidence. The evidence criterion
-  is now complete, while the architecture gate remains open because the
-  self-reply result is a documented contract failure.
+  `34653218849` exposed the self-reply contract failure. The review fixes are
+  in `bc636f5`, the deterministic rollback-test correction is in `3b198a4`,
+  and the DaemonSet observer-selection race fix is in `091310f`. Final hosted
+  run `34665388860` produced and reviewed conforming raw evidence.
 
 The transitional release workflow and the old feature-only CI jobs are deleted
 from the Phase 0 working tree. Product features and the target DaemonSet remain
-in place while the remaining Phase 0 contract evidence is open.
+in place for the later migration phases; Phase 0 is now complete.
 
 ## Test evidence
 
@@ -126,6 +127,10 @@ successful. `main` is protected with strict `Required CI` status checks, and
 the release workflow has now been removed so transitional commits cannot push
 product images or releases.
 
+The final Phase 0 implementation is also green in `Migration CI` push run
+[`34665381636`](https://github.com/saadshabir/ZTAP/actions/runs/34665381636)
+from `091310f`.
+
 The failure progression was useful characterization rather than evidence of
 an architectural contradiction: `34565906626` found an unavailable Kind image
 and unpinned clang; `34566705931` found duplicate map assignment and the old
@@ -146,8 +151,9 @@ and the non-privileged RuntimeDefault probe carrying exactly `BPF`,
 `NET_ADMIN`, `PERFMON`, and `SYS_RESOURCE`. This proved the current fixture's
 runtime and capability assumptions, not the full traffic/lifecycle contract.
 
-The complete hosted Phase 0 run is `34653218849` from `3f4ff4c`. Its three jobs
-passed. The raw artifacts were `phase0-v0.1.0-reference-fixture`
+The first complete hosted evidence run was `34653218849` from `3f4ff4c`. Its
+three jobs passed, but raw artifact review exposed the self-reply contract
+failure described below. Its artifacts were `phase0-v0.1.0-reference-fixture`
 (`10285240637`), `phase0-linux-evidence` (`10284297558`), and
 `phase0-kubernetes-evidence` (`10284577573`). The Kubernetes artifact contains
 `phase0-flow.jsonl`, `phase0-service-flow.jsonl`, `phase0-nat.txt`, and
@@ -178,10 +184,39 @@ The raw results are:
   agent-restart-to-classification, and DaemonSet-rollout-to-classification
   intervals are 33, 1, and 2 seconds respectively.
 
+The final hosted Phase 0 run is `34665388860` from `091310f`. All three jobs
+passed, and the reviewed raw artifacts are:
+
+- `phase0-v0.1.0-reference-fixture` (`10289290604`);
+- `phase0-linux-evidence` (`10288731457`);
+- `phase0-kubernetes-evidence` (`10289505719`).
+
+The final artifact review confirms:
+
+- Both reference manifests match `manifest.sha256`; the fixture remains 250
+  Pods, 25 policies, 100 rules per policy, and 2,500 expected local rules.
+- The Linux suite passes every retained integration case on kernel
+  `6.17.0-1022-azure`, including per-direction quarantine without affecting an
+  unrelated subject, two attached subjects with distinct ingress identity,
+  failed-candidate preservation, and rollback after an injected second-link
+  update failure. `test_status=0` is recorded in `phase0-kernel-tests.txt`.
+- The Kubernetes traffic fixture records `traffic_test_status=0`. Direct
+  PodIP, explicit ClusterIP, node, and self requests succeed; the cgroup hook
+  observes ClusterIP traffic before DNAT at `10.96.133.206:18080`.
+- Self traffic at `10.244.0.7:30083 <-> 10.244.0.7:18081` is allowed for request
+  and reply at both ingress and egress hooks. The artifact contains 24 matching
+  events across the four tuple/direction combinations, all `allowed`, and
+  records `phase0_self_behavior=allowed`.
+- Isolated IPv6 loopback remains explicitly blocked at `::1:18081`.
+- Initial Pod start takes 3 seconds to cgroup observation and 4 seconds to
+  policy classification. Workload restart, agent restart, and DaemonSet
+  rollout reach classification in 32, 1, and 2 seconds respectively.
+
 ## Retained Linux eBPF assertion checklist
 
-The checked items below mean an executable assertion already exists in the
-Linux integration test suite; they were not run on this macOS host:
+The checked items below mean an executable assertion exists. Kernel-dependent
+items were not run on this macOS host, but they passed on the hosted Linux
+runner in `34665388860`:
 
 - [x] Load the eBPF objects, populate a policy map, and attach to a cgroup.
 - [x] Populate a cgroup-scoped key and the enforced-cgroups map.
@@ -206,24 +241,25 @@ Linux integration test suite; they were not run on this macOS host:
   integration fixture.
 - [x] Record direct PodIP and explicit ClusterIP pre/post-NAT addresses and
   ports.
-- [x] Characterize reply, node, self, and rejected-IPv6 traffic. Self reply
-  behavior is recorded as a failure of the intended contract.
+- [x] Characterize reply, node, self, and rejected-IPv6 traffic, including
+  conforming request/reply self bypass.
 - [x] Verify flow-map pinning, decoding, and stable lifetime.
 - [x] Verify shutdown link and pin cleanup.
-- [ ] Verify partial-update atomicity and per-subject quarantine behavior.
-- [ ] Verify distinct ingress identity when two subject cgroups share one
+- [x] Verify failed-candidate preservation, second-link update rollback, and
+  per-subject quarantine behavior.
+- [x] Verify distinct ingress identity when two subject cgroups share one
   program/map collection and have separate link pairs.
-- [ ] Verify mapped Pod self traffic is allowed at all four egress/ingress
+- [x] Verify mapped Pod self traffic is allowed at all four egress/ingress
   request/reply hook events.
 - [x] Prove cgroup identity under containerd with the systemd cgroup driver.
 - [x] Measure Pod-start classification, restart, and rolling-update gaps.
 
-The latest hosted Kubernetes probe verifies the reference fixture's
+The final hosted Kubernetes probe verifies the reference fixture's
 non-privileged capability set, host cgroup2/bpffs mounts, systemd cgroup
 driver, kindnet CNI configuration, Service DNAT, traffic classes, and
-workload/agent/rollout timing. The follow-up hosted run must add
-partial-update, per-subject quarantine, multi-attachment ingress identity, and
-conforming mapped-self evidence.
+workload/agent/rollout timing. The hosted Linux job verifies failed-update
+rollback, per-subject quarantine, multi-attachment ingress identity, and
+mapped-self behavior.
 
 The existing manifest still uses `hostNetwork`, `privileged: true`,
 `allowPrivilegeEscalation: true`, `ztap:latest`, and an exec-based `status`
@@ -232,30 +268,32 @@ probe. It is characterization input, not the target deployment contract.
 ## CI and branch state
 
 - The current local branch is `codex/streamline-ztap`; the latest hosted run
-  used commit `3f4ff4c`, with the uncommitted Phase 1 implementation
+  used commit `091310f`, with the uncommitted Phase 1 implementation
   intentionally outside the branch commits.
-- `Migration CI` is green for both the final push and pull-request events, and
-  `Required CI` is strict and required on `main`.
-- PR #177 is the review vehicle. Its final Phase 0 run is `34634544635`; the
-  Linux and Kubernetes jobs both passed as recorded above.
+- `Migration CI` final push run `34665381636` is green. The earlier default-
+  branch pull-request event and stable `Required CI` handoff remain recorded
+  above; `Required CI` is strict and required on `main`.
+- PR #177 has merged. Because the follow-up fixes were pushed afterward, final
+  Phase 0 run `34665388860` was dispatched manually on the branch.
 - The release workflow and the feature-only legacy CI jobs are removed. The
-  migration workflow itself has no publishing permissions or steps; the
-  architecture gate still depends on hosted traffic/lifecycle evidence.
+  migration workflow itself has no publishing permissions or steps.
 
-## Gate decision and next evidence
+## Gate decision
 
-Phase 0 safety work and hosted run `34653218849` remain valid evidence for the
-packet-offset, NAT/CNI, traffic-class, runtime, capability, and lifecycle
-claims recorded above. The follow-up code review found two blockers that the
-old run cannot close: its self result violates the retained contract, and its
-single direct cgroup attachment does not prove the root-only attachment model
-previously described in the plan. Kernel cgroup storage is bound to the
-attachment cgroup, so the plan now requires per-subject link pairs.
+Phase 0 is **closed / pass**. Hosted run `34665388860` verifies the revised
+self bypass, per-subject quarantine, failed-candidate preservation, partial
+link-update rollback, and distinct ingress identity for two subject
+attachments sharing one collection. Its raw artifacts also preserve the
+earlier packet-offset, NAT/CNI, traffic-class, runtime, capability, and
+lifecycle evidence.
 
-The revised runner makes mapped self traffic a hard failure and the Linux
-suite now exercises per-direction quarantine, a partially populated failed
-candidate that must leave active rules unchanged, and two subject cgroups
-sharing a program/map collection with distinct ingress identity. The
-architecture gate remains **open** until those tests pass on the hosted Linux
-runner and the new raw artifacts are reviewed. Do not begin broad product
-deletion or resume Phase 1 before that result is recorded here.
+The code review also corrected the plan's root-only attachment assumption.
+Kernel cgroup storage is bound to the attachment cgroup, so the target uses one
+owned ingress/egress link pair per resolved subject cgroup while sharing the
+programs and maps. The Phase 0 rollback tests prove that a failed candidate or
+second link update retains the previous enforcement state. They do not replace
+the target two-slot, single configuration-map flip; successful-update atomicity
+remains a Phase 2 implementation and exit criterion.
+
+Phase 1 may resume. Broad product deletion remains ordered after the native
+policy/compiler and engine phases rather than being pulled forward.
