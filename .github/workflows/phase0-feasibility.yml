@@ -232,7 +232,8 @@ jobs:
             kubectl -n ztap-phase0 get pods -o wide | tee -a phase0-kubernetes.txt
             observer_pod=''
             for attempt in $(seq 1 90); do
-              observer_pod="$(kubectl -n ztap-phase0 get pods -o name 2>/dev/null | awk -F/ '$2 ~ /^phase0-traffic-observer-/ { print $2; exit }' || true)"
+              observer_pod="$(kubectl -n ztap-phase0 get pods -l app=phase0-traffic-observer \
+                --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -n 1 | cut -d/ -f2 || true)"
               if test -n "$observer_pod"; then
                 break
               fi
@@ -349,16 +350,22 @@ jobs:
         run: |
           set -euo pipefail
           namespace=ztap-phase0
-          observer_prefix='phase0-traffic-observer-'
 
-          observer_pod=''
-          for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -o name 2>/dev/null | awk -F/ -v prefix="$observer_prefix" '$2 ~ ("^" prefix) { print $2; exit }' || true)"
-            if test -n "$observer_pod"; then
-              break
-            fi
-            sleep 2
-          done
+          current_observer_pod() {
+            local pod=''
+            for attempt in $(seq 1 90); do
+              pod="$(kubectl -n "$namespace" get pods -l app=phase0-traffic-observer \
+                --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -n 1 | cut -d/ -f2 || true)"
+              if test -n "$pod"; then
+                printf '%s\n' "$pod"
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+
+          observer_pod="$(current_observer_pod)"
           test -n "$observer_pod"
           printf '%s\n' '--- initial lifecycle timing ---' | tee phase0-lifecycle.txt
           kubectl -n "$namespace" exec "$observer_pod" -- cat /run/ztap-phase0/timing.log | tee -a phase0-lifecycle.txt
@@ -396,14 +403,7 @@ jobs:
           kubectl -n "$namespace" set env daemonset/phase0-traffic-observer \
             CLIENT_CONTAINER_ID="$restarted_container_id"
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
-          observer_pod=''
-          for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -o name 2>/dev/null | awk -F/ -v prefix="$observer_prefix" '$2 ~ ("^" prefix) { print $2; exit }' || true)"
-            if test -n "$observer_pod"; then
-              break
-            fi
-            sleep 2
-          done
+          observer_pod="$(current_observer_pod)"
           test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
           restarted_classified_epoch="$(wait_for_policy_classification "$observer_pod")"
@@ -415,14 +415,7 @@ jobs:
           agent_restart_started="$(date +%s)"
           kubectl -n "$namespace" delete pod "$observer_pod" --wait=true
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
-          observer_pod=''
-          for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -o name 2>/dev/null | awk -F/ -v prefix="$observer_prefix" '$2 ~ ("^" prefix) { print $2; exit }' || true)"
-            if test -n "$observer_pod"; then
-              break
-            fi
-            sleep 2
-          done
+          observer_pod="$(current_observer_pod)"
           test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
           agent_restarted_classified_epoch="$(wait_for_policy_classification "$observer_pod")"
@@ -437,14 +430,7 @@ jobs:
           kubectl -n "$namespace" patch daemonset/phase0-traffic-observer --type=strategic \
             -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"phase0-rollout\":\"$rollout_token\"}}}}}"
           kubectl -n "$namespace" rollout status daemonset/phase0-traffic-observer --timeout=180s
-          observer_pod=''
-          for attempt in $(seq 1 90); do
-            observer_pod="$(kubectl -n "$namespace" get pods -o name 2>/dev/null | awk -F/ -v prefix="$observer_prefix" '$2 ~ ("^" prefix) { print $2; exit }' || true)"
-            if test -n "$observer_pod"; then
-              break
-            fi
-            sleep 2
-          done
+          observer_pod="$(current_observer_pod)"
           test -n "$observer_pod"
           kubectl -n "$namespace" wait --for=condition=Ready pod/"$observer_pod" --timeout=180s
           rollout_classified_epoch="$(wait_for_policy_classification "$observer_pod")"
