@@ -33,6 +33,7 @@ func TestNewRootCmdCommandTree(t *testing.T) {
 
 	// Top-level commands and their direct children.
 	want := map[string][]string{
+		"validate":   nil,
 		"agent":      nil,
 		"alert":      {"test"},
 		"api":        {"serve"},

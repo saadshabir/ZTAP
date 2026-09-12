@@ -231,7 +231,7 @@ jobs:
             kubectl -n ztap-phase0 rollout status daemonset/phase0-traffic-observer --timeout=180s
             kubectl -n ztap-phase0 get pods -o wide | tee -a phase0-kubernetes.txt
             observer_pod=''
-            for attempt in $(seq 1 90); do
+            for _ in $(seq 1 90); do
               observer_pod="$(kubectl -n ztap-phase0 get pods -l app=phase0-traffic-observer \
                 --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -n 1 | cut -d/ -f2 || true)"
               if test -n "$observer_pod"; then
@@ -353,7 +353,7 @@ jobs:
 
           current_observer_pod() {
             local pod=''
-            for attempt in $(seq 1 90); do
+            for _ in $(seq 1 90); do
               pod="$(kubectl -n "$namespace" get pods -l app=phase0-traffic-observer \
                 --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -n 1 | cut -d/ -f2 || true)"
               if test -n "$pod"; then
@@ -373,7 +373,7 @@ jobs:
           wait_for_policy_classification() {
             local pod="$1"
             local classified_epoch=''
-            for attempt in $(seq 1 90); do
+            for _ in $(seq 1 90); do
               classified_epoch="$(kubectl -n "$namespace" exec "$pod" -- cat /run/ztap-phase0/timing.log 2>/dev/null \
                 | sed -n 's/.*phase0_policy_classified_epoch=\([0-9][0-9]*\).*/\1/p' | head -n 1 || true)"
               if test -n "$classified_epoch"; then

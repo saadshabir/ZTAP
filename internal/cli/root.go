@@ -42,11 +42,16 @@ func NewRootCmd(version string) *cobra.Command {
 	clusterStarted := false
 
 	root := &cobra.Command{
-		Use:   "ztap",
-		Short: "Zero Trust Access Platform - Microsegmentation for hybrid environments",
+		Use:           "ztap",
+		Short:         "Zero Trust Access Platform - Microsegmentation for hybrid environments",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		Long: `ZTAP enforces zero-trust network policies across on-premises and cloud workloads.
 It uses eBPF on Linux and pf on macOS to enforce fine-grained traffic rules.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if commandSkipsConfig(cmd) {
+				return nil
+			}
 			cfg, err := config.Load("")
 			if err != nil {
 				return err
@@ -92,6 +97,7 @@ It uses eBPF on Linux and pf on macOS to enforce fine-grained traffic rules.`,
 	root.PersistentFlags().String("log-file", "", "Log output file")
 
 	root.AddCommand(
+		newValidateCmd(),
 		newAgentCmd(app),
 		newAlertCmd(app),
 		newApiCmd(app),

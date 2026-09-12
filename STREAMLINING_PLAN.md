@@ -1,8 +1,8 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Draft — Phase 0 complete; Phase 1 may resume
+- **Status:** Draft — Phases 0-1 complete; Phase 2 may begin
 - **Prepared:** 2026-09-10
-- **Last reviewed:** 2026-09-11
+- **Last reviewed:** 2026-09-12
 - **Change type:** Intentional clean break
 - **Target:** Linux/Kubernetes eBPF network-policy enforcer
 
@@ -870,28 +870,28 @@ Exit criteria:
 
 ### Phase 1: Native policy model and compiler
 
-Progress: the additive native input-contract slice was implemented and reviewed on 2026-09-10. Phase 0 is confirmed complete, so the remaining Phase 1 work may resume. Phase 1 remains open until the kernel-neutral compiler, resolution inputs, quarantine behavior, deterministic object-order tests, and every phase exit criterion pass.
+Progress: complete as of 2026-09-12. The native decoder and validator now feed a kernel-neutral compiler with immutable namespace, pod, cgroup, PodIP, and NodeIP resolution inputs. The compiler emits deterministic subjects and additive IPv4 rules, preserves explicit ClusterIP `ipBlock` entries without Service synthesis, excludes `hostNetwork` subjects, quarantines rejected or IPv6-affected local subjects per direction, and enforces the 16,384-subject and 16,384-rule active-slot limits. Incomplete namespace snapshots are rejected before namespace-selector evaluation, including for negative `NotIn` and `DoesNotExist` selectors. The three curated native examples compile against exact fixture snapshots, randomized object-order tests produce identical output, and `go test -race ./...`, `go vet ./...`, and the pinned lint gate pass.
 
 Work:
 
 - [x] Add strict native NetworkPolicy decoding for files, stdin, multi-document YAML, and `NetworkPolicyList`.
 - [x] Implement the supported-subset validator with typed field errors and stable document/object/field context.
-- [ ] Define the kernel-neutral `PolicySet`, subject direction masks, and rules.
+- [x] Define the kernel-neutral `PolicySet`, subject direction masks, and rules.
 - [x] Implement Kubernetes `policyTypes` defaulting and explicit-type consistency checks.
-- [ ] Implement deterministic IPv4 selector-peer and numeric-port expansion.
+- [x] Implement deterministic IPv4 selector-peer and numeric-port expansion.
 - [x] Implement deterministic IPv4 `ipBlock.except` normalization with the 1,024-prefix cap.
-- [ ] Implement additive rule union; remove conflict semantics from the new path.
-- [ ] Define kernel-neutral resolution inputs for documented Node-status/self bypasses and the per-subject quarantine model.
-- [ ] Build fixture-based resolution inputs for compiler unit tests; `internal/policy` must not own client-go clients, informers, or resolver lifecycle.
+- [x] Implement additive rule union; remove conflict semantics from the new path.
+- [x] Define kernel-neutral resolution inputs for documented Node-status/self bypasses and the per-subject quarantine model.
+- [x] Build fixture-based resolution inputs for compiler unit tests; `internal/policy` must not own client-go clients, informers, or resolver lifecycle.
 - [x] Add `ztap validate` with the documented stdin/file behavior and exit statuses while the old commands still exist internally.
 
 Exit criteria:
 
-- [ ] The three curated native examples pass.
-- [ ] Every rejected construct has a direct test and stable error path.
-- [ ] Compilation results are deterministic under randomized informer/object ordering.
-- [ ] A rejected policy quarantines only the local subjects and directions it selects; unrelated accepted policy state still compiles.
-- [ ] The new policy package no longer depends on the custom YAML schema.
+- [x] The three curated native examples pass.
+- [x] Every rejected construct has a direct test and stable error path.
+- [x] Compilation results are deterministic under randomized informer/object ordering.
+- [x] A rejected policy quarantines only the local subjects and directions it selects; unrelated accepted policy state still compiles.
+- [x] The new policy package no longer depends on the custom YAML schema.
 
 ### Phase 2: Instance-owned eBPF engine
 
