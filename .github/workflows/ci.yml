@@ -271,7 +271,7 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Create disposable Kubernetes cluster
-        run: kind create cluster --name ztap-phase2 --config deployments/kubernetes/phase0-kind-config.yaml --image kindest/node:v1.36.4 --wait 180s
+        run: kind create cluster --name ztap-phase2 --config deployments/kubernetes/phase2-kind-config.yaml --image kindest/node:v1.36.4 --wait 180s
 
       - name: Build and load the agent image
         run: |
@@ -372,22 +372,27 @@ jobs:
           echo "  dependency-review: ${NEEDS_DEPENDENCY_REVIEW_RESULT}"
           echo ""
 
-          if [ "${{ contains(needs.*.result, 'failure') }}" == "true" ]; then
+          if [ "${NEEDS_FAILURE}" == "true" ]; then
             echo "Some checks failed"
             exit 1
-          elif [ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]; then
+          elif [ "${NEEDS_CANCELLED}" == "true" ]; then
             echo "Some checks were cancelled"
             exit 1
-          elif [ "${{ needs.ebpf-verification.result }}" == "skipped" ] && { [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]; }; then
+          elif [ "${NEEDS_EBPF_VERIFICATION_RESULT}" == "skipped" ] && { [ "${EVENT_NAME}" != "pull_request" ] || [ "${EVENT_PR_HEAD_REPOSITORY}" == "${EVENT_REPOSITORY}" ]; }; then
             echo "The privileged eBPF verification job was skipped unexpectedly"
             exit 1
-          elif [ "${{ needs.capability-agent.result }}" == "skipped" ] && { [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]; }; then
+          elif [ "${NEEDS_CAPABILITY_AGENT_RESULT}" == "skipped" ] && { [ "${EVENT_NAME}" != "pull_request" ] || [ "${EVENT_PR_HEAD_REPOSITORY}" == "${EVENT_REPOSITORY}" ]; }; then
             echo "The capability-only agent job was skipped unexpectedly"
             exit 1
           else
             echo "All checks passed!"
           fi
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          NEEDS_FAILURE: ${{ contains(needs.*.result, 'failure') }}
+          NEEDS_CANCELLED: ${{ contains(needs.*.result, 'cancelled') }}
           NEEDS_LINT_RESULT: ${{ needs.lint.result }}
           NEEDS_ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
           NEEDS_ZIZMOR_RESULT: ${{ needs.zizmor.result }}
