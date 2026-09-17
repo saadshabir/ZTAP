@@ -107,7 +107,7 @@ func TestEnforcementStart_LinuxDirectPathRetired(t *testing.T) {
 		t.Skip("Linux direct enforcement retirement only applies on Linux")
 	}
 	srv := newEnforcementTestServer(t)
-	policyYAML := "apiVersion: ztap/v1\nkind: NetworkPolicy\nmetadata:\n  name: retired\nspec:\n  podSelector:\n    matchLabels:\n      app: retired\n"
+	policyYAML := "apiVersion: ztap/v1\nkind: NetworkPolicy\nmetadata:\n  name: retired\nspec:\n  podSelector:\n    matchLabels:\n      app: retired\n  egress:\n  - to:\n      ipBlock:\n        cidr: 10.0.0.0/8\n    ports:\n    - protocol: TCP\n      port: 443\n"
 	body, _ := json.Marshal(map[string]string{"policy_yaml": policyYAML})
 	req := httptest.NewRequest(http.MethodPost, "/v1/enforcement/start", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
