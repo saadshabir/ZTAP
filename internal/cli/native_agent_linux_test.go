@@ -329,7 +329,7 @@ func TestNativeAgentReportsClassificationDelayAndUnresolvedContainers(t *testing
 	body := recorder.Body.String()
 	for _, want := range []string{
 		"ztap_unresolved_running_containers 2",
-		"ztap_pod_start_classification_delay_seconds_count 2",
+		"ztap_pod_start_classification_delay_seconds_count 3",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)

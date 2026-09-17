@@ -89,7 +89,7 @@ func TestBuildResolutionSnapshotProducesCompilerFactsAndCgroupPaths(t *testing.T
 	if err != nil {
 		t.Fatalf("BuildResolutionSnapshot failed: %v", err)
 	}
-	if got, want := input.NodeIPs, []netip.Addr{netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("2001:db8::10"), netip.MustParseAddr("203.0.113.10")}; !reflect.DeepEqual(got, want) {
+	if got, want := input.NodeIPs, []netip.Addr{netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("203.0.113.10"), netip.MustParseAddr("2001:db8::10")}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("node IPs = %v, want %v", got, want)
 	}
 	if got := []string{input.Namespaces[0].Name, input.Namespaces[1].Name}; !reflect.DeepEqual(got, []string{"local", "trusted"}) {

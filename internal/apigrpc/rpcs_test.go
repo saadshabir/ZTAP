@@ -431,6 +431,12 @@ func TestGRPCEnforcementStartErrors(t *testing.T) {
 	client := apiv1.NewEnforcementServiceClient(env.conn)
 
 	_, err := client.Start(ctx, &apiv1.EnforcementStartRequest{})
+	if enforcer.IsLinux() {
+		if st, _ := status.FromError(err); st.Code() != codes.Unimplemented {
+			t.Fatalf("expected Linux direct enforcement retirement, got %v", st.Code())
+		}
+		return
+	}
 	if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", st.Code())
 	}
