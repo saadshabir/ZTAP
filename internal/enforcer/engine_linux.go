@@ -931,7 +931,7 @@ func (l *linuxSubjectLinker) Attach(ctx context.Context, cgroupID uint64) (io.Cl
 // ownership dependent on another controller. Querying before and after the
 // attach also closes the small race where a second controller attaches while
 // this engine is creating its link; the caller then closes only its own link.
-func rejectIncompatibleCgroupProgram(path string, attach ebpf.AttachType, expected *ebpf.Program) error {
+func rejectIncompatibleCgroupProgram(path string, attach ebpf.AttachType, expected *ebpf.Program) (err error) {
 	if expected == nil {
 		return errors.New("expected cgroup program is missing")
 	}
@@ -947,7 +947,11 @@ func rejectIncompatibleCgroupProgram(path string, attach ebpf.AttachType, expect
 	if err != nil {
 		return fmt.Errorf("open cgroup: %w", err)
 	}
-	defer cgroup.Close()
+	defer func() {
+		if closeErr := cgroup.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close cgroup: %w", closeErr)
+		}
+	}()
 	result, err := link.QueryPrograms(link.QueryOptions{
 		Target: int(cgroup.Fd()),
 		Attach: attach,

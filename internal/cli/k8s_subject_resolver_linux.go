@@ -236,10 +236,10 @@ func extractRunningContainerdIDs(pod *corev1.Pod) ([]string, policy.CgroupResolu
 func parseContainerdContainerID(raw string) (string, error) {
 	runtimeName, containerID, ok := strings.Cut(raw, "://")
 	if !ok || runtimeName != "containerd" || len(containerID) != 64 {
-		return "", fmt.Errorf("container identity must use containerd with a full 64-hex ID")
+		return "", errors.New("container identity must use containerd with a full 64-hex ID")
 	}
 	if _, err := hex.DecodeString(containerID); err != nil {
-		return "", fmt.Errorf("container identity must use containerd with a full 64-hex ID")
+		return "", errors.New("container identity must use containerd with a full 64-hex ID")
 	}
 	return strings.ToLower(containerID), nil
 }
@@ -290,10 +290,10 @@ func findContainerCgroupPath(cgroupRoot string, pod *corev1.Pod, containerID str
 		return "", errors.New("pod UID is required to resolve a container cgroup")
 	}
 	if len(containerID) != 64 {
-		return "", fmt.Errorf("containerd ID must contain exactly 64 hex characters")
+		return "", errors.New("containerd ID must contain exactly 64 hex characters")
 	}
 	if _, err := hex.DecodeString(containerID); err != nil {
-		return "", fmt.Errorf("containerd ID must contain exactly 64 hex characters")
+		return "", errors.New("containerd ID must contain exactly 64 hex characters")
 	}
 	containerID = strings.ToLower(containerID)
 	uidToken := strings.ReplaceAll(string(pod.UID), "-", "_")

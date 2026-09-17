@@ -15,9 +15,11 @@ import (
 	"ztap/internal/policy"
 )
 
+func nilContextForTest() context.Context { return nil }
+
 func TestLinuxEngineStoreRejectsNilPopulateContext(t *testing.T) {
 	store := &linuxEngineStore{}
-	if err := store.PopulateSlot(nil, 0, policy.PolicySet{}); err == nil || !strings.Contains(err.Error(), "context is nil") {
+	if err := store.PopulateSlot(nilContextForTest(), 0, policy.PolicySet{}); err == nil || !strings.Contains(err.Error(), "context is nil") {
 		t.Fatalf("nil populate context error = %v, want context validation", err)
 	}
 }
@@ -36,7 +38,7 @@ func TestLockEngineMutexHonorsCancellation(t *testing.T) {
 func TestLinuxSubjectLinkerRejectsNilAndCancelledContext(t *testing.T) {
 	linker := &linuxSubjectLinker{}
 	if err := func() error {
-		_, err := linker.Attach(nil, 1)
+		_, err := linker.Attach(nilContextForTest(), 1)
 		return err
 	}(); err == nil || !strings.Contains(err.Error(), "context is nil") {
 		t.Fatalf("nil attach context error = %v, want context validation", err)

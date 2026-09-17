@@ -158,35 +158,6 @@ type resolvedPodCgroup struct {
 	Path string
 }
 
-func resolvePodCgroups(pod *corev1.Pod, cgroupRoot string) ([]resolvedPodCgroup, policy.CgroupResolutionFailure) {
-	containerIDs, failure := extractRunningContainerdIDs(pod)
-	cgroups := make([]resolvedPodCgroup, 0, len(containerIDs))
-	seen := make(map[uint64]struct{}, len(containerIDs))
-	for _, containerID := range containerIDs {
-		path, err := findContainerCgroupPath(cgroupRoot, pod, containerID)
-		if err != nil {
-			if failure == policy.CgroupResolutionFailureNone {
-				failure = policy.CgroupResolutionFailureNotFound
-			}
-			continue
-		}
-		id, err := cgroupIDFromPath(path)
-		if err != nil {
-			if failure == policy.CgroupResolutionFailureNone {
-				failure = policy.CgroupResolutionFailureNotFound
-			}
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		cgroups = append(cgroups, resolvedPodCgroup{ID: id, Path: filepath.Clean(path)})
-	}
-	sort.Slice(cgroups, func(i, j int) bool { return cgroups[i].ID < cgroups[j].ID })
-	return cgroups, failure
-}
-
 func (r *k8sSubjectResolver) rememberCgroupPath(id uint64, path string) {
 	if id == 0 || strings.TrimSpace(path) == "" {
 		return
