@@ -5,7 +5,6 @@ package flow
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -50,6 +49,9 @@ func NewLinuxReader(flowEventsMap *ebpf.Map) (*LinuxReader, error) {
 
 // Start begins reading flow events from the ring buffer.
 func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) error {
+	if ctx == nil {
+		return errors.New("linux flow reader context is nil")
+	}
 	r.mu.Lock()
 	if r.running {
 		r.mu.Unlock()
@@ -63,7 +65,21 @@ func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) er
 	}
 	r.ringbuf = reader
 	r.running = true
+	stopCh := r.stopCh
 	r.mu.Unlock()
+	defer func() {
+		// A caller may cancel Start without calling Stop. Release the reader and
+		// make a later Start observe a clean, restartable state. Stop() may have
+		// already closed the same reader; ringbuf.Reader.Close is idempotent.
+		r.mu.Lock()
+		if r.ringbuf == reader {
+			r.ringbuf = nil
+			r.running = false
+			r.stopCh = make(chan struct{})
+		}
+		r.mu.Unlock()
+		_ = reader.Close()
+	}()
 
 	logging.Info("Linux flow reader started", nil)
 
@@ -72,7 +88,7 @@ func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) er
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-r.stopCh:
+		case <-stopCh:
 			return nil
 		default:
 			record, err := reader.Read()
@@ -112,10 +128,18 @@ func (r *LinuxReader) Stop() error {
 	r.running = false
 	close(r.stopCh)
 
+	var closeErr error
 	if r.ringbuf != nil {
 		if err := r.ringbuf.Close(); err != nil {
-			return fmt.Errorf("failed to close ring buffer: %w", err)
+			closeErr = fmt.Errorf("failed to close ring buffer: %w", err)
 		}
+		r.ringbuf = nil
+	}
+	// A monitor may be restarted after a clean stop. Keep the closed channel
+	// private to the completed reader and give the next Start call a fresh one.
+	r.stopCh = make(chan struct{})
+	if closeErr != nil {
+		return closeErr
 	}
 
 	logging.Info("Linux flow reader stopped", nil)
@@ -125,34 +149,6 @@ func (r *LinuxReader) Stop() error {
 // Available returns true since this is the Linux implementation.
 func (r *LinuxReader) Available() bool {
 	return true
-}
-
-// parseRawEvent parses a raw ring buffer record into a RawFlowEvent.
-func parseRawEvent(data []byte) (RawFlowEvent, error) {
-	if len(data) < 48 {
-		return RawFlowEvent{}, fmt.Errorf("event data too short: %d bytes", len(data))
-	}
-
-	event := RawFlowEvent{}
-	event.TimestampNs = binary.LittleEndian.Uint64(data[0:8])
-
-	for i := 0; i < 4; i++ {
-		start := 8 + i*4
-		event.SrcIP[i] = binary.LittleEndian.Uint32(data[start : start+4])
-	}
-	for i := 0; i < 4; i++ {
-		start := 24 + i*4
-		event.DestIP[i] = binary.LittleEndian.Uint32(data[start : start+4])
-	}
-
-	event.SrcPort = binary.LittleEndian.Uint16(data[40:42])
-	event.DestPort = binary.LittleEndian.Uint16(data[42:44])
-	event.Protocol = data[44]
-	event.Direction = data[45]
-	event.Action = data[46]
-	event.Family = data[47]
-
-	return event, nil
 }
 
 // CreateFlowReader creates a flow reader for the given eBPF flow_events map.

@@ -233,7 +233,10 @@ enforcement:
 
 `enforcement.dry_run` defaults `ztap enforce --dry-run`; `enforcement.default_action` defaults `ztap enforce --default-action` (traffic not matching any policy rule; currently honored by the pf backend — eBPF/WFP are default-deny by design). The enforcement backend itself is OS-determined (pf on macOS, eBPF on Linux), not configurable.
 
-Environment variables: `ZTAP_FORCE_IPTABLES` (set to `1` to force iptables on Linux), `ZTAP_WFP_STRICT` (set to `1` for strict default-deny on Windows), `ZTAP_BPF_OBJECT` (override embedded eBPF bytecode path).
+Environment variables: `ZTAP_WFP_STRICT` (set to `1` for strict default-deny on
+Windows). `ZTAP_FORCE_IPTABLES` and `ZTAP_BPF_OBJECT` are retained for the
+parked Linux compatibility loader and have no effect on the supported
+`ztap agent` path.
 
 ## Audit Logging
 

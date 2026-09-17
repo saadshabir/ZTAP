@@ -25,7 +25,8 @@ func newFlowsCmd() *cobra.Command {
 	This command requires:
 	  - Linux: kernel 5.7+ with eBPF support (best fidelity)
 	  - Windows: WFP NetEvents subscription (best effort; requires admin/BFE access)
-	  - Active policy enforcement via 'ztap enforce' to see block/allow decisions
+	  - Active Linux Kubernetes enforcement via 'ztap agent'
+	    to see block/allow decisions
 
 Examples:
   ztap flows                    # Show recent flows
@@ -42,6 +43,7 @@ Examples:
 	c.Flags().StringP("direction", "d", "", "Filter by direction (egress, ingress)")
 	c.Flags().IntP("limit", "n", 20, "Number of flows to display (0 = unlimited)")
 	c.Flags().StringP("output", "o", "table", "Output format (table, json)")
+	c.Flags().String("run-dir", "/run/ztap", "Directory containing the flow-reader lock")
 	return c
 }
 
@@ -52,6 +54,7 @@ func runFlows(cmd *cobra.Command, args []string) {
 	direction, _ := cmd.Flags().GetString("direction")
 	limit, _ := cmd.Flags().GetInt("limit")
 	output, _ := cmd.Flags().GetString("output")
+	runDir, _ := cmd.Flags().GetString("run-dir")
 
 	// Build filter
 	filter := flow.FlowFilter{
@@ -68,7 +71,7 @@ func runFlows(cmd *cobra.Command, args []string) {
 	}
 
 	if follow {
-		streamFlows(filter, output)
+		streamFlows(filter, output, runDir)
 	} else {
 		displayRecentFlows(filter, limit, output)
 	}
@@ -84,7 +87,21 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func streamFlows(filter flow.FlowFilter, output string) {
+func streamFlows(filter flow.FlowFilter, output, runDir string) {
+	var unlock func() error
+	if isFlowMonitoringAvailable() {
+		var err error
+		unlock, err = acquireFlowReaderLock(runDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting flow monitor: %v\n", err)
+			return
+		}
+		defer func() {
+			if err := unlock(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error releasing flow reader lock: %v\n", err)
+			}
+		}()
+	}
 	fmt.Println("Streaming flow events (Ctrl+C to stop)...")
 	fmt.Println()
 
@@ -101,8 +118,8 @@ func streamFlows(filter flow.FlowFilter, output string) {
 		cancel()
 	}()
 
-	// Create flow monitor with simulated reader for now
-	// In production, this would use the actual eBPF reader
+	// Use the pinned engine ring buffer on Linux; the reader itself retains a
+	// compatibility fallback when no live agent has published one yet.
 	reader := createFlowReader()
 	monitor := flow.NewMonitor(reader)
 
@@ -170,7 +187,7 @@ func displayRecentFlows(filter flow.FlowFilter, limit int, output string) {
 		return
 	}
 
-	fmt.Println("No flow data available. Ensure policies are being enforced with 'ztap enforce'.")
+	fmt.Println("No flow data available. Ensure policies are being enforced with 'ztap agent'.")
 	fmt.Println("Use 'ztap flows --follow' to stream real-time events.")
 }
 
@@ -200,15 +217,23 @@ func printFlowRow(event flow.FlowEvent) {
 }
 
 func printFlowJSON(event flow.FlowEvent) {
-	fmt.Printf(`{"timestamp":"%s","direction":"%s","protocol":"%s","src_ip":"%s","src_port":%d,"dst_ip":"%s","dst_port":%d,"action":"%s"}`+"\n",
+	fmt.Println(formatFlowJSON(event))
+}
+
+func formatFlowJSON(event flow.FlowEvent) string {
+	return fmt.Sprintf(`{"timestamp":"%s","policy_epoch":%d,"cgroup_id":%d,"direction":"%s","protocol":"%s","src_ip":"%s","src_port":%d,"dst_ip":"%s","dst_port":%d,"action":"%s","reason":"%s","schema_version":%d}`,
 		event.Timestamp.Format(time.RFC3339Nano),
+		event.PolicyEpoch,
+		event.CgroupID,
 		event.Direction,
 		event.Protocol,
 		event.SourceIP,
 		event.SourcePort,
 		event.DestIP,
 		event.DestPort,
-		event.Action)
+		event.Action,
+		event.Reason,
+		event.SchemaVersion)
 }
 
 func generateDemoFlows(limit int) []flow.FlowEvent {

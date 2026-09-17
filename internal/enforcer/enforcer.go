@@ -14,6 +14,13 @@ import (
 	"ztap/internal/policy"
 )
 
+// ErrLegacyLinuxEnforcementRetired identifies the file-based/global Linux
+// enforcement surface that predates the instance-owned Kubernetes agent.
+// Keeping this as a shared sentinel lets command and API callers expose one
+// actionable migration message while the compatibility implementation stays
+// parked for dedicated migration tests.
+var ErrLegacyLinuxEnforcementRetired = errors.New("direct Linux enforcement is retired; run ztap agent --node-name <node> on Kubernetes")
+
 // sanitizeForLogPlain removes characters that could break log formatting.
 // In particular, it strips newline and carriage return characters so that
 // user-controlled values cannot inject additional log lines.

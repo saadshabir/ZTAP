@@ -117,13 +117,24 @@ ZTAP includes comprehensive test coverage across all critical components with un
 - **TestEBPFIntegrationSelectedOnlySemantics**: Verifies non-enforced cgroups default-allow and enforced cgroups default-deny on miss
 - **TestEBPFGracefulReload**: Verifies that policy updates are applied using atomic `bpf_link` updates without detaching the program (ensuring zero downtime)
 
-Run prerequisites (Linux only):
+Run prerequisites (Linux only, for the parked compatibility tests):
 
 - root (or sufficient capabilities to load/attach cgroup BPF)
 - kernel 5.7+
-- `make`, `clang`, and `llvm-strip` available (the tests recompile `bpf/filter.o`)
+- `make`, `clang`, and `llvm-strip` available (the migration tests recompile `bpf/filter.o`)
 
 **Run**: `sudo go test -tags=integration ./internal/enforcer -run TestEBPFIntegration -v`
+
+The supported native agent suite is run with:
+`sudo go test -race -tags=integration -timeout=10m ./internal/enforcer -run '^(TestEBPFIntegrationPhase0KernelPreflight|TestLinuxEngine)' -v`.
+The required Linux CI job runs this command with the race detector and uploads
+the verbose output as the `ebpf-engine-evidence` artifact for review.
+The `Capability-only Agent (Kubernetes)` CI job additionally runs the shipped
+DaemonSet in a disposable kind cluster. It checks the pod security context and
+exact effective capability set, then requires the `ztap_enforced_cgroups`
+gauge to report the selected client, proves an unselected control can reach the
+server while that client is denied, and checks the engine's default-deny counter.
+Its logs and cluster diagnostics are uploaded as `capability-agent-evidence`.
 
 - **TestRevokeAllEgressNotFound**: Detects missing Security Groups
 

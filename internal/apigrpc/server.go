@@ -10,7 +10,6 @@ import (
 	"math"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -45,12 +44,7 @@ import (
 )
 
 var (
-	enforceWithEBPF      = enforcer.EnforceWithEBPFIfAvailable
-	validateEBPFPolicies = enforcer.ValidatePoliciesForEBPF
-	enforceWithPF        = enforcer.EnforceWithPF
-	stopEBPFEnforcement  = enforcer.StopEBPFEnforcement
-	geteuid              = os.Geteuid
-	statFn               = os.Stat
+	enforceWithPF = enforcer.EnforceWithPF
 )
 
 type Config struct {
@@ -818,11 +812,11 @@ func (e *enforcementService) GetStatus(ctx context.Context, _ *emptypb.Empty) (*
 }
 
 func (e *enforcementService) Start(ctx context.Context, req *apiv1.EnforcementStartRequest) (*apiv1.EnforcementStartResponse, error) {
+	if enforcer.IsLinux() {
+		return nil, status.Error(codes.Unimplemented, enforcer.ErrLegacyLinuxEnforcementRetired.Error())
+	}
 	policyYAML := strings.TrimSpace(req.GetPolicyYaml())
 	policyName := strings.TrimSpace(req.GetPolicyName())
-	cgroupPath := strings.TrimSpace(req.GetCgroup())
-	bpfObject := strings.TrimSpace(req.GetBpfObject())
-	debugEBPF := req.GetDebugEbpf()
 
 	if policyYAML == "" {
 		return nil, status.Error(codes.InvalidArgument, "policy_yaml is required")
@@ -889,116 +883,6 @@ func (e *enforcementService) Start(ctx context.Context, req *apiv1.EnforcementSt
 	}
 
 	platform := runtime.GOOS
-	if enforcer.IsLinux() {
-		platform = "linux"
-		if geteuid() != 0 {
-			return nil, status.Error(codes.PermissionDenied, "eBPF enforcement requires root privileges")
-		}
-
-		const defaultCgroupPath = "/sys/fs/cgroup"
-		var resolvedCgroupPath string
-		if cgroupPath == "" {
-			resolvedCgroupPath = defaultCgroupPath
-		} else {
-			if filepath.IsAbs(cgroupPath) || strings.Contains(cgroupPath, "..") {
-				return nil, status.Error(codes.InvalidArgument, "invalid cgroup path "+cgroupPath)
-			}
-			cleaned := filepath.Clean(cgroupPath)
-			if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
-				return nil, status.Error(codes.InvalidArgument, "invalid cgroup path "+cgroupPath)
-			}
-			joined := filepath.Join(defaultCgroupPath, cleaned)
-			absCgroupPath, err := filepath.Abs(joined)
-			if err != nil {
-				return nil, status.Error(codes.InvalidArgument, "invalid cgroup path "+cgroupPath)
-			}
-			rel, err := filepath.Rel(defaultCgroupPath, absCgroupPath)
-			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-				return nil, status.Error(codes.InvalidArgument, "invalid cgroup path "+cgroupPath)
-			}
-			resolvedCgroupPath = absCgroupPath
-		}
-		if _, err := statFn(resolvedCgroupPath); err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid cgroup path %s: %v", resolvedCgroupPath, err)
-		}
-
-		bpfObjectPath := ""
-		if bpfObject != "" {
-			const safeBPFDir = "/usr/lib/ztap/bpf"
-			if filepath.IsAbs(bpfObject) || strings.Contains(bpfObject, "..") {
-				return nil, status.Error(codes.InvalidArgument, "bpf_object must be a relative path without parent-directory references")
-			}
-			cleaned := filepath.Clean(bpfObject)
-			if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
-				return nil, status.Error(codes.InvalidArgument, "bpf_object contains an invalid path")
-			}
-			baseDirAbs, err := filepath.Abs(safeBPFDir)
-			if err != nil {
-				logging.Errorf("failed to resolve bpf directory: %v", err)
-				return nil, status.Error(codes.Internal, "failed to resolve bpf directory")
-			}
-			absPath := cleaned
-			if !filepath.IsAbs(cleaned) {
-				absPath, err = filepath.Abs(filepath.Join(baseDirAbs, cleaned))
-				if err != nil {
-					return nil, status.Errorf(codes.InvalidArgument, "invalid bpf_object %s: %v", bpfObject, err)
-				}
-			}
-			rel, err := filepath.Rel(baseDirAbs, absPath)
-			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-				return nil, status.Error(codes.InvalidArgument, "bpf_object must be within "+baseDirAbs)
-			}
-			if _, err := statFn(absPath); err != nil {
-				return nil, status.Errorf(codes.InvalidArgument, "invalid bpf_object %s: %v", bpfObject, err)
-			}
-			bpfObjectPath = absPath
-		}
-
-		if err := validateEBPFPolicies(policies); err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "policy is not supported by eBPF enforcer yet: %v", err)
-		}
-		srvCtx := e.srv.runCtx
-		if srvCtx == nil {
-			srvCtx = context.Background()
-		}
-		opts := enforcer.EnforcementOptions{Policies: policies, CgroupPath: resolvedCgroupPath, BPFObjectPath: bpfObjectPath, DebugEBPF: debugEBPF, Context: srvCtx}
-		if err := enforceWithEBPF(opts); err != nil {
-			e.srv.emitAlert(alert.Alert{
-				Source:   "api-grpc",
-				Severity: alert.SeverityError,
-				Title:    "policy enforcement failed",
-				Message:  err.Error(),
-				DedupKey: fmt.Sprintf("%s:%s:error", policyKey, platform),
-				Details:  map[string]any{"platform": platform, "count": len(policies)},
-			})
-			logging.Errorf("failed to enforce via eBPF: %v", err)
-			return nil, status.Error(codes.Internal, "failed to enforce policy via eBPF")
-		}
-
-		e.srv.stopEnforcementRefreshLocked()
-		if needsResolution && e.srv.discovery != nil && e.srv.resolveLabelsInterval > 0 {
-			refreshCtx, refreshCancel := context.WithCancel(srvCtx)
-			e.srv.refreshCancelFn = refreshCancel
-			go enforcer.RunSelectorRefresh(refreshCtx, e.srv.discovery, basePolicies, enforcer.SelectorRefreshOptions{Scope: policyTenant, PollInterval: e.srv.resolveLabelsInterval}, func(next []policy.NetworkPolicy) error {
-				select {
-				case <-refreshCtx.Done():
-					return nil
-				default:
-				}
-				e.srv.enforcementMu.Lock()
-				defer e.srv.enforcementMu.Unlock()
-				if err := validateEBPFPolicies(next); err != nil {
-					return err
-				}
-				return enforceWithEBPF(enforcer.EnforcementOptions{Policies: next, CgroupPath: resolvedCgroupPath, BPFObjectPath: bpfObjectPath, DebugEBPF: debugEBPF, Context: refreshCtx})
-			})
-		}
-
-		_ = e.srv.audit.Log(audit.EventPolicyEnforced, "system", policyKey, "enforce", map[string]any{"platform": "linux", "count": len(policies)})
-		e.srv.emitAlert(alert.Alert{Source: "api-grpc", Severity: alert.SeverityInfo, Title: "policy enforced", Message: fmt.Sprintf("%s enforced on %s", policyKey, platform), DedupKey: fmt.Sprintf("%s:%s:success", policyKey, platform), Details: map[string]any{"platform": platform, "count": len(policies)}})
-		return &apiv1.EnforcementStartResponse{Enforced: true, Platform: platform}, nil
-	}
-
 	srvCtx := e.srv.runCtx
 	if srvCtx == nil {
 		srvCtx = context.Background()
@@ -1014,21 +898,14 @@ func (e *enforcementService) Start(ctx context.Context, req *apiv1.EnforcementSt
 }
 
 func (e *enforcementService) Stop(ctx context.Context, _ *emptypb.Empty) (*apiv1.EnforcementStopResponse, error) {
+	if enforcer.IsLinux() {
+		return nil, status.Error(codes.Unimplemented, "direct Linux enforcement is retired; stop the ztap agent process instead")
+	}
 	e.srv.enforcementMu.Lock()
 	defer e.srv.enforcementMu.Unlock()
 	e.srv.stopEnforcementRefreshLocked()
 
-	if !enforcer.IsLinux() {
-		return nil, status.Error(codes.Unimplemented, "stop is only supported for eBPF enforcement on linux")
-	}
-	if geteuid() != 0 {
-		return nil, status.Error(codes.PermissionDenied, "eBPF enforcement requires root privileges")
-	}
-	if err := stopEBPFEnforcement(); err != nil {
-		logging.Errorf("failed to stop eBPF enforcement: %v", err)
-		return nil, status.Error(codes.Internal, "failed to stop eBPF enforcement")
-	}
-	return &apiv1.EnforcementStopResponse{Stopped: true}, nil
+	return nil, status.Error(codes.Unimplemented, "stop is only supported for WFP on windows or pf on macOS")
 }
 
 func (f *flowsService) Stream(_ *emptypb.Empty, stream apiv1.FlowsService_StreamServer) error {

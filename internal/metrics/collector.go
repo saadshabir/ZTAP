@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -26,42 +27,56 @@ var (
 	once            sync.Once
 )
 
+func newCollector(registerer prometheus.Registerer) *Collector {
+	collector := &Collector{
+		flowsAllowed: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "ztap_flows_allowed_total",
+			Help: "Total number of flows allowed",
+		}),
+		flowsBlocked: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "ztap_flows_blocked_total",
+			Help: "Total number of flows blocked",
+		}),
+		anomalyScore: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "ztap_anomaly_score",
+			Help: "Current anomaly score (0-100)",
+		}),
+		policyLoadTime: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "ztap_policy_load_duration_seconds",
+			Help:    "Time taken to load policies",
+			Buckets: prometheus.DefBuckets,
+		}),
+		flowsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "ztap_flows_total",
+			Help: "Total number of network flows by action, protocol, and direction",
+		}, []string{"action", "protocol", "direction"}),
+	}
+
+	registerer.MustRegister(collector.flowsAllowed)
+	registerer.MustRegister(collector.flowsBlocked)
+	registerer.MustRegister(collector.anomalyScore)
+	registerer.MustRegister(collector.policyLoadTime)
+	registerer.MustRegister(collector.flowsTotal)
+	return collector
+}
+
 // GetCollector returns the singleton metrics collector
 func GetCollector() *Collector {
 	once.Do(func() {
-		globalCollector = &Collector{
-			flowsAllowed: prometheus.NewCounter(prometheus.CounterOpts{
-				Name: "ztap_flows_allowed_total",
-				Help: "Total number of flows allowed",
-			}),
-			flowsBlocked: prometheus.NewCounter(prometheus.CounterOpts{
-				Name: "ztap_flows_blocked_total",
-				Help: "Total number of flows blocked",
-			}),
-			anomalyScore: prometheus.NewGauge(prometheus.GaugeOpts{
-				Name: "ztap_anomaly_score",
-				Help: "Current anomaly score (0-100)",
-			}),
-			policyLoadTime: prometheus.NewHistogram(prometheus.HistogramOpts{
-				Name:    "ztap_policy_load_duration_seconds",
-				Help:    "Time taken to load policies",
-				Buckets: prometheus.DefBuckets,
-			}),
-			flowsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Name: "ztap_flows_total",
-				Help: "Total number of network flows by action, protocol, and direction",
-			}, []string{"action", "protocol", "direction"}),
-		}
-
-		// Register metrics with Prometheus
-		prometheus.MustRegister(globalCollector.flowsAllowed)
-		prometheus.MustRegister(globalCollector.flowsBlocked)
-		prometheus.MustRegister(globalCollector.anomalyScore)
-		prometheus.MustRegister(globalCollector.policyLoadTime)
-		prometheus.MustRegister(globalCollector.flowsTotal)
+		globalCollector = newCollector(prometheus.DefaultRegisterer)
 	})
 
 	return globalCollector
+}
+
+// NewRegistry creates an isolated registry and collector for an embedded
+// process such as the native Linux agent. The caller owns the returned
+// registry and may create more than one without global metric collisions.
+func NewRegistry() (*prometheus.Registry, *Collector) {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	registry.MustRegister(collectors.NewGoCollector())
+	return registry, newCollector(registry)
 }
 
 // IncFlowsAllowed increments the flows allowed counter

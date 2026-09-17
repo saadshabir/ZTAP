@@ -21,15 +21,15 @@ func newEnforceCmd(app *App) *cobra.Command {
 		Use:   "enforce -f policy.yaml",
 		Short: "Enforce zero-trust network policies",
 		Run: func(cmd *cobra.Command, args []string) {
+			if enforcer.IsLinux() {
+				logging.Fatalf("%v", enforcer.ErrLegacyLinuxEnforcementRetired)
+				return
+			}
 			central, err := app.Config()
 			if err != nil {
 				logging.Fatalf("Failed to load config: %v", err)
 			}
 			policyFile, _ := cmd.Flags().GetString("file")
-			cgroupPath, _ := cmd.Flags().GetString("cgroup")
-			bpfObject, _ := cmd.Flags().GetString("bpf-object")
-			debugEBPF, _ := cmd.Flags().GetBool("debug-ebpf")
-			selfIPs, _ := cmd.Flags().GetStringSlice("self-ip")
 
 			// Flags take precedence over config (flag > env > config > default).
 			dryRun := central.Enforcement.DryRun
@@ -129,86 +129,6 @@ func newEnforceCmd(app *App) *cobra.Command {
 			}
 
 			fmt.Printf("Loaded %d policy(ies) from %s\n", len(policies), policyFile)
-
-			if enforcer.IsLinux() {
-				if os.Geteuid() != 0 {
-					logging.Fatalf("eBPF enforcement requires root privileges")
-				}
-				if cgroupPath == "" {
-					cgroupPath = "/sys/fs/cgroup"
-				}
-				if _, err := os.Stat(cgroupPath); err != nil {
-					logging.Fatalf("Invalid cgroup path %s: %v", cgroupPath, err)
-				}
-				if bpfObject != "" {
-					if _, err := os.Stat(bpfObject); err != nil {
-						logging.Fatalf("Invalid --bpf-object %s: %v", bpfObject, err)
-					}
-				}
-				if err := enforcer.ValidatePoliciesForLinux(policies); err != nil {
-					logging.Fatalf("Policy is not supported by enforcer yet: %v", err)
-				}
-
-				opts := enforcer.EnforcementOptions{
-					Policies:      policies,
-					DryRun:        dryRun,
-					CgroupPath:    cgroupPath,
-					SelfIPs:       selfIPs,
-					BPFObjectPath: bpfObject,
-					DebugEBPF:     debugEBPF,
-					DefaultAction: defaultAction,
-					Context:       ctx,
-				}
-
-				if err := enforcer.EnforceWithEBPFIfAvailable(opts); err != nil {
-					logging.Fatalf("Failed to enforce: %v", err)
-				}
-
-				if dryRun {
-					fmt.Println("Dry-run complete. No changes were applied.")
-					return
-				}
-
-				// Anomaly detection (Phase E): advisory, batched pipeline over
-				// flow events while enforcement is active.
-				var anomalyR *anomalyRunner
-				if central.Anomaly.Enabled {
-					anomalyR, err = startAnomalyRunner(ctx, central, nil)
-					if err != nil {
-						logging.Warnf("anomaly detection disabled: %v", err)
-					}
-				}
-
-				var wg sync.WaitGroup
-				if needsResolution && resolveLabelsInterval > 0 {
-					wg.Go(func() {
-						enforcer.RunSelectorRefresh(ctx, disc, basePolicies, enforcer.SelectorRefreshOptions{PollInterval: resolveLabelsInterval}, func(next []policy.NetworkPolicy) error {
-							if err := enforcer.ValidatePoliciesForLinux(next); err != nil {
-								return err
-							}
-							nextOpts := opts
-							nextOpts.Policies = next
-							return enforcer.EnforceWithEBPFIfAvailable(nextOpts)
-						})
-					})
-				}
-
-				fmt.Println("Enforcement active. Press Ctrl+C to stop.")
-				sigCh := make(chan os.Signal, 1)
-				notifyStopSignals(sigCh)
-				<-sigCh
-				stopStopSignals(sigCh)
-				cancel()
-				wg.Wait()
-				if anomalyR != nil {
-					anomalyR.Stop()
-				}
-				if err := enforcer.StopLinuxEnforcement(); err != nil {
-					logging.Warnf("failed to stop enforcement cleanly: %v", err)
-				}
-				fmt.Println("Enforcement stopped.")
-				return
-			}
 
 			if enforcer.IsWindows() {
 				fmt.Println("Enforcing via WFP (Windows)...")

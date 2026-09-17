@@ -6,13 +6,14 @@ Current state of the ZTAP project: what has been delivered and what is planned.
 
 - Policy definition, parsing, and validation (label-based and IP-based rules)
 - Offline policy validation CLI (`ztap policy validate`)
-- Linux enforcement via eBPF (pre-compiled binaries via bpf2go)
-- iptables fallback for older Linux kernels
+- Linux enforcement via the instance-owned eBPF engine (`ztap agent`)
+- Legacy iptables/eBPF loader retained only for migration coverage; the agent has no fallback
 - macOS enforcement via pf
 - Windows enforcement via Windows Filtering Platform (WFP) (experimental)
 - Windows flow monitoring via WFP NetEvents
 - Graceful policy reload via atomic `bpf_link` updates (zero-downtime)
-- IPv6 support across eBPF, iptables, and WFP enforcers
+- IPv4 TCP/UDP enforcement in the native engine; IPv6 support remains available
+  in the Windows WFP backend
 - Arbitrary CIDRs and ICMP/ICMPv6 parity across all enforcers
 - Policy dry-run mode (`ztap enforce --dry-run`)
 - Bidirectional enforcement (ingress and egress)

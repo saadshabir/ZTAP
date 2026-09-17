@@ -80,5 +80,5 @@ func commandSkipsConfig(cmd *cobra.Command) bool {
 		return false
 	}
 	parent := cmd.Parent()
-	return parent != nil && parent.Parent() == nil && (cmd.Name() == "validate" || cmd.Name() == "version")
+	return parent != nil && parent.Parent() == nil && (cmd.Name() == "validate" || cmd.Name() == "version" || cmd.Name() == "agent")
 }

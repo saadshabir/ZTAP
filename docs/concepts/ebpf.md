@@ -18,31 +18,35 @@ No compiler toolchain is required at runtime.
 
 ### Dry-Run Mode
 
-You can verify eBPF program loading and policy map generation without attaching to the kernel:
+The Kubernetes agent can validate snapshot compilation without attaching to the kernel:
 
 ```bash
-# Validates policy compilation and map updates
-sudo ztap enforce -f policy.yaml --dry-run
+# Validates informer-snapshot compilation without kernel changes
+ztap agent --node-name "$NODE_NAME" --dry-run
 ```
 
 In dry-run mode:
 
-- Policies are parsed and validated
-- eBPF maps are prepared (keys/values generated)
-- Kernel attachment is skipped
-- Map pinning (for flow monitoring) is skipped
-- Actions are logged to stdout
+- Kubernetes objects are read from the informer snapshot and validated
+- The candidate policy set is compiled
+- Kernel attachment and map pinning are skipped
+- Reconciliation results are logged to stdout
 
 ### Graceful Policy Reload
 
-ZTAP supports atomic policy updates on Linux via `bpf_link` (kernel 5.7+). When a new policy is applied while enforcement is active:
+The Kubernetes node agent uses the instance-owned engine for atomic policy
+updates on Linux. It loads one eBPF collection for the process lifetime, fills
+the inactive policy slot, and publishes the new slot and monotonically
+increasing policy epoch with one configuration-map replacement. Existing
+links remain attached; newly selected cgroups are attached before the flip and
+removed cgroups are detached after it. The engine waits for in-flight packet
+readers before reclaiming the old slot, so a failed candidate leaves the active
+policy in place.
 
-1. A new eBPF program is loaded and verified.
-2. The existing cgroup attachment is atomically updated to point to the new program using `bpf_link_update`.
-3. Ownership of the link is transferred to the new enforcer instance.
-4. Old maps and programs are cleaned up.
-
-This ensures zero downtime and no packet drops during policy updates. If the atomic update fails, ZTAP falls back to a full detach/attach cycle.
+Links are process-owned in this release. A graceful shutdown or crash detaches
+enforcement and traffic fails open until the replacement agent completes its
+first policy apply. The retired Linux file-based `ztap enforce` surface does
+not load or attach eBPF programs; use the node agent for Linux enforcement.
 
 ### Build/Development Dependencies
 
@@ -87,99 +91,86 @@ cd bpf
 make
 ```
 
-After a manual build, the object file will be at `bpf/filter.o`. You can force ZTAP to use this local file instead of the embedded bytecode by setting an environment variable:
+After a manual build, the instance-owned object file will be at `bpf/engine.o`.
+The production agent uses the embedded engine bytecode; the retired loader does
+not accept `ZTAP_BPF_OBJECT` for Linux enforcement.
 
 ```bash
-export ZTAP_BPF_OBJECT=$PWD/bpf/filter.o
-sudo ./ztap enforce -f policy.yaml
+sudo ./ztap agent --node-name "$NODE_NAME"
 ```
 
-## Loader Search Order
+## Loader
 
-When `ZTAP_BPF_OBJECT` is not set, ZTAP uses the embedded bytecode. If `ZTAP_BPF_OBJECT` is provided, it takes precedence.
-
-Historical search paths for `filter.o` (deprecated in favor of embedding):
-
-- `<repo-root>/bpf/filter.o`
-- `/usr/local/share/ztap/bpf/filter.o`
+The Kubernetes agent always loads the embedded `bpf/engine.c` bytecode. It does
+not search the filesystem for an object file or honor `ZTAP_BPF_OBJECT`; this
+keeps the production path tied to the generated, ABI-checked engine bindings.
+The historical `bpf/filter.c` loader remains only for migration tests and is
+not a supported Linux enforcement path.
 
 ## eBPF Program Variants
 
 ZTAP provides two eBPF program variants:
 
-### 1. Strict Mode (Default: `filter_egress`)
+### 1. Native engine (Kubernetes `ztap agent`)
 
-- **Behavior**: Deny-by-default, allow only explicitly permitted traffic
-- **Use Case**: High-security environments, zero-trust networks
-- **Implementation**: Blocks all packets unless a matching policy exists
+- **Behavior**: Per-subject, direction-specific deny-by-default with node/self
+  bypasses, quarantine precedence, and epoch-scoped reply state
+- **Use Case**: Kubernetes node enforcement
+- **Implementation**: `bpf/engine.c` with bounded IPv4 parsing and LPM rules
 
-### 2. Permissive Mode (`filter_egress_permissive`)
+### 2. Retired compatibility sources
 
-- **Behavior**: Allow-by-default, block only explicitly denied traffic
-- **Use Case**: Development, testing, gradual rollout
-- **Implementation**: Allows all packets unless explicitly blocked
-
-To switch variants, modify `ebpf_linux.go`:
-
-```go
-FilterProg *ebpf.Program `ebpf:"filter_egress_permissive"`
-```
+The historical `bpf/filter.c` object and its loader remain in the repository
+only for migration and regression coverage. No production command or API route
+can select this global/default path; Linux enforcement is owned by `ztap agent`.
 
 ## Architecture
 
 ### eBPF Map Structure
 
-IPv4 Policy Key:
+The native engine owns one collection for the process lifetime. Its policy
+state is split into two slots and published through an `active_config`
+array-of-maps entry containing the active slot and policy epoch. The maps that
+carry policy state are:
 
 ```c
-struct policy_key {
-    __u64 cgroup_id;  // Source cgroup id (0 = global fallback)
-    __u32 ip;         // IP address (network byte order)
-    __u16 port;       // Port
-    __u8  protocol;   // Protocol (6=TCP, 17=UDP, 1=ICMP)
-    __u8  direction;  // 0=egress, 1=ingress
-};
-```
-
-IPv6 Policy Key:
-
-```c
-struct policy_key_v6 {
+struct subject_key {
     __u64 cgroup_id;
-    __u32 ip[4];      // IPv6 Address (128 bits)
-    __u16 port;
-    __u8  protocol;
-    __u8  direction;
+    __u32 slot;
+};
+
+struct subject_value {
+    __u8 isolated;    // DirectionEgress and/or DirectionIngress
+    __u8 quarantined; // Direction mask
+};
+
+struct policy_rule_key {
+    __u32 prefix_length; // 96 + IPv4 CIDR bits
+    __u32 meta;          // slot, direction, protocol, destination port
+    __u64 cgroup_id;
+    __u8  peer[4];
+};
+
+struct active_config_value {
+    __u32 active_slot;
+    __u64 policy_epoch;
 };
 ```
 
-```c
-struct policy_value {
-    __u8 action;      // 0=block, 1=allow
-    __u8 _pad[3];     // Padding for alignment
-};
-```
-
-Additional maps (used for Kubernetes-style “selected pods only” semantics in scoped mode):
-
-```c
-// Set of cgroup ids selected by at least one policy
-map enforced_cgroups: key=__u64 (cgroup id), value=__u8 (present)
-
-// Single-element config (array[1])
-struct enforcement_config { __u8 selected_only; };
-map enforcement_config_map: key=__u32, value=enforcement_config
-```
+The collection also owns stable flow and decision maps, an epoch-scoped LRU
+reply map, the cgroup-local attachment identity map, and the pinned
+`agent_status` map. There is no global `cgroup_id = 0` fallback in this
+engine.
 
 Lookup behavior:
 
-- The dataplane looks up policies using the current process cgroup id.
-- Legacy (global) mode: if there is no match for the current cgroup id, it falls back to `cgroup_id = 0`.
-- Scoped (per-cgroup) mode: ZTAP enables `enforcement_config.selected_only=1` and populates `enforced_cgroups`.
-  - If the current cgroup is not in `enforced_cgroups`, traffic is allowed (pod not selected by any policy).
-  - If the current cgroup is in `enforced_cgroups` and there is no matching rule, traffic is blocked (default-deny on miss for selected pods).
-- IPv4 packets are looked up in `policy_map`.
-- IPv6 packets are looked up in `policy_map_v6`.
+- The attachment-owned cgroup identity selects the subject state for the
+  active slot. A missing subject is unselected traffic and is allowed.
+- A selected direction first honors the node and self bypass sets, then
+  quarantine, reply state, and the compiled IPv4 rule set. A rule miss is
+  default deny.
+- The engine parses bounded IPv4 TCP/UDP headers. Isolated IPv6, fragmented,
+  malformed, and unsupported traffic is denied with a recorded reason.
 
 ### Flow Events Ring Buffer
 
@@ -187,52 +178,57 @@ Flow events are streamed to userspace via a ring buffer:
 
 ```c
 struct flow_event {
-    __u64 timestamp_ns;  // Kernel timestamp (nanoseconds since boot)
-    __u32 src_ip[4];     // Source IP address (v4 uses first word)
-    __u32 dest_ip[4];    // Destination IP address (v4 uses first word)
-    __u16 src_port;      // Source port
-    __u16 dest_port;     // Destination port
-    __u8  protocol;      // Protocol (TCP=6, UDP=17, ICMP=1)
-    __u8  direction;     // 0=egress, 1=ingress
-    __u8  action;        // 0=blocked, 1=allowed
-    __u8  family;        // 4=IPv4, 6=IPv6
+    __u64 timestamp_ns;   // Kernel timestamp (nanoseconds since boot)
+    __u64 policy_epoch;   // Policy generation that decided the packet
+    __u64 cgroup_id;      // Subject cgroup identified by the attachment
+    __u32 src_ip[4];      // Source IP address (v4 uses first word)
+    __u32 dest_ip[4];     // Destination IP address (v4 uses first word)
+    __u16 src_port;       // Source port
+    __u16 dest_port;      // Destination port
+    __u8  protocol;       // Protocol (TCP=6, UDP=17)
+    __u8  direction;      // 0=egress, 1=ingress
+    __u8  action;         // 0=blocked, 1=allowed
+    __u8  reason;         // Bounded decision reason
+    __u8  family;         // 4=IPv4, 6=IPv6
+    __u8  schema_version; // Binary event schema (currently 1)
+    __u8  _padding[6];
 };
 ```
 
-The ring buffer (256KB) is intended to enable real-time flow monitoring:
+The 1 MiB ring buffer is intended to enable real-time flow monitoring. The
+JSON output includes the epoch, cgroup ID, reason, and schema version so a
+consumer can distinguish events from different policy generations.
 
-On Linux, `ztap enforce` pins the `flow_events` ring buffer map at:
+On Linux, the native `ztap agent` pins the `flow_events` ring buffer map at:
 
 `/sys/fs/bpf/ztap/flow_events`
 
-`ztap flows --follow` opens this pinned map and streams events in real time. If enforcement isn't active (or the map isn't pinned), `ztap flows` falls back to simulated output.
+`ztap flows --follow` opens this pinned map and the companion `agent_status`
+map, then streams events in real time. It holds `/run/ztap/flows.lock` (or the
+directory supplied with `--run-dir`) so only one reader consumes the node's
+ring buffer. The reader stops with a clear error when the status schema is
+incompatible, the agent stops enforcing, the heartbeat is older than five
+seconds, or the agent epoch changes. If the native maps are unavailable, the
+interactive command retains its compatibility simulated output.
 
 ### Attachment Points
 
-eBPF programs attach to cgroups using `BPF_CGROUP_INET_EGRESS` (and ingress where supported):
+The native programs attach to cgroups using both `BPF_CGROUP_INET_EGRESS` and
+`BPF_CGROUP_INET_INGRESS`:
 
-- **Scope**: Applies to all processes in the cgroup
-- **Direction**: Egress (outbound) traffic only
+- **Scope**: Applies to all processes in the selected cgroup and descendants
+- **Direction**: Independent egress and ingress direction masks
 - **Performance**: Inline filtering with minimal latency
 
 ## Usage
 
 ### Basic Usage (with ZTAP)
 
-ZTAP automatically loads and attaches eBPF programs when policies are enforced:
+The Kubernetes node agent loads and attaches the instance-owned eBPF engine:
 
 ```bash
-# Enforce a policy (requires root on Linux)
-sudo ztap enforce -f policy.yaml
-
-# Override cgroup path (Linux)
-sudo ztap enforce -f policy.yaml --cgroup /sys/fs/cgroup
-
-# Point directly at a compiled object file (Linux)
-sudo ztap enforce -f policy.yaml --bpf-object /absolute/path/to/bpf/filter.o
-
-# Enable debug logs for object load attempts (Linux)
-sudo ztap enforce -f policy.yaml --debug-ebpf
+# Start the node-local reconciler (requires the documented eBPF capabilities)
+sudo ztap agent --node-name "$NODE_NAME"
 
 # Check enforcement status
 ztap status
@@ -240,33 +236,23 @@ ztap status
 
 Notes:
 
-- `ztap enforce` keeps running while enforcement is active. Press Ctrl+C to detach and exit.
-- The eBPF enforcer supports arbitrary IPv4/IPv6 `ipBlock.cidr` values via LPM trie lookups.
-  TCP, UDP, and ICMP protocols are supported.
-  - For `protocol: ICMP`, the policy `port` is accepted by validation but ignored during enforcement.
-  Policies that use selector targets (`podSelector` with optional `namespaceSelector`) can be enforced on Linux by resolving selectors into `/32` or `/128` `ipBlock` rules via discovery:
-  - In-cluster: run `ztap agent` (Kubernetes discovery is used automatically)
-  - Local/CLI: run `ztap enforce` with `discovery.backend: k8s` configured (kubeconfig-based)
-    - `ztap enforce` refreshes selector resolution while it is running; tune with `--resolve-labels-interval` (default: `5s`; set to `0` to resolve once)
-    - If a selector currently resolves to zero targets, enforcement still starts; the rule becomes active when targets appear and resolution refreshes
-    Cloud sync backends can also translate selectors (for example, `ztap gcp firewall-sync`).
+- `ztap agent` owns the cgroup links and detaches them on shutdown.
+- Linux policy input is the Kubernetes informer snapshot; direct file-based
+  enforcement through `ztap enforce` is retired.
+- The engine supports IPv4 TCP/UDP rules and explicit node/self bypasses. IPv6,
+  malformed, fragmented, and unsupported isolated traffic is denied.
 
-### Manual Testing (Advanced)
+### Manual Inspection (Advanced)
 
-For testing the eBPF program directly:
+The supported Linux process owns attachment and map lifecycle. Inspect the
+running agent with `bpftool`; direct `bpftool prog load` commands target the
+retired compatibility source and are useful only when maintaining its
+migration tests.
 
 ```bash
-# Load the program
-sudo bpftool prog load filter.o /sys/fs/bpf/ztap_filter type cgroup/skb
-
-# Attach to cgroup
-sudo bpftool cgroup attach /sys/fs/cgroup egress pinned /sys/fs/bpf/ztap_filter
-
-# View loaded programs
+# View the native programs and maps owned by the agent
 sudo bpftool prog show
-
-# Detach
-sudo bpftool cgroup detach /sys/fs/cgroup egress pinned /sys/fs/bpf/ztap_filter
+sudo bpftool map show
 ```
 
 ## Troubleshooting
@@ -288,24 +274,15 @@ make clean && make
 
 The Makefile includes `-g` by default. If you removed it, add it back to `CLANG_FLAGS`.
 
-Additionally, you can point the loader directly to the object and enable debug logging:
+The agent uses its embedded, generated object and reports the failing
+prerequisite directly. Check cgroup v2 and bpffs mounts and run it with the
+documented eBPF capabilities before investigating verifier output.
 
-```bash
-export ZTAP_BPF_OBJECT=/absolute/path/to/bpf/filter.o
-export ZTAP_DEBUG_EBPF=1
-```
+### "eBPF object load failed"
 
-Then re-run your test or binary.
-
-### "eBPF object file not found"
-
-**Error**: `eBPF object file not found. Please compile with: cd bpf && make`
-
-**Solution**: Compile the eBPF program:
-
-```bash
-cd bpf && make
-```
+The production agent does not load an object from the filesystem. Re-run the
+build-time generation check with `clang-18`, then verify the runtime cgroup v2,
+bpffs, and capability prerequisites described above.
 
 ### "failed to remove memlock"
 
@@ -314,7 +291,7 @@ cd bpf && make
 **Solution**: Run with root privileges or add `CAP_BPF` capability:
 
 ```bash
-sudo ztap enforce -f policy.yaml
+sudo ztap agent --node-name "$NODE_NAME"
 # OR
 sudo setcap cap_bpf,cap_net_admin+ep ./ztap
 ```
@@ -435,7 +412,7 @@ All eBPF programs are verified by the kernel before loading:
 
 ### Testing Changes
 
-After modifying `filter.c`:
+After modifying `filter.c` or `engine.c`:
 
 ```bash
 cd bpf
@@ -465,13 +442,14 @@ sudo cat /sys/kernel/debug/tracing/trace_pipe
 # Run enforcer tests (requires Linux)
 go test ./internal/enforcer -v
 
-# Run full eBPF verification (requires root + build tags)
-sudo go test -tags=integration ./internal/enforcer -run TestEBPFIntegration -v
+# Run native engine verification (requires Linux root + integration tag)
+sudo go test -race -tags=integration -timeout=10m ./internal/enforcer -run '^(TestEBPFIntegrationPhase0KernelPreflight|TestLinuxEngine)' -v
 ```
 
-The integration test recompiles `bpf/filter.o`, attaches the compiled program to a temporary
-cgroup, and asserts that policy entries populate the eBPF map correctly. Ensure the kernel headers
-match the running kernel before executing it.
+The native suite loads the embedded engine, attaches it to temporary cgroups,
+and exercises packet decisions, lifecycle status, slot cleanup, and repeated
+apply/close cycles. The older `TestEBPFIntegration*` tests remain migration
+coverage for `bpf/filter.c`.
 
 ## Platform Support
 

@@ -28,7 +28,7 @@ Build and run ZTAP container standalone:
 
 ```bash
 # Build the image
-docker build -t ztap:latest .
+docker build -t ztap:v0.1.0 .
 
 # Run the container
 docker run -d \
@@ -39,7 +39,7 @@ docker run -d \
   --cap-add=BPF \
   -p 9090:9090 \
   -v $(pwd)/examples:/etc/ztap/examples:ro \
-  ztap:latest metrics --port 9090
+  ztap:v0.1.0 metrics --port 9090
 ```
 
 ## Services
@@ -49,12 +49,26 @@ The Docker Compose stack includes:
 ### ZTAP Core (`ztap`)
 
 - **Port**: 9090 (metrics)
-- **Capabilities**: Requires privileged mode for eBPF on Linux (or `NET_ADMIN` for iptables fallback)
+- **Capabilities**: Requires the documented eBPF capabilities and cgroup/bpffs
+  mounts for the Linux agent
 - **Volumes**: Policy examples, logs, and data
 - **Self-Contained**: The container image embeds the pre-compiled eBPF bytecode. No C source code or compiler toolchain is required at runtime.
-- **Command**: Runs metrics server by default. `ztap agent` and non-dry-run
-  `ztap enforce` embed the metrics endpoint while they run, so anomaly scores
-  are exported by the same process that receives the flows.
+- **Command**: Runs the standalone metrics server by default. `ztap agent`
+  embeds the node health, readiness, and metrics endpoint while it runs.
+- **Linux agent lifecycle**: `ztap agent` owns its eBPF links and detaches them
+  when it exits. A crash or restart therefore creates a fail-open interval
+  until the replacement agent completes its first policy apply; monitor the
+  agent restart and reconciliation interval separately from policy health.
+- **Linux agent status**: the native agent listens on `--listen` (default
+  `:9090`) and serves `/healthz`, `/readyz`, and `/metrics`. Readiness returns
+  503 during startup, dry-run, local quarantine, or an apply failure.
+- The native `/metrics` endpoint exposes bounded policy reconciliation,
+  compiled-rule, subject/quarantine, active-epoch, packet-decision,
+  flow-drop, slot-cleanup, unresolved-running-container, and
+  Pod-start-to-classification metrics alongside the readiness and enforcement
+  gauges. The agent emits a startup warning when it cannot determine whether a
+  separate CNI NetworkPolicy implementation is also enforcing traffic; running
+  both produces intersected decisions and is outside the supported profile.
 
 ZTAP can also run a REST API server (see `ztap api serve`). If you run it in a container, publish the configured listen port (default `127.0.0.1:8080` in `config.yaml.example`). Secure it using TLS by mounting certificates into the container and configuring `config.yaml`.
 
@@ -160,10 +174,8 @@ For eBPF enforcement on Linux:
   - `CAP_BPF`
 - Access to `/sys/fs/cgroup` for cgroup attachment
 
-For iptables fallback (older kernels or non-BPF):
-
-- Capabilities: `CAP_NET_ADMIN`
-- Config: Can force via `ZTAP_FORCE_IPTABLES=1` if BPF is present but undesired.
+The Linux agent does not fall back to iptables. The retained iptables code is a
+compatibility surface scheduled for the Phase 4 removal inventory.
 
 ## Usage Examples
 
@@ -173,28 +185,29 @@ For iptables fallback (older kernels or non-BPF):
 # Copy policy to container
 docker cp examples/web-to-db.yaml ztap:/tmp/
 
-# Enforce the policy
-docker exec -it ztap ztap enforce -f /tmp/web-to-db.yaml
+# Start the Kubernetes node agent (instance-owned eBPF engine)
+docker exec -it ztap ztap agent --node-name "$NODE_NAME"
 ```
 
 Notes:
 
-- On Linux, `ztap enforce` keeps running while enforcement is active. Press Ctrl+C to detach and exit.
-- The Linux eBPF enforcer supports IPv4/IPv6 `ipBlock.cidr` (arbitrary CIDRs) and TCP/UDP/ICMP.
-  - For `protocol: ICMP`, the policy `port` is accepted by validation but ignored during enforcement.
-  - If eBPF isn't available (or `ZTAP_FORCE_IPTABLES=1`), ZTAP falls back to iptables.
-  Policies that use selector targets (`podSelector` with optional `namespaceSelector`) can be enforced by resolving selectors into host CIDRs (`/32` for IPv4, `/128` for IPv6) `ipBlock` rules via discovery:
-  - In-cluster: run `ztap agent`
-  - Local/CLI: run `ztap enforce` with `discovery.backend: k8s` configured
-    - Tune refresh with `--resolve-labels-interval` (default: `5s`; set to `0` to resolve once)
-    - If a selector currently resolves to zero targets, enforcement still starts; the rule becomes active when targets appear and resolution refreshes
-    Cloud sync backends may still translate selectors (for example, `ztap gcp firewall-sync` resolves `podSelector` via GCE instance labels).
+- On Kubernetes Linux nodes, run `ztap agent` for the instance-owned engine.
+  Its links are process-owned: stopping or crashing the agent detaches
+  enforcement and traffic fails open until the replacement agent completes its
+  first policy apply. Pressing Ctrl+C therefore has the same planned fail-open
+  interval as a restart.
+- Direct Linux file based enforcement through `ztap enforce` is retired. The
+  node agent owns the cgroup links and compiles informer snapshots through the
+  instance-owned engine; it never falls back to iptables.
 
 Kubernetes multi-namespace agent mode:
 
-- Watch an allow-list: `ztap agent --namespaces ns-a,ns-b`
-- Watch all namespaces: `ztap agent --all-namespaces`
-- Tenant isolation requires Linux eBPF (iptables fallback can't guarantee isolation)
+- Run one node-local agent with the required node identity:
+  `ztap agent --node-name "$NODE_NAME"`
+- The agent watches the cluster informer view and selects only Pods scheduled
+  on that node; NetworkPolicy namespace and pod selectors determine peers.
+- Tenant isolation requires the instance-owned Linux eBPF engine. Attachment
+  failure is reported and does not silently fall back to iptables.
 
 ### View Status
 

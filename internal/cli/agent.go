@@ -1,192 +1,135 @@
 package cli
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
-	"ztap/internal/audit"
-	"ztap/internal/cluster"
-	"ztap/internal/discovery"
-	"ztap/internal/enforcer"
 	"ztap/internal/logging"
 
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
-func newAgentCmd(app *App) *cobra.Command {
+// newAgentCmd starts the node-local Kubernetes reconciler. The reconciler is
+// deliberately the only production path from Kubernetes objects to the
+// instance-owned enforcement engine; legacy ConfigMap/discovery enforcement
+// is kept available to older commands but is not used by `ztap agent`.
+func newAgentCmd(_ *App) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "agent",
 		Short: "Run ZTAP node agent for Kubernetes enforcement",
-		Run: func(cmd *cobra.Command, args []string) {
-			central, err := app.Config()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			nodeName, err := cmd.Flags().GetString("node-name")
 			if err != nil {
-				logging.Fatalf("Failed to load config: %v", err)
+				return err
 			}
-			namespace, _ := cmd.Flags().GetString("namespace")
-			namespacesCSV, _ := cmd.Flags().GetString("namespaces")
-			allNamespaces, _ := cmd.Flags().GetBool("all-namespaces")
-			cgroupPath, _ := cmd.Flags().GetString("cgroup")
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-
-			var namespaces []string
-			if namespacesCSV != "" {
-				split := strings.SplitSeq(namespacesCSV, ",")
-				for s := range split {
-					s = strings.TrimSpace(s)
-					if s != "" {
-						namespaces = append(namespaces, s)
-					}
-				}
+			nodeName = strings.TrimSpace(nodeName)
+			if nodeName == "" {
+				return errors.New("--node-name is required")
 			}
-
-			if !allNamespaces && len(namespaces) == 0 && namespace == "" {
-				namespace = os.Getenv("ZTAP_NAMESPACE")
-				if namespace == "" {
-					namespace = "default"
-				}
+			if _, err := configureNativeAgentLogging(cmd); err != nil {
+				return err
 			}
-
-			config, err := rest.InClusterConfig()
+			kubeconfig, err := cmd.Flags().GetString("kubeconfig")
 			if err != nil {
-				logging.Fatalf("Failed to get in-cluster config: %v", err)
+				return err
 			}
-
-			auditOpts, _, err := loadAuditConfig(central)
+			cgroupRoot, err := cmd.Flags().GetString("cgroup-root")
 			if err != nil {
-				logging.Fatalf("Failed to load audit config: %v", err)
+				return err
 			}
-			var auditLogger *audit.AuditLogger
-			if auditOpts.LogPath != "" {
-				al, err := audit.NewAuditLoggerWithOptions(auditOpts)
-				if err != nil {
-					logging.Warnf("failed to initialize audit logger: %v", err)
-				} else {
-					auditLogger = al
-				}
+			legacyCgroup, err := cmd.Flags().GetString("cgroup")
+			if err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("cgroup") && !cmd.Flags().Changed("cgroup-root") {
+				cgroupRoot = legacyCgroup
+			}
+			bpffsRoot, err := cmd.Flags().GetString("bpffs-root")
+			if err != nil {
+				return err
+			}
+			runDir, err := cmd.Flags().GetString("run-dir")
+			if err != nil {
+				return err
+			}
+			listen, err := cmd.Flags().GetString("listen")
+			if err != nil {
+				return err
+			}
+			dryRun, err := cmd.Flags().GetBool("dry-run")
+			if err != nil {
+				return err
 			}
 
+			config, err := loadAgentConfig(kubeconfig)
+			if err != nil {
+				return fmt.Errorf("load kubernetes config: %w", err)
+			}
 			clientset, err := kubernetes.NewForConfig(config)
 			if err != nil {
-				logging.Fatalf("Failed to create kubernetes client: %v", err)
-			}
-			if (allNamespaces || len(namespaces) > 1) && !enforcer.CanUseEBPF() {
-				logging.Warn("multi-tenant mode without eBPF; tenant isolation is not guaranteed", nil)
+				return fmt.Errorf("create kubernetes client: %w", err)
 			}
 
-			var policySync *cluster.K8sPolicySync
-			discoveryNamespace := namespace
-			scopeInfo := namespace
-			switch {
-			case allNamespaces:
-				policySync = cluster.NewK8sPolicySyncAllNamespaces(clientset)
-				discoveryNamespace = ""
-				scopeInfo = "all namespaces"
-			case len(namespaces) > 0:
-				policySync = cluster.NewK8sPolicySyncNamespaces(clientset, namespaces)
-				if len(namespaces) == 1 {
-					discoveryNamespace = namespaces[0]
-					scopeInfo = namespaces[0]
-				} else {
-					discoveryNamespace = ""
-					scopeInfo = strings.Join(namespaces, ",")
-				}
-			default:
-				policySync = cluster.NewK8sPolicySync(clientset, namespace)
-			}
-
-			var disc interface {
-				Start(ctx context.Context) error
-				Stop() error
-				ResolveLabels(labels map[string]string) ([]string, error)
-				RegisterService(name string, ip string, labels map[string]string) error
-				DeregisterService(name string) error
-				Watch(ctx context.Context, labels map[string]string) (<-chan []string, error)
-			}
-			if allNamespaces || len(namespaces) > 1 {
-				disc, err = discovery.NewK8sDiscoveryAllNamespaces(clientset)
-				if err != nil {
-					logging.Fatalf("Failed to create kubernetes discovery: %v", err)
-				}
-			} else {
-				disc, err = discovery.NewK8sDiscovery(clientset, discoveryNamespace)
-				if err != nil {
-					logging.Fatalf("Failed to create kubernetes discovery: %v", err)
-				}
-			}
-
-			pe := enforcer.NewPolicyEnforcer(enforcer.PolicyEnforcerConfig{
-				PolicySync:      policySync,
-				Discovery:       disc,
-				SubjectResolver: newK8sSubjectResolver(clientset, cgroupPath),
-				CgroupPath:      cgroupPath,
-				ResolveLabels:   true, // Enable auto-discovery in agent mode
-				DryRun:          dryRun,
-				AuditLogger:     auditLogger,
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return runNativeKubernetesAgent(ctx, clientset, NativeAgentOptions{
+				NodeName:   nodeName,
+				Kubeconfig: kubeconfig,
+				CgroupRoot: cgroupRoot,
+				BPFFSRoot:  bpffsRoot,
+				RunDir:     runDir,
+				Listen:     listen,
+				DryRun:     dryRun,
 			})
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			if err := disc.Start(ctx); err != nil {
-				logging.Fatalf("Failed to start discovery: %v", err)
-			}
-
-			if err := policySync.Start(ctx); err != nil {
-				logging.Fatalf("Failed to start policy sync: %v", err)
-			}
-
-			if err := pe.Start(ctx); err != nil {
-				logging.Fatalf("Failed to start policy enforcer: %v", err)
-			}
-
-			// Anomaly detection (Phase E): async batched pipeline over the
-			// flow monitor, behind anomaly.enabled. Detection is advisory —
-			// a failure here must not take down enforcement.
-			var anomalyR *anomalyRunner
-			if central.Anomaly.Enabled {
-				anomalyR, err = startAnomalyRunner(ctx, central, auditLogger)
-				if err != nil {
-					logging.Warnf("anomaly detection disabled: %v", err)
-				}
-			}
-
-			fmt.Printf("ZTAP Agent started (%s). Watching for policies...\n", scopeInfo)
-
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-			<-sigCh
-
-			fmt.Println("Shutting down agent...")
-			cancel()
-			if anomalyR != nil {
-				anomalyR.Stop()
-			}
-			if err := disc.Stop(); err != nil {
-				logging.Warnf("failed to stop discovery: %v", err)
-			}
-			if err := pe.Stop(); err != nil {
-				logging.Warnf("failed to stop policy enforcer: %v", err)
-			}
-			if auditLogger != nil {
-				if err := auditLogger.Close(); err != nil {
-					logging.Warnf("failed to close audit logger: %v", err)
-				}
-			}
-			if err := policySync.Stop(); err != nil {
-				logging.Warnf("failed to stop policy sync: %v", err)
-			}
 		},
 	}
-	c.Flags().String("namespace", "", "Kubernetes namespace to watch for policies")
-	c.Flags().String("namespaces", "", "Comma-separated list of namespaces to watch for policies")
-	c.Flags().Bool("all-namespaces", false, "Watch for policies across all namespaces")
-	c.Flags().String("cgroup", "/sys/fs/cgroup", "Cgroup v2 path for eBPF attachment (Linux only)")
-	c.Flags().Bool("dry-run", false, "Simulate enforcement without making system changes")
+	c.Flags().String("node-name", "", "Kubernetes node name to reconcile (required)")
+	c.Flags().String("kubeconfig", "", "Path to kubeconfig; empty uses in-cluster credentials")
+	c.Flags().String("cgroup-root", "/sys/fs/cgroup", "Mounted cgroup v2 root used for subject attachment")
+	c.Flags().String("cgroup", "", "Deprecated alias for --cgroup-root")
+	c.Flags().String("bpffs-root", "/sys/fs/bpf", "Mounted bpffs root used for stable engine maps")
+	c.Flags().String("run-dir", "/run/ztap", "Directory containing the node-agent lock")
+	c.Flags().String("listen", ":9090", "Local health, readiness, and metrics listen address")
+	c.Flags().Bool("dry-run", false, "Compile snapshots without loading or attaching eBPF")
 	return c
+}
+
+func loadAgentConfig(kubeconfig string) (*rest.Config, error) {
+	if kubeconfig = strings.TrimSpace(kubeconfig); kubeconfig != "" {
+		return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	}
+	return rest.InClusterConfig()
+}
+
+// The root command skips the retired file-based configuration path for agent.
+// Keep its process logging independent while honoring the inherited log flags.
+func configureNativeAgentLogging(cmd *cobra.Command) (*logging.Logger, error) {
+	if cmd == nil {
+		return nil, errors.New("agent command is nil")
+	}
+	config := logging.DefaultConfig()
+	if level, _ := cmd.Flags().GetString("log-level"); level != "" {
+		config.Level = level
+	}
+	if format, _ := cmd.Flags().GetString("log-format"); format != "" {
+		config.Format = format
+	}
+	if file, _ := cmd.Flags().GetString("log-file"); file != "" {
+		config.File = file
+	}
+	logger, err := logging.Configure(config)
+	if err != nil {
+		return nil, fmt.Errorf("configure native agent logging: %w", err)
+	}
+	if strings.TrimSpace(config.File) == "" {
+		logger.SetOutput(os.Stderr)
+	}
+	return logger, nil
 }

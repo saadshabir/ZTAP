@@ -52,16 +52,18 @@ ResolveLabels(labels map[string]string) ([]string, error)
 - **Linux**: eBPF (Primary)
   - Attach to cgroup hooks (egress and ingress)
   - Uses `bpf_link` for atomic, graceful policy reloads without connection drops
-  - Per-cgroup policy keys (Kubernetes agent programs per-pod cgroup rules)
-  - In scoped mode, “selected pods only” semantics are enabled so pods without policies are not impacted
+  - Per-subject policy keys (the Kubernetes agent programs selected pod cgroups)
+  - Unselected cgroups remain allowed; selected directions default deny on a rule miss
   - Kernel-level enforcement with BTF support
   - Safe packet parsing using bpf_skb_load_bytes
   - Bidirectional filtering (cgroup_skb/egress and cgroup_skb/ingress)
-  - Dual-stack support (IPv4 and IPv6)
-- **Linux**: iptables (Fallback)
-  - Used automatically if kernel < 5.7 or BPF unavailable (or `ZTAP_FORCE_IPTABLES=1`)
-  - Manages `ZTAP-INGRESS` and `ZTAP-EGRESS` chains
-  - Uses `iptables-restore` and `ip6tables-restore` for atomic updates
+  - IPv4 TCP/UDP enforcement; isolated IPv6, malformed, fragmented, and other
+    unsupported packets are denied explicitly
+- **Linux**: iptables (retained compatibility code)
+  - The Kubernetes agent fails closed at startup when its cgroup v2/bpffs/eBPF
+    prerequisites are unavailable; it never falls back to iptables.
+  - The old fallback implementation remains parked for the Phase 4 removal
+    inventory.
 - **macOS**: pf (Packet Filter)
   - Manages `/etc/pf.anchors/ztap`
   - Updates `/etc/pf.conf`
@@ -73,11 +75,17 @@ ResolveLabels(labels map[string]string) ([]string, error)
   - Supports IPv4/IPv6 `ipBlock.cidr` (arbitrary CIDRs) and TCP/UDP/ICMP (ICMP ignores `port`)
   - Permit-only by default; optional strict default-deny can be enabled with `ZTAP_WFP_STRICT=1`
 
-**Key Functions**:
+**Linux agent boundary**:
 
 ```go
-EnforceWithEBPFIfAvailable(opts EnforcementOptions) error
-StopEBPFEnforcement() error
+type Engine interface {
+    Apply(context.Context, policy.PolicySet) error
+    Close() error
+}
+
+// The node agent owns one Engine instance for its full process lifetime.
+ztap agent --node-name <node>
+// Direct Linux file/API enforcement is retired.
 EnforceWithPF(opts EnforcementOptions)
 EnforceWithWFP(opts EnforcementOptions) error
 StopWFPEnforcement() error
@@ -166,7 +174,7 @@ GetCollector() *Collector
 StartServer(port int) error
 ```
 
-### 7. Kubernetes Operator + Node Agent (WIP)
+### 7. Kubernetes Operator + Node Agent
 
 **Responsibility**: Kubernetes-native policy authoring and distribution using a CRD and per-node agents
 
@@ -176,13 +184,11 @@ StartServer(port int) error
   - Watches `ZtapNetworkPolicy` (group `ztap.io/v1alpha1`)
   - Converts to internal `ztap/v1` policy YAML and validates via `internal/policy`
   - Publishes validated policies into a ConfigMap “policy store”
-- **Node Agent** (`ztap agent`)
-  - Watches the ConfigMap policy store via a Kubernetes-backed PolicySync (`internal/cluster/policy_sync_k8s.go`)
-  - Enforces policies via the existing `PolicyEnforcer`
-  - Resolves selectors (`matchLabels` + `matchExpressions`, optionally with `namespaceSelector`) to pod IPs using Kubernetes discovery:
-    - single-namespace: `internal/discovery/k8s_discovery.go`
-    - multi-namespace/all namespaces: `internal/discovery/k8s_discovery_all_namespaces.go` (tenant-scoped)
-  - Translates `podSelector` targets into concrete host CIDRs (`/32` for IPv4, `/128` for IPv6) `ipBlock` rules and re-applies enforcement when the resolved Pod IP set changes
+- **Node Agent** (`ztap agent --node-name <node>`)
+  - Watches NetworkPolicy, Pod, Namespace, and Node informer caches
+  - Builds one immutable cluster snapshot and compiles it through the native policy package
+  - Resolves live containerd/systemd cgroups for local Pods and applies complete candidates through the instance-owned `Engine`
+  - Keeps the last applied candidate when a later snapshot cannot be compiled or attached
 
 ## Data Flow
 
@@ -192,8 +198,8 @@ User
 ├─> CLI Command (enforce/status/logs)
 │
 ├─> Kubernetes (WIP)
-│   ├─> Operator (CRD -> validated policy ConfigMaps)
-│   └─> Node Agent (watches ConfigMaps -> PolicyEnforcer)
+│   ├─> Operator (CRD -> validated policy state)
+│   └─> Node Agent (informers -> immutable snapshot -> native compiler -> Engine)
 │
 ├─> API Server (HTTP/gRPC)
 │

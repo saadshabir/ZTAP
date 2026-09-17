@@ -2,6 +2,7 @@ GO ?= go
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOLANGCI_LINT_CACHE ?= $(CURDIR)/.cache/golangci-lint
 GOFLAGS ?= -buildvcs=false
+BPF2GO_CC ?= clang-18
 
 BIN_DIR := $(CURDIR)/bin
 TOOLS_DIR := $(BIN_DIR)/tools
@@ -49,10 +50,10 @@ lint: fmt-check $(GOLANGCI_LINT) $(ACTIONLINT)
 check: build test vet lint
 
 generate:
-	GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) generate ./internal/enforcer/...
+	BPF2GO_CC="$(BPF2GO_CC)" GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) generate ./internal/enforcer/...
 
 check-generated: generate
-	git diff --exit-code -- internal/enforcer/bpf_bpfel.go internal/enforcer/bpf_bpfeb.go
+	git diff --exit-code -- internal/enforcer/bpf_bpfel.go internal/enforcer/bpf_bpfeb.go internal/enforcer/engine_bpfel.go internal/enforcer/engine_bpfeb.go
 
 integration:
 	@test "$$($(GO) env GOOS)" = linux || { printf '%s\n' 'integration requires Linux'; exit 2; }

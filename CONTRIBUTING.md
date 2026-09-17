@@ -103,7 +103,7 @@ If you change files under `proto/`, regenerate generated Go code:
 
 ### eBPF (Linux)
 
-If you change `bpf/filter.c`, rebuild the object:
+If you change `bpf/filter.c` or `bpf/engine.c`, rebuild the objects:
 
 ```bash
 make -C bpf

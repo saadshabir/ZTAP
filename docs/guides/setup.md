@@ -6,7 +6,8 @@ Installation, configuration, and first-steps walkthrough for all supported platf
 
 ### System Requirements
 
-- **Operating System**: macOS 12+, Linux (eBPF requires kernel ≥5.7; automatically falls back to iptables on older kernels), or Windows (WFP)
+- **Operating System**: macOS 12+, Linux (the agent requires cgroup v2/bpffs
+  and eBPF capabilities), or Windows (WFP)
 - **Go**: 1.25 or later
 - **Memory**: 2 GB RAM minimum
 - **Disk**: 200 MB for binary, policies, and logs
@@ -14,7 +15,7 @@ Installation, configuration, and first-steps walkthrough for all supported platf
 
 ### Optional Components (Development)
 
-- **Clang/LLVM**: Required only if you plan to modify and recompile the eBPF source code (`bpf/filter.c`).
+- **Clang/LLVM**: Required only if you plan to modify and recompile the eBPF sources (`bpf/filter.c` or `bpf/engine.c`).
 - **AWS Account**: For cloud integration and Security Group sync
 - **Azure Subscription**: For cloud integration and NSG sync
 - **Docker**: For full stack deployment (Prometheus + Grafana + Anomaly Detector)
@@ -62,26 +63,32 @@ docker compose up -d
 
 See [Deployment Guide](deployment.md) for detailed Docker deployment.
 
-## Kubernetes (Operator + Agent)
+## Kubernetes (native NetworkPolicy agent)
 
-ZTAP includes a Kubernetes operator and an in-cluster node agent path that publishes policies from a CRD and enforces them on nodes.
+The streamlined Kubernetes path watches standard
+`networking.k8s.io/v1` `NetworkPolicy` resources directly from a node-local
+agent. The legacy custom-CRD/operator bundle uses a different policy source and
+must not run alongside this agent.
 
-Install the operator + agent bundle:
+Install the native agent:
 
 ```bash
-# Build images (operator + agent)
-docker build -t ztap:latest .
-docker build -f Dockerfile.operator -t ztap-operator:latest .
+# Build the agent image
+docker build -t ztap:v0.1.0 .
 
 # Push to your registry (or load into your local cluster)
-docker push ztap:latest
-docker push ztap-operator:latest
+docker push ztap:v0.1.0
 
-# Apply the full bundle (Namespace + CRD + Operator + Agent)
-kubectl apply -f deployments/kubernetes/ztap-install.yaml
+# Apply the native node-agent manifest
+kubectl apply -f deployments/kubernetes/ztap-agent.yaml
 ```
 
-Install the CRD and operator separately (dev-only):
+`deployments/kubernetes/ztap-install.yaml` and
+`deployments/kubernetes/ztap-operator.yaml` are retained for compatibility with
+the pre-streamlining custom CRD and are not part of the native agent profile.
+
+If you are maintaining that legacy profile separately, install its CRD and
+operator explicitly:
 
 ```bash
 # Build an operator image
@@ -93,15 +100,18 @@ kubectl apply -f deployments/kubernetes/ztap-operator.yaml
 ```
 
 - Entry points:
-  - Operator binary: `ztap-operator`
-  - Agent command: `ztap agent`
+  - Agent command: `ztap agent --node-name "$NODE_NAME"`
+
+The node name is required so the agent can select local Pods and should come
+from the Kubernetes downward API in the DaemonSet. The agent also accepts
+`--kubeconfig`, `--cgroup-root`, `--bpffs-root`, `--run-dir`, and `--dry-run`.
 
 Pod IP auto-discovery:
 
-- The agent resolves `podSelector` targets (matchLabels + matchExpressions), optionally scoped by `namespaceSelector`, to live Pod IPs via the Kubernetes API and translates them into host CIDRs (`/32` for IPv4, `/128` for IPv6) `ipBlock` rules for enforcement.
-- For local development (out-of-cluster), `ztap enforce` resolves `podSelector` targets automatically when `discovery.backend: k8s` is configured (kubeconfig-based), and refreshes resolution while it is running.
-  - Tune refresh with `--resolve-labels-interval` (default: `5s`; set to `0` to resolve once).
-  - If a selector currently resolves to zero targets (e.g., rollouts/scale-to-zero), enforcement still starts; the rule is inactive until targets appear and resolution refreshes.
+- The agent resolves `podSelector` targets (matchLabels + matchExpressions), optionally scoped by `namespaceSelector`, from one informer-cache snapshot and translates IPv4 Pod IPs into `/32` `ipBlock` rules. Selected IPv6 workloads are quarantined because the v0.1.0 engine is IPv4-only.
+- Direct file based Linux enforcement is retired. Local development should run
+  the same node agent with `--kubeconfig`; it uses one informer snapshot and
+  the same cgroup scoped engine as the DaemonSet.
 
 Named ports and port ranges:
 
@@ -124,13 +134,13 @@ discovery:
 Multi-namespace / multi-tenant notes:
 
 - In Kubernetes deployments, tenant == namespace.
-- The agent can watch policies in one namespace, an allow-list, or all namespaces:
-  - Single namespace: `ztap agent --namespace default` (or `ZTAP_NAMESPACE=default`)
-  - Allow-list: `ztap agent --namespaces ns-a,ns-b`
-  - All namespaces: `ztap agent --all-namespaces`
-- Linux eBPF enforcement programs per-cgroup rules. In Kubernetes agent mode, ZTAP resolves selected pod cgroups and installs rules per selected cgroup.
-- When running scoped (per-cgroup) enforcement, ZTAP uses Kubernetes NetworkPolicy-style semantics: pods not selected by any policy are not isolated.
-- If eBPF is unavailable and the agent falls back to iptables, tenant isolation is not guaranteed.
+- The node agent watches the cluster informer view and selects only Pods on its
+  `--node-name`; NetworkPolicy namespace and pod selectors determine peers.
+- Linux eBPF enforcement installs direction-specific rules per selected pod
+  cgroup. Pods not selected by any policy remain unisolated.
+- If the engine cannot load or attach, the agent retains the last applied
+  candidate and reports the reconciliation error; it does not silently fall
+  back to iptables.
 
 ## Configuration
 
@@ -272,7 +282,9 @@ sudo pfctl -e
 
 ### 3. Linux-Specific Setup
 
-ZTAP uses eBPF on Linux for kernel-level enforcement:
+Linux policy enforcement is owned by the node-local Kubernetes agent. The agent
+uses the embedded instance-owned eBPF engine and does not fall back to
+iptables:
 
 ```bash
 # Check kernel version (must be ≥5.7 for cgroup v2)
@@ -281,10 +293,11 @@ uname -r
 # Verify eBPF support
 ls /sys/fs/bpf/
 
-# Install eBPF build dependencies
-sudo apt-get install clang llvm make linux-headers-$(uname -r)
+# Start the node agent (runtime does not require clang or llvm)
+sudo ztap agent --node-name "$NODE_NAME"
 
-# Compile eBPF programs
+# Build-time only: regenerate and inspect the embedded engine object
+sudo apt-get install clang llvm make linux-headers-$(uname -r)
 cd bpf && make && cd ..
 ```
 
@@ -489,14 +502,8 @@ ztap enforce -f examples/web-to-db.yaml
 # Enforcement complete.
 
 # Linux (eBPF)
-# Note: this requires root and runs until Ctrl+C.
-# Supports IPv4/IPv6 CIDRs and TCP/UDP/ICMP (ICMP ignores `port`).
-sudo ztap enforce -f policy.yaml
-
-# Output:
-# Loaded N policy(ies) from policy.yaml
-# Enforcing via eBPF (Linux)...
-# Enforcement active. Press Ctrl+C to stop.
+# The node agent requires the documented eBPF capabilities and runs until Ctrl+C.
+sudo ztap agent --node-name "$NODE_NAME" --kubeconfig "$KUBECONFIG"
 ```
 
 ### 2. View Logs

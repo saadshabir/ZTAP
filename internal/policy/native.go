@@ -37,8 +37,12 @@ const (
 // NativeObjectMeta is the metadata subset needed by the streamlined policy
 // contract. Namespace defaults to "default" for offline documents.
 type NativeObjectMeta struct {
-	Name        string
-	Namespace   string
+	Name      string
+	Namespace string
+	// Generation is populated for live Kubernetes objects. Offline decoded
+	// documents leave it at zero because their metadata has no informer
+	// resource-version lifecycle.
+	Generation  int64
 	Labels      map[string]string
 	Annotations map[string]string
 }

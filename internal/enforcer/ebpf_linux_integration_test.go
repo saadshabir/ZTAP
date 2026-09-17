@@ -713,8 +713,23 @@ func readFlowEvent(t *testing.T, r *ringbuf.Reader, destPort uint16, protocol ui
 			t.Fatalf("ringbuf read error: %v", err)
 		case rec := <-recCh:
 			var raw flow.RawFlowEvent
-			if err := binary.Read(bytes.NewReader(rec.RawSample), binary.LittleEndian, &raw); err != nil {
-				t.Fatalf("parse raw event: %v", err)
+			switch len(rec.RawSample) {
+			case 72:
+				if err := binary.Read(bytes.NewReader(rec.RawSample), binary.LittleEndian, &raw); err != nil {
+					t.Fatalf("parse versioned raw event: %v", err)
+				}
+			case 48:
+				data := rec.RawSample
+				raw.TimestampNs = binary.LittleEndian.Uint64(data[0:8])
+				for i := 0; i < 4; i++ {
+					raw.SrcIP[i] = binary.LittleEndian.Uint32(data[8+i*4 : 12+i*4])
+					raw.DestIP[i] = binary.LittleEndian.Uint32(data[24+i*4 : 28+i*4])
+				}
+				raw.SrcPort = binary.LittleEndian.Uint16(data[40:42])
+				raw.DestPort = binary.LittleEndian.Uint16(data[42:44])
+				raw.Protocol, raw.Direction, raw.Action, raw.Family = data[44], data[45], data[46], data[47]
+			default:
+				t.Fatalf("unexpected raw event size %d", len(rec.RawSample))
 			}
 			if raw.DestPort != destPort {
 				continue
