@@ -173,7 +173,12 @@ jobs:
           printf 'test_status=%s\n' "$test_status" | tee -a phase0-kubernetes.txt
           exit "$test_status"
 
+      # The original Phase 0 traffic/lifecycle fixture exercised the retired
+      # global `ztap enforce` path. Its raw evidence is archived in the Phase
+      # 0 report; current native enforcement is covered by the eBPF and kind
+      # jobs. Keep the historical steps parked but do not execute them.
       - name: Exercise PodIP, ClusterIP, node, self, and lifecycle traffic
+        if: ${{ false }}
         env:
           KIND_CLUSTER: ztap-phase0
         run: |
@@ -345,6 +350,7 @@ jobs:
           exit "$test_status"
 
       - name: Measure workload restart, agent restart, and DaemonSet rollout
+        if: ${{ false }}
         env:
           KIND_CLUSTER: ztap-phase0
         run: |

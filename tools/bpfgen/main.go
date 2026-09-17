@@ -49,7 +49,9 @@ func run() error {
 			source.stem, source.source,
 			"--", "-I../../bpf",
 		}
-		cmd := exec.Command("go", args...)
+		// The command and all arguments are generated from the checked-in source
+		// list above; no user-controlled input reaches this generator.
+		cmd := exec.Command("go", args...) // #nosec G204 -- arguments are fixed generator inputs
 		cmd.Dir = pkgDir
 		cmd.Env = append(hostEnv(), "GOPACKAGE=enforcer")
 		cmd.Stdout = os.Stdout
@@ -118,7 +120,7 @@ func inlineObject(goFile, objectFile, bytesVar string) error {
 	out := strings.Replace(string(content), old, b.String(), 1)
 	// Generated bindings are source files and must remain readable by the
 	// repository tooling; never recreate them with owner-only permissions.
-	return os.WriteFile(goFile, []byte(out), 0o644)
+	return os.WriteFile(goFile, []byte(out), 0o644) // #nosec G306 -- generated source is intentionally repository-readable
 }
 
 func capitalize(value string) string {
