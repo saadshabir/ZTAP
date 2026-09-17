@@ -323,14 +323,14 @@ func findContainerCgroupPath(cgroupRoot string, pod *corev1.Pod, containerID str
 		return "", fmt.Errorf("stat exact containerd systemd cgroup: %w", err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("containerd systemd cgroup is not a directory")
+		return "", errors.New("containerd systemd cgroup is not a directory")
 	}
 	return path, nil
 }
 
 func resolveCgroupPathUnderRoot(root, target string) (string, error) {
 	if !filepath.IsAbs(root) || !filepath.IsAbs(target) {
-		return "", fmt.Errorf("cgroup root and target must be absolute")
+		return "", errors.New("cgroup root and target must be absolute")
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
