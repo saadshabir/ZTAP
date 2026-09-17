@@ -302,30 +302,47 @@ func findContainerCgroupPath(cgroupRoot string, pod *corev1.Pod, containerID str
 		qos = corev1.PodQOSBurstable
 	}
 
-	kubepodsSlice := filepath.Join(cgroupRoot, "kubepods.slice")
 	podToken := "pod" + uidToken
-	var podSlice string
-	switch qos {
-	case corev1.PodQOSBestEffort:
-		podSlice = filepath.Join(kubepodsSlice, "kubepods-besteffort.slice", "kubepods-besteffort-"+podToken+".slice")
-	case corev1.PodQOSGuaranteed:
-		podSlice = filepath.Join(kubepodsSlice, "kubepods-"+podToken+".slice")
-	default:
-		podSlice = filepath.Join(kubepodsSlice, "kubepods-burstable.slice", "kubepods-burstable-"+podToken+".slice")
+	// These are the two supported systemd layouts observed for containerd on
+	// Linux. Keep the candidates explicit: do not recursively search the host
+	// cgroup tree or guess from shortened container IDs.
+	layouts := []struct {
+		prefix    []string
+		qosPrefix string
+	}{
+		{prefix: []string{"kubepods.slice"}, qosPrefix: "kubepods"},
+		{prefix: []string{"kubelet.slice", "kubelet-kubepods.slice"}, qosPrefix: "kubelet-kubepods"},
 	}
-	path := filepath.Join(podSlice, "cri-containerd-"+containerID+".scope")
-	path, err := resolveCgroupPathUnderRoot(cgroupRoot, path)
-	if err != nil {
-		return "", fmt.Errorf("locate exact containerd systemd cgroup: %w", err)
+	var lastErr error
+	for _, layout := range layouts {
+		var podSlice []string
+		switch qos {
+		case corev1.PodQOSBestEffort:
+			podSlice = append(append([]string{}, layout.prefix...), layout.qosPrefix+"-besteffort.slice", layout.qosPrefix+"-besteffort-"+podToken+".slice")
+		case corev1.PodQOSGuaranteed:
+			podSlice = append(append([]string{}, layout.prefix...), layout.qosPrefix+"-"+podToken+".slice")
+		default:
+			podSlice = append(append([]string{}, layout.prefix...), layout.qosPrefix+"-burstable.slice", layout.qosPrefix+"-burstable-"+podToken+".slice")
+		}
+		pathSegments := append([]string{cgroupRoot}, podSlice...)
+		path := filepath.Join(append(pathSegments, "cri-containerd-"+containerID+".scope")...)
+		path, err := resolveCgroupPathUnderRoot(cgroupRoot, path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if !info.IsDir() {
+			lastErr = errors.New("containerd systemd cgroup is not a directory")
+			continue
+		}
+		return path, nil
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("stat exact containerd systemd cgroup: %w", err)
-	}
-	if !info.IsDir() {
-		return "", errors.New("containerd systemd cgroup is not a directory")
-	}
-	return path, nil
+	return "", fmt.Errorf("locate exact containerd systemd cgroup: %w", lastErr)
 }
 
 func resolveCgroupPathUnderRoot(root, target string) (string, error) {

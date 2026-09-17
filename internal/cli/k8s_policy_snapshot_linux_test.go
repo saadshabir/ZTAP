@@ -418,8 +418,25 @@ func TestFindContainerCgroupPathRequiresExactContainerdSystemdLayout(t *testing.
 	if err := os.RemoveAll(want); err != nil {
 		t.Fatalf("remove exact cgroup fixture: %v", err)
 	}
+	kubeletWant := filepath.Join(
+		cgroupRoot,
+		"kubelet.slice",
+		"kubelet-kubepods.slice",
+		"kubelet-kubepods-burstable.slice",
+		"kubelet-kubepods-burstable-pod"+uidToken+".slice",
+		"cri-containerd-"+containerID+".scope",
+	)
+	if err := os.MkdirAll(kubeletWant, 0o755); err != nil {
+		t.Fatalf("create kubelet-scoped exact cgroup fixture: %v", err)
+	}
+	if got, err := findContainerCgroupPath(cgroupRoot, pod, containerID); err != nil || got != kubeletWant {
+		t.Fatalf("findContainerCgroupPath = %q, %v; want %q", got, err, kubeletWant)
+	}
+	if err := os.RemoveAll(kubeletWant); err != nil {
+		t.Fatalf("remove kubelet-scoped exact cgroup fixture: %v", err)
+	}
 	outside := t.TempDir()
-	if err := os.Symlink(outside, want); err != nil {
+	if err := os.Symlink(outside, kubeletWant); err != nil {
 		t.Fatalf("create outside cgroup symlink: %v", err)
 	}
 	if got, err := findContainerCgroupPath(cgroupRoot, pod, containerID); err == nil {
