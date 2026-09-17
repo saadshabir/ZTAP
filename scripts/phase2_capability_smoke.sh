@@ -20,8 +20,13 @@ test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containe
 test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.seccompProfile.type}')" = RuntimeDefault
 test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.capabilities.drop[0]}')" = ALL
 test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{range .spec.containers[0].securityContext.capabilities.add[*]}{.}{" "}{end}')" = 'BPF NET_ADMIN PERFMON SYS_RESOURCE '
-kubectl -n ztap-system exec "$agent_pod" -- sh -c 'id; grep ^Cap /proc/self/status; stat -fc %T /host/sys/fs/cgroup; stat -fc %T /host/sys/fs/bpf'
+probe_output=""
+probe_status=0
+probe_output="$(kubectl -n ztap-system exec "$agent_pod" -- sh -c 'id; grep ^Cap /proc/self/status; stat -fc %T /host/sys/fs/cgroup; stat -fc %T /host/sys/fs/bpf' 2>&1)" || probe_status=$?
+printf '%s\n' "$probe_output"
+test "$probe_status" -eq 0
 read -r _ cap_eff <<< "$(kubectl -n ztap-system exec "$agent_pod" -- grep '^CapEff:' /proc/self/status)"
+printf 'CapEff=%s\n' "$cap_eff"
 test "${cap_eff,,}" = 000000c001001000
 
 printf '%s\n' '--- wait for native cgroup classification ---'
