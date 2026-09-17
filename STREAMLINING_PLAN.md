@@ -1,8 +1,8 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Phase 2 implementation complete — hosted Linux/kind acceptance pending
+- **Status:** Phase 2 complete — hosted Linux/kind evidence reviewed
 - **Prepared:** 2026-09-10
-- **Last reviewed:** 2026-09-16
+- **Last reviewed:** 2026-09-17
 - **Change type:** Intentional clean break
 - **Target:** Linux/Kubernetes eBPF network-policy enforcer
 
@@ -482,7 +482,7 @@ Required behavior:
 ### 6.5 Container cgroup resolution
 
 - Read container IDs from init, regular, and ephemeral container statuses and accept only full `containerd://<64-hex>` identifiers.
-- Search only beneath the mounted cgroup v2 `kubepods.slice` hierarchy for the exact `cri-containerd-<id>.scope` basename. Do not search the whole host filesystem, accept shortened IDs, or follow a match outside `--cgroup-root`.
+- Search only beneath the mounted cgroup v2 systemd kubepods hierarchy for the exact `cri-containerd-<id>.scope` basename. The supported exact forms are the root `kubepods.slice` hierarchy and the kubelet-scoped `kubelet.slice/kubelet-kubepods.slice` hierarchy. Do not search the whole host filesystem, accept shortened IDs, or follow a match outside `--cgroup-root`.
 - Derive the numeric cgroup ID using the method proven against `bpf_get_current_cgroup_id()` in Phase 0. Do not assume an inode number is equivalent without that test.
 - Cache resolved paths/IDs by container ID and filesystem identity. Invalidate entries when container status changes or the cgroup disappears.
 - Include every live container cgroup for a selected pod. Ignore completed containers; treat containers without IDs as pending; reject the candidate when a running selected container has an ID but its supported cgroup cannot be resolved.
@@ -925,7 +925,8 @@ Focused engine/flow/policy race tests, full vet, pinned lint, actionlint, and
 Linux integration cross-builds for amd64 and arm64 pass. CI checks generated
 bindings with `clang-18`; the bindings were regenerated locally with Homebrew
 LLVM 18. The Linux status regression test, verifier, and privileged packet-path
-suite have not run here.
+suite are not runnable on this macOS host; hosted run `35184402760` executed
+and passed them, with the uploaded evidence artifacts reviewed below.
 
 The README and deployment guide now document the process-owned link lifecycle:
 an agent crash or shutdown detaches enforcement and creates a bounded fail-open
@@ -951,8 +952,8 @@ and point operators to `ztap agent`. The retained cluster-sync helper only
 preserves bookkeeping for migration callers and does not invoke the global/demo
 program without an explicit attachment scope. Full deletion of the parked
 compatibility source belongs to the Phase 4 removal inventory.
-Privileged Linux execution of the packet and lifecycle/leak checks remains an
-open Phase 2 evidence gate.
+Privileged Linux execution of the packet and lifecycle/leak checks completed in
+hosted run `35184402760`; the uploaded eBPF evidence was reviewed below.
 
 Agent wiring (2026-09-14): the Linux Kubernetes agent now owns NetworkPolicy,
 Pod, Namespace, and Node informer caches, builds one immutable cluster snapshot,
@@ -973,8 +974,8 @@ identity and revalidated against device/inode before reuse, with removed scopes
 pruned on each complete snapshot. The legacy `filter.c`/`eBPFEnforcer`
 implementation is now unreachable from the supported Linux command and API
 paths; its source and dedicated migration tests remain parked for
-the Phase 4 deletion inventory. Privileged Linux validation remains an open
-Phase 2 gate.
+the Phase 4 deletion inventory. Privileged Linux validation completed in hosted
+run `35184402760`.
 
 Follow-up (2026-09-15): engine startup now raises the eBPF memlock limit before
 creating its collection, matching the capability-only DaemonSet contract. The
@@ -1039,12 +1040,12 @@ compiles both BPF sources. The host cannot execute Linux binaries, and the
 privileged verifier, packet, lifecycle, and leak suites still require the Linux
 CI runner.
 
-Implementation status (2026-09-16): the Phase 2 engine, native agent wiring,
+Implementation status (2026-09-17): the Phase 2 engine, native agent wiring,
 tests, generated bindings, deployment manifests, and hosted verification jobs
 are complete. The privileged verifier, packet, lifecycle, leak, and disposable
-kind capability checks are execution-only acceptance gates: this macOS host
-cannot run them, so their completion is recorded through the Required CI
-artifacts after the branch is pushed.
+kind capability checks are execution-only on this macOS host; hosted run
+`35184402760` passed every required job and its Required CI artifacts were
+downloaded and reviewed. No local implementation work remains for Phase 2.
 
 Review follow-up (2026-09-16): packet readers now guard the observed policy
 slot and recheck its epoch before reading slot data. Reclamation waits only for
@@ -1053,9 +1054,9 @@ the next update. The Linux suite now freezes real subject/config kernel maps to
 verify that failed candidate population and configuration publication preserve
 the active packet policy. Required CI also has a disposable kind job that runs
 the shipped capability-only DaemonSet and checks a selected cgroup, an actual
-default-denied packet, and its engine counter. The remaining execution is
-intentionally hosted-only on this macOS workstation; no local implementation
-work remains for Phase 2.
+default-denied packet, and its engine counter. Hosted run `35184402760` passed
+that smoke and the privileged eBPF suite; no local implementation work remains
+for Phase 2.
 
 Local follow-up (2026-09-16): because `ztap agent` intentionally skips the
 retired legacy configuration loader, it now initializes its own structured
@@ -1063,10 +1064,29 @@ logging path, defaulting to JSON on stderr while honoring the root logging
 flags. A focused regression test covers the default. The exact LLVM 18
 generator reproduces all four checked-in bindings byte-for-byte, and the
 Linux integration-tagged enforcer tests compile for amd64 and arm64, including
-the native-engine isolated IPv6 denial regression. The
-privileged runtime and kind smoke evidence remain hosted-only on this macOS
-workstation. Engine collection validation now also checks flags on the outer
+the native-engine isolated IPv6 denial regression. The privileged runtime and
+kind smoke evidence are hosted-only on this macOS workstation and completed in
+hosted run `35184402760`. Engine collection validation now also checks flags on the outer
 and inner active-configuration maps, with portable ABI regression coverage.
+
+Hosted acceptance record (2026-09-17): Required CI run `35184246694` passed
+Migration CI for commit `67bab5e`, and full CI run
+`35184402760 <https://github.com/saadshabir/ZTAP/actions/runs/35184402760>`
+passed all required jobs, including `eBPF Verification (Linux)`,
+`Capability-only Agent (Kubernetes)`, and `All Checks Passed`. The reviewed
+`ebpf-engine-evidence` artifact contains the cgroup-v2/BPF preflight and passing
+direction, IPv6, reply, epoch, failed-candidate, rollback, quiescence, and
+repeated Apply/Close cleanup tests. The reviewed `capability-agent-evidence`
+artifact confirms the non-privileged capability-only security context,
+`CapEff=000000c001001000`, successful native cgroup classification with zero
+unresolved running containers, an allowed unselected control path, and a
+blocked selected client with the expected default-deny counter.
+
+The resolver explicitly supports both exact containerd/systemd forms observed
+in the supported Linux environments: the root `kubepods.slice` hierarchy and
+the kubelet-scoped `kubelet.slice/kubelet-kubepods.slice` hierarchy. Both remain
+confined beneath `--cgroup-root` and require the full
+`cri-containerd-<64-hex>.scope` basename.
 
 Work:
 
@@ -1083,13 +1103,13 @@ Work:
 
 Exit criteria:
 
-- Direction-specific default deny is verified.
-- Unselected cgroups remain allowed.
-- Reply traffic, documented Node-status traffic, and self traffic match the stated `v0.1.0` semantics.
-- Failed candidate population or configuration flip leaves the old rules active for already classified cgroups.
-- A successful slot-plus-epoch flip makes no mixed old/new policy state observable and invalidates old connection state logically, including after slot reuse.
-- Repeated apply/close cycles pass race and leak checks.
-- Generated sources are reproducible.
+- [x] Direction-specific default deny is verified.
+- [x] Unselected cgroups remain allowed.
+- [x] Reply traffic, documented Node-status traffic, and self traffic match the stated `v0.1.0` semantics.
+- [x] Failed candidate population or configuration flip leaves the old rules active for already classified cgroups.
+- [x] A successful slot-plus-epoch flip makes no mixed old/new policy state observable and invalidates old connection state logically, including after slot reuse.
+- [x] Repeated apply/close cycles pass race and leak checks.
+- [x] Generated sources are reproducible.
 
 ### Phase 3: Direct Kubernetes agent
 
