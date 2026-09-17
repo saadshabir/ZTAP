@@ -42,22 +42,22 @@ ztap enforce -f examples/web-to-db.yaml
 ztap enforce -f policy.yaml
 
 # Linux (eBPF)
-# Note: `ztap enforce` keeps running while enforcement is active.
-# Supports IPv4/IPv6 `ipBlock.cidr` (arbitrary CIDRs) and TCP/UDP/ICMP (ICMP ignores `port`).
-# Policies that use selector targets (`podSelector` with optional `namespaceSelector`) are enforced by resolving selectors into concrete `ipBlock` rules via discovery:
-# - In-cluster: run `ztap agent`
-# - Local/CLI: run `ztap enforce` with `discovery.backend: k8s` configured (auto-resolves and refreshes while running)
-#   - Control refresh with `--resolve-labels-interval` (default: `5s`; set to `0` to resolve once)
-#   - If a selector currently resolves to zero targets, enforcement still starts; the rule becomes active when targets appear and resolution refreshes
-# In multi-namespace Kubernetes deployments:
-# - `ztap agent --namespaces ns-a,ns-b` or `ztap agent --all-namespaces`
-# - Tenant isolation requires Linux eBPF (iptables fallback can't guarantee isolation)
-sudo ztap enforce -f policy.yaml
+# Kubernetes nodes use the instance-owned engine through `ztap agent`.
+# The agent owns its cgroup links and detaches them on shutdown; a crash or
+# restart therefore creates a fail-open interval until the replacement agent
+# completes its first policy apply.
+# Direct file-based Linux enforcement is retired. `ztap enforce` returns a
+# migration error on Linux; run the node agent with an explicit node identity.
+# The agent watches NetworkPolicy, Pod, Namespace, and Node informer caches and
+# compiles one immutable snapshot per reconciliation.
+sudo ztap agent --node-name "$NODE_NAME"
 
 # Dry-run mode (all platforms)
 # Simulate enforcement without making system changes
+# macOS/Windows file-policy dry run
 ztap enforce -f policy.yaml --dry-run
-ztap agent --dry-run
+# Linux agent dry run
+ztap agent --node-name "$NODE_NAME" --dry-run
 
 # 4. Check status
 ztap status
@@ -82,7 +82,9 @@ Cluster backend:
 
 - **Kernel-Level Filtering** – Real eBPF on Linux
 - **Zero-Downtime Updates** – Graceful, atomic policy reloads using eBPF `bpf_link`
-- **Older Kernel Support** – iptables fallback for pre-5.7 kernels or non-BPF environments
+- **Explicit Linux prerequisites** – the Kubernetes agent requires cgroup v2,
+  bpffs, and eBPF capabilities and reports startup failures without an iptables
+  fallback
 - **Bidirectional Enforcement** – Ingress and egress policies
 - **Secure Communication** – HTTPS/TLS support for API and gRPC endpoints
 - **RBAC** – Admin, Operator, Viewer roles
@@ -373,7 +375,13 @@ ztap flows --direction egress --limit 100
   ztap flows --output json
 ```
 
-On Linux, if `ztap enforce` is active, `ztap flows --follow` streams real events from the pinned eBPF ring buffer map (`/sys/fs/bpf/ztap/flow_events`).
+On Linux, if `ztap agent` is enforcing, `ztap flows --follow` streams real
+events from the pinned eBPF ring buffer map
+(`/sys/fs/bpf/ztap/flow_events`). The reader also validates the pinned agent
+status heartbeat and holds `/run/ztap/flows.lock` so only one node-local reader
+consumes events. JSON records include the policy epoch, subject cgroup ID,
+bounded decision reason, and event-schema version. The node agent is the only
+Linux producer of the pinned engine flow stream.
 
 On Windows, `ztap flows --follow` streams WFP NetEvents (requires an elevated terminal). By default it emits only ZTAP-attributable decisions (`ztap-only`), so run `ztap enforce` first.
 

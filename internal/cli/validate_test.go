@@ -121,7 +121,7 @@ spec:
 	}
 }
 
-func TestCommandSkipsConfigOnlyForTopLevelCommands(t *testing.T) {
+func TestCommandSkipsConfigForNativeTopLevelCommands(t *testing.T) {
 	root := NewRootCmd("test")
 	topLevelValidate, _, err := root.Find([]string{"validate"})
 	if err != nil {
@@ -136,6 +136,13 @@ func TestCommandSkipsConfigOnlyForTopLevelCommands(t *testing.T) {
 	}
 	if commandSkipsConfig(legacyValidate) {
 		t.Fatal("nested policy validate must retain legacy config setup")
+	}
+	nativeAgent, _, err := root.Find([]string{"agent"})
+	if err != nil {
+		t.Fatalf("find native agent: %v", err)
+	}
+	if !commandSkipsConfig(nativeAgent) {
+		t.Fatal("native agent should not load the legacy config")
 	}
 }
 

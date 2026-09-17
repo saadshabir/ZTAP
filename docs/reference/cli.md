@@ -14,7 +14,8 @@ Complete command reference for the `ztap` binary. Source: [`internal/cli/`](../.
 
 ### `ztap enforce`
 
-Enforce zero-trust network policies on the local host.
+Enforce file based policies on macOS (pf) or Windows (WFP). Linux direct
+enforcement is retired; use `ztap agent` on Kubernetes nodes.
 
 ```
 ztap enforce -f <policy-file> [flags]
@@ -23,27 +24,32 @@ ztap enforce -f <policy-file> [flags]
 | Flag | Short | Default | Description |
 | --- | --- | --- | --- |
 | `--file` | `-f` | (required) | Path to policy YAML file |
-| `--cgroup` | | `/sys/fs/cgroup` | Cgroup path (Linux eBPF) |
-| `--bpf-object` | | (embedded) | Path to compiled eBPF object file |
-| `--debug-ebpf` | | `false` | Enable debug logging for eBPF loader |
+| `--cgroup` | | `/sys/fs/cgroup` | Retained compatibility flag; Linux command exits before enforcement |
+| `--bpf-object` | | (embedded) | Retained compatibility flag; Linux command exits before enforcement |
+| `--debug-ebpf` | | `false` | Retained compatibility flag; Linux command exits before enforcement |
 | `--resolve-labels` | | `false` | Resolve label selectors to IPs via discovery |
 | `--resolve-labels-interval` | | `5s` | Interval for re-resolving selectors (`0` = once) |
 | `--dry-run` | | `false` | Simulate enforcement without applying rules |
 
 ### `ztap agent`
 
-Run the Kubernetes node agent (watches policy ConfigMaps, enforces via eBPF).
+Run the Linux Kubernetes node agent. It watches NetworkPolicy, Pod, Namespace,
+and Node informer caches and applies one immutable snapshot through the
+instance-owned eBPF engine.
 
-```
-ztap agent [flags]
+```text
+ztap agent --node-name <node-name> [flags]
 ```
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--namespace` | `default` | Single namespace to watch |
-| `--namespaces` | | Comma-separated allow-list of namespaces |
-| `--all-namespaces` | `false` | Watch all namespaces |
-| `--cgroup` | `/sys/fs/cgroup` | Cgroup path (Linux eBPF) |
+| `--node-name` | (required) | Local Kubernetes node name used for subject selection |
+| `--kubeconfig` | | Kubeconfig path; empty uses in-cluster credentials |
+| `--cgroup-root` | `/sys/fs/cgroup` | Mounted cgroup v2 root for subject attachment |
+| `--cgroup` | | Deprecated alias for `--cgroup-root` |
+| `--bpffs-root` | `/sys/fs/bpf` | Mounted bpffs root for stable engine maps |
+| `--run-dir` | `/run/ztap` | Directory containing the node-agent lock |
+| `--listen` | `:9090` | Local health, readiness, and metrics listen address |
 | `--dry-run` | `false` | Simulate enforcement without applying rules |
 
 ### `ztap api serve`
@@ -162,6 +168,7 @@ ztap flows [flags]
 | `--direction` | `-d` | | Filter by direction (`egress`, `ingress`) |
 | `--limit` | `-n` | | Max events to display |
 | `--output` | `-o` | `table` | Output format (`table`, `json`) |
+| `--run-dir` | | `/run/ztap` | Directory containing the node-local flow-reader lock |
 
 ### `ztap logs`
 

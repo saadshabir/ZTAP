@@ -1,8 +1,8 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Draft — Phases 0-1 complete; Phase 2 may begin
+- **Status:** Phase 2 implementation complete — hosted Linux/kind acceptance pending
 - **Prepared:** 2026-09-10
-- **Last reviewed:** 2026-09-12
+- **Last reviewed:** 2026-09-16
 - **Change type:** Intentional clean break
 - **Target:** Linux/Kubernetes eBPF network-policy enforcer
 
@@ -160,6 +160,7 @@ Interface:
 ztap flows [--action allowed|blocked] \
            [--protocol TCP|UDP] \
            [--direction ingress|egress] \
+           [--run-dir /run/ztap] \
            [--output table|json]
 ```
 
@@ -516,6 +517,11 @@ Retain only bounded, actionable metrics:
 - `ztap_compiled_rules` gauge.
 - `ztap_enforced_cgroups` gauge.
 - `ztap_quarantined_cgroups` gauge.
+- `ztap_unresolved_running_containers` gauge for running local containers whose
+  cgroup identity is not currently resolvable.
+- `ztap_pod_start_classification_delay_seconds` histogram for the interval from
+  first observation of a running container to its first installed cgroup
+  classification.
 - `ztap_active_policy_epoch` gauge.
 - `ztap_packet_decisions_total{action,direction,reason}` counter backed by persistent per-CPU kernel counters with a closed reason enum.
 - `ztap_flow_events_dropped_total{reason="rate_limited|ring_full"}` counter for intentionally suppressed or unbuffered events.
@@ -895,18 +901,185 @@ Exit criteria:
 
 ### Phase 2: Instance-owned eBPF engine
 
+Progress (2026-09-14): The first implementation slice adds an instance-owned
+`Engine.Apply`/`Engine.Close` path, two policy slots with an atomic
+slot-plus-epoch map swap, per-subject ingress/egress links, bounded packet
+parsing, epoch-scoped reply state, and stable flow/counter maps. Flow events
+now carry the policy epoch, cgroup, reason, and schema version; the decoder
+continues to accept the legacy event shape. Linux packet-path tests now apply
+policies produced by the native compiler. They cover direction-specific deny,
+attachment-owned identity for selected descendants in both directions,
+unselected sibling cgroups, TCP/UDP replies and epoch invalidation, Node/self
+bypasses, quarantine precedence, a fixed per-CPU flow-event budget that remains
+continuous across policy epochs, stable decision maps, failed candidate
+attachment with active-rule retention, repeated apply/close cycles, and live
+UDP traffic while alternating policy epochs to detect a mixed slot/epoch
+decision. A Linux unit test covers lifecycle-status write ordering against a
+concurrent heartbeat.
+The privileged CI gate runs the cgroup-v2/bpffs/BPF preflight and the engine
+packet, lifecycle, and cleanup suite with the race detector, and uploads the
+verbose test output as a reviewable 14-day evidence artifact.
+The aggregate check now fails when that privileged job is unexpectedly skipped;
+the documented fork-PR restriction remains the only intentional skip.
+Focused engine/flow/policy race tests, full vet, pinned lint, actionlint, and
+Linux integration cross-builds for amd64 and arm64 pass. CI checks generated
+bindings with `clang-18`; the bindings were regenerated locally with Homebrew
+LLVM 18. The Linux status regression test, verifier, and privileged packet-path
+suite have not run here.
+
+The README and deployment guide now document the process-owned link lifecycle:
+an agent crash or shutdown detaches enforcement and creates a bounded fail-open
+interval until the replacement agent completes its first policy apply.
+
+The standalone and bundled Kubernetes manifests now pass the required node
+identity, mount cgroup v2/bpffs and the agent lock directory, grant the
+capability-only eBPF set, and authorize the NetworkPolicy/Pod/Namespace/Node
+informer reads used by the native agent. They expose host cgroup and bpffs
+mounts beneath `/host`, avoid `hostNetwork`, and are covered by a manifest
+regression test. The native agent image uses the explicit planned `v0.1.0`
+release tag rather than a mutable `latest` tag. Engine startup now validates every owned map's type, capacity,
+flags, and key/value ABI widths against the generated collection before loading it. The
+native agent also serves `/healthz`, `/readyz`, and `/metrics` from a private
+Prometheus registry with bounded readiness and enforcement gauges; readiness
+remains false for dry-run, apply failure, or local quarantine, and the manifests
+probe those endpoints over the named HTTP port.
+
+The preexisting `filter.c`/`eBPFEnforcer` source remains parked for migration
+and regression tests, but its production cutover is now complete: Linux file
+enforcement and direct REST/gRPC starts reject the global compatibility path
+and point operators to `ztap agent`. The retained cluster-sync helper only
+preserves bookkeeping for migration callers and does not invoke the global/demo
+program without an explicit attachment scope. Full deletion of the parked
+compatibility source belongs to the Phase 4 removal inventory.
+Privileged Linux execution of the packet and lifecycle/leak checks remains an
+open Phase 2 evidence gate.
+
+Agent wiring (2026-09-14): the Linux Kubernetes agent now owns NetworkPolicy,
+Pod, Namespace, and Node informer caches, builds one immutable cluster snapshot,
+and reconciles it through the instance-owned engine. The Linux subject resolver
+converts a caller-provided Node/Namespace/Pod snapshot into compiler input and
+retains cgroup-ID-to-path data for per-subject engine attachment. It does not
+issue separate API reads, so each candidate is derived from one informer-cache
+view. The enforcer reconciliation boundary compiles that input and passes a
+complete candidate to `Engine.Apply`; coverage exercises snapshot-to-engine
+flow, cgroup-path removal, compile-failure isolation, and apply-error
+propagation. The snapshot carries bounded cgroup resolution failures so a
+selected running pod with any unresolved cgroup rejects the complete candidate,
+while pending and unselected pods remain non-fatal. Resolution now considers
+only live containers with full `containerd://<64-hex>` identities and the exact
+containerd systemd scope; completed containers and legacy runtime/layout guesses
+are ignored or rejected. Resolved container scopes are cached by container/pod
+identity and revalidated against device/inode before reuse, with removed scopes
+pruned on each complete snapshot. The legacy `filter.c`/`eBPFEnforcer`
+implementation is now unreachable from the supported Linux command and API
+paths; its source and dedicated migration tests remain parked for
+the Phase 4 deletion inventory. Privileged Linux validation remains an open
+Phase 2 gate.
+
+Follow-up (2026-09-15): engine startup now raises the eBPF memlock limit before
+creating its collection, matching the capability-only DaemonSet contract. The
+flow reader owns an OS lock at `<run-dir>/flows.lock` and validates the pinned
+agent-status schema, enforcing lifecycle, heartbeat age, and agent epoch while
+consuming the ring buffer; incompatible or stale status stops the reader. The
+reader's Linux stop channel is recreated after shutdown so a monitor can be
+started again safely. The legacy synthetic fallback remains for compatibility
+until the planned flow surface cutover.
+
+The native linker now queries each selected cgroup before and after attaching a
+direction and rejects an incompatible pre-existing program without replacing or
+detaching it. Candidate cancellation after map population also clears the
+inactive slot before returning, preserving the previous active configuration.
+Engine startup now feature-probes the configured roots as cgroup v2 and bpffs
+mounts before loading the collection, so unsupported host layouts fail before
+the agent advertises a usable enforcement engine.
+
+Shutdown now publishes the stopping lifecycle state before link detachment, and
+Linux attach/population boundaries reject nil or already-cancelled contexts so
+teardown and cancellation cannot start additional kernel work.
+The agent's HTTP readiness state changes to `503` with reason `stopping`, and
+the enforcement gauge drops to zero, at the same shutdown boundary.
+Apply and metrics snapshots also honor cancellation while waiting for the
+serialized engine lifecycle lock, so a stalled policy update cannot strand a
+shutdown or retry context behind another operation.
+
+The native agent now publishes the bounded reconciliation gauges, duration and
+result counters, compiled-rule and subject/quarantine counts, active policy
+epoch, persistent packet-decision counters, flow-drop counters, and slot
+cleanup failures from the instance-owned engine. Counter snapshots are polled
+without consuming the flow ring and use reset-aware deltas for the process-local
+Prometheus view. The native endpoint uses a private registry containing only
+the retained process/runtime collectors and streamlined ZTAP metrics; legacy
+anomaly and flow counters are not exposed by the agent path.
+At startup it also emits the documented warning that coexistence with another
+NetworkPolicy enforcer is unsupported because the agent cannot detect every CNI
+implementation.
+Each reconciliation now carries a bounded operation ID, observed/accepted/
+rejected counts, subject/quarantine counts, rule count, dry-run state, and
+duration through its structured success, rejection, and retry logs.
+The resolver also records the first observation of each running container and
+reports the separate Pod-start-to-classification histogram plus the current
+unresolved-running-container gauge; policy-only updates do not count an
+already classified cgroup again.
+Rejected-policy diagnostics carry the Kubernetes resource generation and are
+logged once per generation; transient apply retries retain the diagnostic
+identity without repeating the warning, while a corrected or recreated policy
+can emit a new diagnostic.
+
+The Linux production cutover now rejects the legacy global enforcement entry
+points with one migration sentinel and directs operators to the node-local
+agent. This prevents a file-based or cluster-sync caller from silently
+reintroducing global/default semantics while the compatibility implementation
+stays available only to migration coverage.
+
+Local verification (2026-09-15): full `go test ./...`, full `go test -race ./...`,
+`go vet ./...`, pinned lint/actionlint, and reproducible generated-binding checks
+pass on the macOS host. The CLI and enforcer packages cross-compile for Linux
+amd64 and arm64, including the integration-tagged tests, and Homebrew LLVM 18
+compiles both BPF sources. The host cannot execute Linux binaries, and the
+privileged verifier, packet, lifecycle, and leak suites still require the Linux
+CI runner.
+
+Implementation status (2026-09-16): the Phase 2 engine, native agent wiring,
+tests, generated bindings, deployment manifests, and hosted verification jobs
+are complete. The privileged verifier, packet, lifecycle, leak, and disposable
+kind capability checks are execution-only acceptance gates: this macOS host
+cannot run them, so their completion is recorded through the Required CI
+artifacts after the branch is pushed.
+
+Review follow-up (2026-09-16): packet readers now guard the observed policy
+slot and recheck its epoch before reading slot data. Reclamation waits only for
+readers of the retired slot, so traffic on the newly active slot cannot starve
+the next update. The Linux suite now freezes real subject/config kernel maps to
+verify that failed candidate population and configuration publication preserve
+the active packet policy. Required CI also has a disposable kind job that runs
+the shipped capability-only DaemonSet and checks a selected cgroup, an actual
+default-denied packet, and its engine counter. The remaining execution is
+intentionally hosted-only on this macOS workstation; no local implementation
+work remains for Phase 2.
+
+Local follow-up (2026-09-16): because `ztap agent` intentionally skips the
+retired legacy configuration loader, it now initializes its own structured
+logging path, defaulting to JSON on stderr while honoring the root logging
+flags. A focused regression test covers the default. The exact LLVM 18
+generator reproduces all four checked-in bindings byte-for-byte, and the
+Linux integration-tagged enforcer tests compile for amd64 and arm64, including
+the native-engine isolated IPv6 denial regression. The
+privileged runtime and kind smoke evidence remain hosted-only on this macOS
+workstation. Engine collection validation now also checks flags on the outer
+and inner active-configuration maps, with portable ABI regression coverage.
+
 Work:
 
-- Introduce `Engine.Apply` and `Engine.Close`.
-- Change enforced cgroups to a direction bitmask.
-- Remove global/default enforcement semantics from the eBPF C program.
-- Remove permissive and exact-map compatibility programs.
-- Implement bounds-checked IPv4 TCP/UDP parsing and explicit isolated-direction IPv6 denial using the packet offsets proven in Phase 0.
-- Implement node/self bypasses, quarantine precedence, and the epoch-scoped LRU reply-connection map.
-- Keep the flow ring and aggregate decision counters stable for the engine lifetime.
-- Implement two-slot candidate population, atomic slot-plus-epoch commit, partial-write cleanup, and old-slot garbage collection.
-- Update and regenerate bindings.
-- Adapt Linux integration tests to native compiled inputs.
+- [x] Introduce `Engine.Apply` and `Engine.Close`.
+- [x] Change enforced cgroups to a direction bitmask.
+- [x] Remove global/default enforcement semantics from the eBPF C program.
+- [x] Remove permissive and exact-map compatibility programs.
+- [x] Implement bounds-checked IPv4 TCP/UDP parsing and explicit isolated-direction IPv6 denial using the packet offsets proven in Phase 0.
+- [x] Implement node/self bypasses, quarantine precedence, and the epoch-scoped LRU reply-connection map.
+- [x] Keep the flow ring and aggregate decision counters stable for the engine lifetime.
+- [x] Implement two-slot candidate population, atomic slot-plus-epoch commit, partial-write cleanup, and old-slot garbage collection.
+- [x] Update and regenerate bindings.
+- [x] Adapt Linux integration tests to native compiled inputs.
 
 Exit criteria:
 

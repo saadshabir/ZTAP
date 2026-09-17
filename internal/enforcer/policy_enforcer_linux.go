@@ -108,69 +108,18 @@ func policiesSupportedByEBPF(policies []policy.NetworkPolicy, bpfObjectPath stri
 	return true
 }
 
-// EnforceWithEBPFIfAvailable uses the best available enforcer on Linux (eBPF or iptables).
-func EnforceWithEBPFIfAvailable(opts EnforcementOptions) error {
-	ebpfAvailable := CanUseEBPF()
-	ebpfSupported := ebpfAvailable && policiesSupportedByEBPF(opts.Policies, opts.BPFObjectPath)
-	if ebpfSupported {
-		if opts.DryRun {
-			logging.Info("[DRY-RUN] Enforcing via eBPF (Linux)...", nil)
-		} else {
-			logging.Info("Enforcing via eBPF (Linux)...", nil)
-		}
-		return EnforceWithEBPFReal(opts)
-	}
-
-	if ebpfAvailable && !ebpfSupported {
-		logging.Warn("Policies require CIDR support; falling back to iptables until eBPF LPM lands", nil)
-	}
-
-	if opts.DryRun {
-		logging.Info("[DRY-RUN] Enforcing via iptables fallback (Linux)...", nil)
-	} else {
-		logging.Info("Enforcing via iptables fallback (Linux)...", nil)
-	}
-	activeIptablesEnforcer = NewIptablesEnforcer()
-	if err := activeIptablesEnforcer.Init(); err != nil {
-		return err
-	}
-	activeIptablesEnforcer.dryRun = opts.DryRun
-	return activeIptablesEnforcer.LoadPolicies(opts.Policies)
+// EnforceWithEBPFIfAvailable is retained as a migration symbol for older
+// integrations. Linux policy ownership now belongs to the node-local native
+// agent and this global/fallback entry point must never mutate kernel state.
+func EnforceWithEBPFIfAvailable(_ EnforcementOptions) error {
+	return ErrLegacyLinuxEnforcementRetired
 }
 
-// EnforceWithEBPFIfAvailableScoped enforces a tenant-aware policy set.
-//
-// If eBPF isn't available, falls back to iptables, but tenant/cgroup isolation
-// is not enforced in that mode.
-func EnforceWithEBPFIfAvailableScoped(opts ScopedEnforcementOptions) error {
-	flattened := make([]policy.NetworkPolicy, 0, len(opts.Policies))
-	for _, sp := range opts.Policies {
-		flattened = append(flattened, sp.Policy)
-	}
-
-	ebpfAvailable := CanUseEBPF()
-	ebpfSupported := ebpfAvailable && policiesSupportedByEBPF(flattened, opts.BPFObjectPath)
-	if ebpfSupported {
-		if opts.DryRun {
-			logging.Info("[DRY-RUN] Enforcing via eBPF (Linux, tenant-scoped)...", nil)
-		} else {
-			logging.Info("Enforcing via eBPF (Linux, tenant-scoped)...", nil)
-		}
-		return EnforceWithEBPFRealScoped(opts)
-	}
-
-	if ebpfAvailable && !ebpfSupported {
-		logging.Warn("Policies require CIDR support; falling back to iptables until eBPF LPM lands (tenant isolation not guaranteed)", nil)
-	}
-	if !ebpfAvailable {
-		logging.Warn("eBPF not available; falling back to iptables (tenant isolation not guaranteed)", nil)
-	}
-	activeIptablesEnforcer = NewIptablesEnforcer()
-	if err := activeIptablesEnforcer.Init(); err != nil {
-		return err
-	}
-	activeIptablesEnforcer.dryRun = opts.DryRun
-	return activeIptablesEnforcer.LoadPolicies(flattened)
+// EnforceWithEBPFIfAvailableScoped is retained as a migration symbol for
+// callers that used the old tenant-aware API. Linux policy ownership now
+// belongs to the node-local native agent.
+func EnforceWithEBPFIfAvailableScoped(_ ScopedEnforcementOptions) error {
+	return ErrLegacyLinuxEnforcementRetired
 }
 
 // StopLinuxEnforcement stops whichever linux enforcer is currently active.

@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ztap-smoke
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smoke-server
+  namespace: ztap-smoke
+  labels:
+    app: smoke-server
+spec:
+  containers:
+    - name: server
+      image: busybox:1.36.1
+      command:
+        - sh
+        - -c
+        - mkdir -p /www && printf 'ok\n' > /www/index.html && exec httpd -f -p 8080 -h /www
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smoke-control
+  namespace: ztap-smoke
+  labels:
+    app: smoke-control
+spec:
+  containers:
+    - name: control
+      image: busybox:1.36.1
+      command: ["sh", "-c", "sleep 3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smoke-client
+  namespace: ztap-smoke
+  labels:
+    app: smoke-client
+spec:
+  containers:
+    - name: client
+      image: busybox:1.36.1
+      command: ["sh", "-c", "sleep 3600"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: smoke-client-deny-egress
+  namespace: ztap-smoke
+spec:
+  podSelector:
+    matchLabels:
+      app: smoke-client
+  policyTypes:
+    - Egress
+  egress: []

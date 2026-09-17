@@ -100,10 +100,65 @@ func TestCompileNativePoliciesDefaultDenyAndPolicyTypeDefaulting(t *testing.T) {
 	}
 }
 
+func TestCompileNativePoliciesRejectsSelectedCgroupResolutionFailure(t *testing.T) {
+	for name, failure := range map[string]CgroupResolutionFailure{
+		"not found":           CgroupResolutionFailureNotFound,
+		"unsupported runtime": CgroupResolutionFailureUnsupportedRuntime,
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := basicResolutionInput(ResolvedPod{
+				Namespace:               "default",
+				Name:                    "api",
+				Labels:                  map[string]string{"app": "api"},
+				CgroupIDs:               []uint64{1},
+				CgroupResolutionFailure: failure,
+				Local:                   true,
+			})
+
+			_, err := CompileNativePolicies([]NativeNetworkPolicy{
+				nativePolicy("default", "default-deny", map[string]string{"app": "api"}, nil, nil, nil),
+			}, input)
+			var resolutionErr ResolutionError
+			if !errors.As(err, &resolutionErr) {
+				t.Fatalf("error = %T %v, want ResolutionError", err, err)
+			}
+			if resolutionErr.Field != `pods["default/api"].cgroupIDs` {
+				t.Fatalf("resolution error field = %q", resolutionErr.Field)
+			}
+		})
+	}
+}
+
+func TestCompileNativePoliciesAllowsPendingAndUnselectedCgroupResolutionFailure(t *testing.T) {
+	input := basicResolutionInput(
+		ResolvedPod{
+			Namespace: "default", Name: "pending", Labels: map[string]string{"app": "api"}, Local: true,
+		},
+		ResolvedPod{
+			Namespace:               "default",
+			Name:                    "unselected",
+			Labels:                  map[string]string{"app": "other"},
+			CgroupResolutionFailure: CgroupResolutionFailureUnsupportedRuntime,
+			Local:                   true,
+		},
+	)
+
+	result, err := CompileNativePolicies([]NativeNetworkPolicy{
+		nativePolicy("default", "default-deny", map[string]string{"app": "api"}, nil, nil, nil),
+	}, input)
+	if err != nil {
+		t.Fatalf("CompileNativePolicies failed: %v", err)
+	}
+	if len(result.PolicySet.Subjects) != 0 {
+		t.Fatalf("pending pod produced subjects: %#v", result.PolicySet.Subjects)
+	}
+}
+
 func TestCompileNativePoliciesQuarantinesOnlyRejectedLocalSubjects(t *testing.T) {
 	bad := nativePolicy("default", "bad-ingress", map[string]string{"app": "bad"}, []string{"Ingress"}, []NativeIngressRule{
 		{From: []NativePeer{{IPBlock: &NativeIPBlock{CIDR: "198.51.100.0/24"}}}, Ports: []NativePort{{Protocol: "TCP", PortName: "https"}}},
 	}, nil)
+	bad.Metadata.Generation = 11
 	good := nativePolicy("default", "good-egress", map[string]string{"app": "good"}, []string{"Egress"}, nil, []NativeEgressRule{
 		{To: []NativePeer{{IPBlock: &NativeIPBlock{CIDR: "203.0.113.9/32"}}}, Ports: []NativePort{{Protocol: "TCP", Port: 443}}},
 	})
@@ -119,6 +174,9 @@ func TestCompileNativePoliciesQuarantinesOnlyRejectedLocalSubjects(t *testing.T)
 	}
 	if len(result.Rejected) != 1 || result.Rejected[0].Name != "bad-ingress" || result.Rejected[0].Field != "spec.ingress[0].ports[0].port" {
 		t.Fatalf("rejected = %#v", result.Rejected)
+	}
+	if result.Rejected[0].Generation != 11 {
+		t.Fatalf("rejected generation = %d, want 11", result.Rejected[0].Generation)
 	}
 	badSubject := subjectByCgroup(t, result.PolicySet, 1)
 	if badSubject.Isolated != DirectionIngress || badSubject.Quarantined != DirectionIngress {

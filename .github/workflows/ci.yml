@@ -217,30 +217,94 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Compile eBPF program
-        run: |
-          make -C bpf
-          sudo mkdir -p /usr/local/share/ztap/bpf
-          sudo cp -v bpf/filter.o /usr/local/share/ztap/bpf/filter.o
-
       - name: Check generated eBPF bindings are up to date
+        env:
+          BPF2GO_CC: clang-18
         run: |
           go generate ./internal/enforcer/...
-          git diff --exit-code -- internal/enforcer/bpf_bpfel.go internal/enforcer/bpf_bpfeb.go
+          git diff --exit-code -- internal/enforcer/bpf_bpfel.go internal/enforcer/bpf_bpfeb.go internal/enforcer/engine_bpfel.go internal/enforcer/engine_bpfeb.go
 
-      - name: Inspect eBPF object (ELF)
+      - name: Verify Linux eBPF preflight and instance-owned engine
         run: |
-          which llvm-objdump || true
-          which llvm-readelf || true
-          echo "ls -l built object and system path" && ls -l bpf/filter.o /usr/local/share/ztap/bpf/filter.o
-          echo "readelf -S" && (llvm-readelf -S bpf/filter.o || readelf -S bpf/filter.o)
-          echo "objdump -h" && (llvm-objdump -h bpf/filter.o || objdump -h bpf/filter.o)
+          set -o pipefail
+          sudo --preserve-env=PATH,HOME,GOFLAGS,GOMODCACHE,GOCACHE go test -race -tags integration -timeout=10m ./internal/enforcer -run '^(TestEBPFIntegrationPhase0KernelPreflight|TestLinuxEngine)' -v 2>&1 | tee ebpf-engine-tests.txt
 
-      - name: Run eBPF integration test
-        env:
-          ZTAP_BPF_OBJECT: /usr/local/share/ztap/bpf/filter.o
-          ZTAP_DEBUG_EBPF: "1"
-        run: sudo --preserve-env=PATH,HOME,GOFLAGS,GOMODCACHE,GOCACHE,ZTAP_BPF_OBJECT,ZTAP_DEBUG_EBPF go test -tags integration ./internal/enforcer -run TestEBPFIntegrationLoadAndAttach -v
+      - name: Upload privileged eBPF evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ebpf-engine-evidence
+          path: ebpf-engine-tests.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  capability-agent:
+    name: Capability-only Agent (Kubernetes)
+    runs-on: ubuntu-24.04
+    needs: [lint, test-go]
+    # Forked PRs cannot run the host bpffs and eBPF attach steps.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Prepare host bpffs
+        run: |
+          sudo mkdir -p /sys/fs/bpf
+          if ! mountpoint -q /sys/fs/bpf; then
+            sudo mount -t bpf bpffs /sys/fs/bpf
+          fi
+
+      - name: Install kind
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install sigs.k8s.io/kind@v0.32.0
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Create disposable Kubernetes cluster
+        run: kind create cluster --name ztap-phase2 --config deployments/kubernetes/phase0-kind-config.yaml --image kindest/node:v1.36.4 --wait 180s
+
+      - name: Build and load the agent image
+        run: |
+          docker build --tag ztap:v0.1.0 .
+          kind load docker-image ztap:v0.1.0 --name ztap-phase2
+
+      - name: Exercise the shipped capability-only DaemonSet
+        run: |
+          set -o pipefail
+          bash scripts/phase2_capability_smoke.sh 2>&1 | tee capability-agent-smoke.txt
+
+      - name: Capture Kubernetes diagnostics
+        if: always()
+        run: |
+          {
+            kubectl get nodes -o wide || true
+            kubectl -n ztap-system get daemonset,pods -o wide || true
+            kubectl -n ztap-system describe daemonset/ztap-agent || true
+            kubectl -n ztap-system describe pods -l app=ztap-agent || true
+            kubectl -n ztap-system logs daemonset/ztap-agent --all-containers=true --tail=1000 || true
+            kubectl -n ztap-smoke get pods,networkpolicy -o wide || true
+          } > capability-agent-diagnostics.txt 2>&1
+
+      - name: Upload capability-only agent evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: capability-agent-evidence
+          path: |
+            capability-agent-smoke.txt
+            capability-agent-diagnostics.txt
+          if-no-files-found: warn
+          retention-days: 14
 
   build-check:
     name: Build Check (Linux)
@@ -286,6 +350,7 @@ jobs:
       - test-integration
       - docker-build
       - ebpf-verification
+      - capability-agent
       - build-check
       - dependency-review
     if: always()
@@ -302,6 +367,7 @@ jobs:
           echo "  test-integration: ${NEEDS_TEST_INTEGRATION_RESULT}"
           echo "  docker-build: ${NEEDS_DOCKER_BUILD_RESULT}"
           echo "  ebpf-verification: ${NEEDS_EBPF_VERIFICATION_RESULT}"
+          echo "  capability-agent: ${NEEDS_CAPABILITY_AGENT_RESULT}"
           echo "  build-check: ${NEEDS_BUILD_CHECK_RESULT}"
           echo "  dependency-review: ${NEEDS_DEPENDENCY_REVIEW_RESULT}"
           echo ""
@@ -311,6 +377,12 @@ jobs:
             exit 1
           elif [ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]; then
             echo "Some checks were cancelled"
+            exit 1
+          elif [ "${{ needs.ebpf-verification.result }}" == "skipped" ] && { [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]; }; then
+            echo "The privileged eBPF verification job was skipped unexpectedly"
+            exit 1
+          elif [ "${{ needs.capability-agent.result }}" == "skipped" ] && { [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]; }; then
+            echo "The capability-only agent job was skipped unexpectedly"
             exit 1
           else
             echo "All checks passed!"
@@ -323,5 +395,6 @@ jobs:
           NEEDS_TEST_INTEGRATION_RESULT: ${{ needs.test-integration.result }}
           NEEDS_DOCKER_BUILD_RESULT: ${{ needs.docker-build.result }}
           NEEDS_EBPF_VERIFICATION_RESULT: ${{ needs.ebpf-verification.result }}
+          NEEDS_CAPABILITY_AGENT_RESULT: ${{ needs.capability-agent.result }}
           NEEDS_BUILD_CHECK_RESULT: ${{ needs.build-check.result }}
           NEEDS_DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}

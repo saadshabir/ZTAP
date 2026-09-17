@@ -598,7 +598,7 @@ rules:
   - apiGroups:
       - ""
     resources:
-      - configmaps
+      - namespaces
     verbs:
       - get
       - list
@@ -612,9 +612,17 @@ rules:
       - list
       - watch
   - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
       - ""
     resources:
-      - namespaces
+      - nodes
     verbs:
       - get
       - list
@@ -646,13 +654,17 @@ spec:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
+      maxSurge: 0
   template:
     metadata:
       labels:
         app: ztap-agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: /metrics
     spec:
       serviceAccountName: ztap-agent
-      hostNetwork: true
       terminationGracePeriodSeconds: 30
       nodeSelector:
         kubernetes.io/os: linux
@@ -665,15 +677,35 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: agent
-          image: ztap:latest
+          image: ztap:v0.1.0
           imagePullPolicy: IfNotPresent
           args:
             - agent
-            - --all-namespaces
-            - --cgroup=/sys/fs/cgroup
+            - --node-name=$(NODE_NAME)
+            - --cgroup-root=/host/sys/fs/cgroup
+            - --bpffs-root=/host/sys/fs/bpf
+            - --run-dir=/run/ztap
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           securityContext:
-            privileged: true
-            allowPrivilegeEscalation: true
+            runAsUser: 0
+            runAsGroup: 0
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - BPF
+                - NET_ADMIN
+                - PERFMON
+                - SYS_RESOURCE
+            seccompProfile:
+              type: RuntimeDefault
           resources:
             requests:
               cpu: 100m
@@ -681,24 +713,28 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
           volumeMounts:
             - name: cgroup
-              mountPath: /sys/fs/cgroup
+              mountPath: /host/sys/fs/cgroup
               readOnly: true
             - name: bpffs
-              mountPath: /sys/fs/bpf
+              mountPath: /host/sys/fs/bpf
+            - name: run-dir
+              mountPath: /run/ztap
           livenessProbe:
-            exec:
-              command:
-                - /usr/local/bin/ztap
-                - status
+            httpGet:
+              path: /healthz
+              port: http
             initialDelaySeconds: 20
             periodSeconds: 30
           readinessProbe:
-            exec:
-              command:
-                - /usr/local/bin/ztap
-                - status
+            httpGet:
+              path: /readyz
+              port: http
             initialDelaySeconds: 10
             periodSeconds: 20
       volumes:
@@ -710,3 +746,7 @@ spec:
           hostPath:
             path: /sys/fs/bpf
             type: Directory
+        - name: run-dir
+          hostPath:
+            path: /run/ztap
+            type: DirectoryOrCreate

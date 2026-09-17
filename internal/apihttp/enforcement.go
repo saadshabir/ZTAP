@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -113,151 +111,8 @@ func (s *Server) handleEnforcementStart(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-
 	if enforcer.IsLinux() {
-		if os.Geteuid() != 0 {
-			writeError(w, http.StatusForbidden, errors.New("eBPF enforcement requires root privileges"))
-			return
-		}
-		const defaultCgroupPath = "/sys/fs/cgroup"
-		rawCgroupPath := strings.TrimSpace(req.CgroupPath)
-		var cgroupPath string
-		if rawCgroupPath == "" {
-			cgroupPath = defaultCgroupPath
-		} else {
-			if filepath.IsAbs(rawCgroupPath) || strings.Contains(rawCgroupPath, "..") {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("invalid cgroup path %s", rawCgroupPath))
-				return
-			}
-			cleaned := filepath.Clean(rawCgroupPath)
-			if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("invalid cgroup path %s", rawCgroupPath))
-				return
-			}
-			joined := filepath.Join(defaultCgroupPath, cleaned)
-			absCgroupPath, err := filepath.Abs(joined)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("invalid cgroup path %s", rawCgroupPath))
-				return
-			}
-			rel, err := filepath.Rel(defaultCgroupPath, absCgroupPath)
-			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("invalid cgroup path %s", rawCgroupPath))
-				return
-			}
-			cgroupPath = absCgroupPath
-		}
-		if _, err := os.Stat(cgroupPath); err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid cgroup path %s: %w", cgroupPath, err))
-			return
-		}
-		bpfObjectPath := ""
-		if req.BPFObject != "" {
-			const safeBPFDir = "/usr/lib/ztap/bpf"
-			trimmedObj := strings.TrimSpace(req.BPFObject)
-			if trimmedObj == "" {
-				writeError(w, http.StatusBadRequest, errors.New("bpf_object must not be empty"))
-				return
-			}
-			if filepath.IsAbs(trimmedObj) || strings.Contains(trimmedObj, "..") {
-				writeError(w, http.StatusBadRequest, errors.New("bpf_object must be a relative path without parent-directory references"))
-				return
-			}
-			cleaned := filepath.Clean(trimmedObj)
-			if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
-				writeError(w, http.StatusBadRequest, errors.New("bpf_object contains an invalid path"))
-				return
-			}
-			baseDirAbs, err := filepath.Abs(safeBPFDir)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to resolve bpf directory: %w", err))
-				return
-			}
-			absPath := cleaned
-			if !filepath.IsAbs(cleaned) {
-				absPath, err = filepath.Abs(filepath.Join(baseDirAbs, cleaned))
-				if err != nil {
-					writeError(w, http.StatusBadRequest, fmt.Errorf("invalid bpf_object %s: %w", trimmedObj, err))
-					return
-				}
-			}
-			rel, err := filepath.Rel(baseDirAbs, absPath)
-			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("bpf_object must be within %s", baseDirAbs))
-				return
-			}
-			if _, err := os.Stat(absPath); err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("invalid bpf_object %s: %w", trimmedObj, err))
-				return
-			}
-			bpfObjectPath = absPath
-		}
-		if err := enforcer.ValidatePoliciesForEBPF(policies); err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("policy is not supported by eBPF enforcer yet: %w", err))
-			return
-		}
-
-		ctx := s.runCtx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		opts := enforcer.EnforcementOptions{
-			Policies:      policies,
-			CgroupPath:    cgroupPath,
-			BPFObjectPath: bpfObjectPath,
-			DebugEBPF:     req.DebugEBPF,
-			Context:       ctx,
-		}
-		platform := "linux"
-		if err := enforcer.EnforceWithEBPFIfAvailable(opts); err != nil {
-			s.emitAlert(alert.Alert{
-				Source:   "api-http",
-				Severity: alert.SeverityError,
-				Title:    "policy enforcement failed",
-				Message:  err.Error(),
-				DedupKey: fmt.Sprintf("%s:%s:error", policyKey, platform),
-				Details:  map[string]any{"platform": platform, "count": len(policies)},
-			})
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to enforce via eBPF: %w", err))
-			return
-		}
-
-		s.stopEnforcementRefreshLocked()
-
-		_ = s.audit.Log(audit.EventPolicyEnforced, "system", policyKey, "enforce", map[string]any{"platform": platform, "count": len(policies)})
-		s.emitAlert(alert.Alert{
-			Source:   "api-http",
-			Severity: alert.SeverityInfo,
-			Title:    "policy enforced",
-			Message:  fmt.Sprintf("%s enforced on %s", policyKey, platform),
-			DedupKey: fmt.Sprintf("%s:%s:success", policyKey, platform),
-			Details:  map[string]any{"platform": platform, "count": len(policies)},
-		})
-		writeJSON(w, http.StatusOK, enforcementStartResponse{Enforced: true, Platform: platform})
-
-		if needsResolution && s.resolveLabelsInterval > 0 {
-			refreshCtx, refreshCancel := context.WithCancel(ctx)
-			s.refreshCancelFn = refreshCancel
-			go enforcer.RunSelectorRefresh(refreshCtx, s.discovery, basePolicies, enforcer.SelectorRefreshOptions{Scope: policyTenant, PollInterval: s.resolveLabelsInterval}, func(next []policy.NetworkPolicy) error {
-				select {
-				case <-refreshCtx.Done():
-					return nil
-				default:
-				}
-				s.enforcementMu.Lock()
-				defer s.enforcementMu.Unlock()
-				if err := enforcer.ValidatePoliciesForEBPF(next); err != nil {
-					return err
-				}
-				return enforcer.EnforceWithEBPFIfAvailable(enforcer.EnforcementOptions{
-					Policies:      next,
-					CgroupPath:    cgroupPath,
-					BPFObjectPath: bpfObjectPath,
-					DebugEBPF:     req.DebugEBPF,
-					Context:       refreshCtx,
-				})
-			})
-		}
+		writeError(w, http.StatusNotImplemented, enforcer.ErrLegacyLinuxEnforcementRetired)
 		return
 	}
 
@@ -348,15 +203,7 @@ func (s *Server) handleEnforcementStop(w http.ResponseWriter, r *http.Request) {
 	s.stopEnforcementRefreshLocked()
 
 	if enforcer.IsLinux() {
-		if os.Geteuid() != 0 {
-			writeError(w, http.StatusForbidden, errors.New("eBPF enforcement requires root privileges"))
-			return
-		}
-		if err := enforcer.StopEBPFEnforcement(); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to stop eBPF enforcement: %w", err))
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"stopped": true})
+		writeError(w, http.StatusNotImplemented, enforcer.ErrLegacyLinuxEnforcementRetired)
 		return
 	}
 	if enforcer.IsWindows() {

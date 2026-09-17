@@ -62,17 +62,30 @@ type ResolvedNamespace struct {
 	Labels map[string]string
 }
 
+// CgroupResolutionFailure is a bounded reason why a running local pod could
+// not be mapped to every container cgroup in the caller-owned snapshot. The
+// zero value means there was no resolution failure; a pod may still have no
+// cgroup IDs while its containers are pending.
+type CgroupResolutionFailure uint8
+
+const (
+	CgroupResolutionFailureNone CgroupResolutionFailure = iota
+	CgroupResolutionFailureNotFound
+	CgroupResolutionFailureUnsupportedRuntime
+)
+
 // ResolvedPod contains only the pod facts needed by policy compilation. Pods
 // from the whole cluster participate in peer resolution; Local identifies pods
 // scheduled to this node, whose resolved cgroups can become subjects.
 type ResolvedPod struct {
-	Namespace   string
-	Name        string
-	Labels      map[string]string
-	PodIPs      []netip.Addr
-	CgroupIDs   []uint64
-	Local       bool
-	HostNetwork bool
+	Namespace               string
+	Name                    string
+	Labels                  map[string]string
+	PodIPs                  []netip.Addr
+	CgroupIDs               []uint64
+	CgroupResolutionFailure CgroupResolutionFailure
+	Local                   bool
+	HostNetwork             bool
 }
 
 // ResolutionInput is a point-in-time, kernel-neutral snapshot prepared by the
@@ -86,11 +99,12 @@ type ResolutionInput struct {
 // RejectedPolicy is a stable diagnostic for a policy excluded from ordinary
 // rule compilation. Selected local subjects are quarantined independently.
 type RejectedPolicy struct {
-	Document  int
-	Namespace string
-	Name      string
-	Field     string
-	Message   string
+	Document   int
+	Namespace  string
+	Name       string
+	Generation int64
+	Field      string
+	Message    string
 }
 
 // CompileResult contains a complete candidate plus bounded policy diagnostics.
@@ -253,6 +267,12 @@ func normalizeResolutionInput(input ResolutionInput) (ResolutionInput, map[strin
 		}
 		pod.PodIPs = uniqueSortedAddrs(pod.PodIPs)
 		pod.CgroupIDs = uniqueSortedUint64(pod.CgroupIDs)
+		if pod.CgroupResolutionFailure > CgroupResolutionFailureUnsupportedRuntime {
+			return ResolutionInput{}, nil, ResolutionError{
+				Field:   fmt.Sprintf("pods[%q].cgroupResolutionFailure", key),
+				Message: "has an unknown value",
+			}
+		}
 		for j, cgroupID := range pod.CgroupIDs {
 			if cgroupID == 0 {
 				return ResolutionInput{}, nil, ResolutionError{Field: fmt.Sprintf("pods[%q].cgroupIDs[%d]", key, j), Message: "must be non-zero"}
@@ -344,6 +364,19 @@ func (s *compileState) localPodsInNamespace(namespace string) []ResolvedPod {
 
 func (s *compileState) addSelectedSubjects(pods []ResolvedPod, isolated, quarantined Direction) error {
 	for _, pod := range pods {
+		switch pod.CgroupResolutionFailure {
+		case CgroupResolutionFailureNone:
+		case CgroupResolutionFailureNotFound:
+			return ResolutionError{
+				Field:   fmt.Sprintf("pods[%q].cgroupIDs", podKey(pod)),
+				Message: "contains a running container whose cgroup could not be resolved",
+			}
+		case CgroupResolutionFailureUnsupportedRuntime:
+			return ResolutionError{
+				Field:   fmt.Sprintf("pods[%q].cgroupIDs", podKey(pod)),
+				Message: "contains a running container with an unsupported runtime identity",
+			}
+		}
 		ipv4 := make([]netip.Addr, 0, len(pod.PodIPs))
 		for _, address := range pod.PodIPs {
 			if address.Is4() {
@@ -462,6 +495,9 @@ func (s *compileState) resolvePeers(policy *NativeNetworkPolicy, peers []NativeP
 
 func (s *compileState) addRejected(policy *NativeNetworkPolicy, err error) {
 	diagnostic := RejectedPolicy{Document: 1, Namespace: nativePolicyNamespace(policy), Name: nativePolicyName(policy), Message: err.Error()}
+	if policy != nil && policy.Metadata != nil {
+		diagnostic.Generation = policy.Metadata.Generation
+	}
 	var validationErr NativeValidationError
 	if errors.As(err, &validationErr) {
 		diagnostic.Document = validationErr.Document

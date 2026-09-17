@@ -382,7 +382,9 @@ func (pe *PolicyEnforcer) enforceUpdates(ctx context.Context, updates []cluster.
 
 	if IsLinux() {
 		if pe.cgroupPath == "" {
-			EnforceWithEBPF(EnforcementOptions{Policies: flat, DryRun: pe.dryRun, CgroupPath: pe.cgroupPath, Context: ctx})
+			// A compatibility caller without an attachment scope cannot safely
+			// request kernel enforcement. Preserve the old bookkeeping behavior
+			// for migration tests without invoking the global/demo program.
 			return nil
 		}
 

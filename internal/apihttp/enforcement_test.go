@@ -102,6 +102,25 @@ func TestEnforcementStart_SelectorWithoutDiscovery(t *testing.T) {
 	}
 }
 
+func TestEnforcementStart_LinuxDirectPathRetired(t *testing.T) {
+	if !enforcer.IsLinux() {
+		t.Skip("Linux direct enforcement retirement only applies on Linux")
+	}
+	srv := newEnforcementTestServer(t)
+	policyYAML := "apiVersion: ztap/v1\nkind: NetworkPolicy\nmetadata:\n  name: retired\nspec:\n  podSelector: {}\n"
+	body, _ := json.Marshal(map[string]string{"policy_yaml": policyYAML})
+	req := httptest.NewRequest(http.MethodPost, "/v1/enforcement/start", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !bytes.Contains(rr.Body.Bytes(), []byte("ztap agent")) {
+		t.Fatalf("retirement response does not point to ztap agent: %s", rr.Body.String())
+	}
+}
+
 func TestEnforcementStart_MethodNotAllowed(t *testing.T) {
 	srv := newEnforcementTestServer(t)
 
@@ -123,6 +142,23 @@ func TestEnforcementStop_MethodNotAllowed(t *testing.T) {
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestEnforcementStop_LinuxDirectPathRetired(t *testing.T) {
+	if !enforcer.IsLinux() {
+		t.Skip("Linux direct enforcement retirement only applies on Linux")
+	}
+	srv := newEnforcementTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/enforcement/stop", nil)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !bytes.Contains(rr.Body.Bytes(), []byte("ztap agent")) {
+		t.Fatalf("retirement response does not point to ztap agent: %s", rr.Body.String())
 	}
 }
 

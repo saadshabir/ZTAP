@@ -57,6 +57,28 @@ func TestGetCollectorSingleton(t *testing.T) {
 	}
 }
 
+func TestNewRegistryIsPrivate(t *testing.T) {
+	firstRegistry, firstCollector := NewRegistry()
+	secondRegistry, secondCollector := NewRegistry()
+	if firstRegistry == secondRegistry {
+		t.Fatal("private registry constructor returned the same registry")
+	}
+
+	firstCollector.IncFlowsAllowed()
+	if got := testutil.ToFloat64(firstCollector.flowsAllowed); got != 1 {
+		t.Fatalf("first private collector value = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(secondCollector.flowsAllowed); got != 0 {
+		t.Fatalf("second private collector value = %v, want 0", got)
+	}
+	if _, err := firstRegistry.Gather(); err != nil {
+		t.Fatalf("gather first private registry: %v", err)
+	}
+	if _, err := secondRegistry.Gather(); err != nil {
+		t.Fatalf("gather second private registry: %v", err)
+	}
+}
+
 func TestCollectorCounters(t *testing.T) {
 	resetCollector(t)
 	collector := GetCollector()

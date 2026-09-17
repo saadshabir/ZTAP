@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"ztap/internal/cluster"
 	"ztap/internal/enforcer"
 	"ztap/internal/flow"
-	"ztap/internal/policy"
 	"ztap/internal/ratelimit"
 
 	apiv1 "ztap/proto/ztap/api/v1"
@@ -196,15 +194,6 @@ func waitForLeader(t *testing.T, election cluster.LeaderElection) {
 func authCtx(token string) context.Context {
 	return metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
 }
-
-type fakeFileInfo struct{}
-
-func (fakeFileInfo) Name() string       { return "stub" }
-func (fakeFileInfo) Size() int64        { return 0 }
-func (fakeFileInfo) Mode() os.FileMode  { return 0 }
-func (fakeFileInfo) ModTime() time.Time { return time.Now() }
-func (fakeFileInfo) IsDir() bool        { return false }
-func (fakeFileInfo) Sys() any           { return nil }
 
 func TestGRPCStatusService(t *testing.T) {
 	env := newGRPCTestEnv(t, Config{Listen: "bufnet", AuthEnabled: true}, false, false)
@@ -394,30 +383,26 @@ func TestGRPCEnforcementStartAndStop(t *testing.T) {
 	env := newGRPCTestEnv(t, Config{Listen: "bufnet", AuthEnabled: true}, false, false)
 	t.Cleanup(env.cleanup)
 
-	oldEnforce := enforceWithEBPF
-	oldValidate := validateEBPFPolicies
 	oldPF := enforceWithPF
-	oldGeteuid := geteuid
-	oldStat := statFn
-	oldStop := stopEBPFEnforcement
 	defer func() {
-		enforceWithEBPF = oldEnforce
-		validateEBPFPolicies = oldValidate
 		enforceWithPF = oldPF
-		geteuid = oldGeteuid
-		statFn = oldStat
-		stopEBPFEnforcement = oldStop
 	}()
 
-	enforceWithEBPF = func(_ enforcer.EnforcementOptions) error { return nil }
-	validateEBPFPolicies = func(_ []policy.NetworkPolicy) error { return nil }
 	enforceWithPF = func(_ enforcer.EnforcementOptions) error { return nil }
-	geteuid = func() int { return 0 }
-	statFn = func(string) (os.FileInfo, error) { return fakeFileInfo{}, nil }
-	stopEBPFEnforcement = func() error { return nil }
 
 	ctx := authCtx(env.token)
 	client := apiv1.NewEnforcementServiceClient(env.conn)
+	if enforcer.IsLinux() {
+		_, err := client.Start(ctx, &apiv1.EnforcementStartRequest{PolicyYaml: "apiVersion: ztap/v1\nkind: NetworkPolicy\nmetadata:\n  name: retired\nspec:\n  podSelector: {}\n"})
+		if st, _ := status.FromError(err); st.Code() != codes.Unimplemented {
+			t.Fatalf("expected Linux direct enforcement to be retired, got %v", err)
+		}
+		_, err = client.Stop(ctx, &emptypb.Empty{})
+		if st, _ := status.FromError(err); st.Code() != codes.Unimplemented {
+			t.Fatalf("expected Linux direct stop to be retired, got %v", err)
+		}
+		return
+	}
 
 	policyYAML := "apiVersion: ztap/v1\nkind: NetworkPolicy\nmetadata:\n  name: web\nspec:\n  podSelector:\n    matchLabels:\n      app: web\n  egress:\n  - to:\n      ipBlock:\n        cidr: 10.0.0.0/8\n    ports:\n    - protocol: TCP\n      port: 443\n"
 
@@ -429,16 +414,7 @@ func TestGRPCEnforcementStartAndStop(t *testing.T) {
 		t.Fatalf("expected enforced response")
 	}
 
-	stopResp, err := client.Stop(ctx, &emptypb.Empty{})
-	if enforcer.IsLinux() {
-		if err != nil {
-			t.Fatalf("Stop: %v", err)
-		}
-		if !stopResp.GetStopped() {
-			t.Fatalf("expected stopped response")
-		}
-		return
-	}
+	_, err = client.Stop(ctx, &emptypb.Empty{})
 	if err == nil {
 		t.Fatalf("expected error on non-linux stop")
 	}
