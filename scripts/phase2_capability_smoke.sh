@@ -15,11 +15,23 @@ test -n "$server_ip"
 printf '%s\n' '--- agent security context and effective capabilities ---'
 kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext}'
 printf '\n'
-test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.privileged}')" = false
-test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.allowPrivilegeEscalation}')" = false
-test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.seccompProfile.type}')" = RuntimeDefault
-test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.capabilities.drop[0]}')" = ALL
-test "$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{range .spec.containers[0].securityContext.capabilities.add[*]}{.}{" "}{end}')" = 'BPF NET_ADMIN PERFMON SYS_RESOURCE '
+privileged="$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.privileged}')"
+allow_privilege_escalation="$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.allowPrivilegeEscalation}')"
+seccomp_type="$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.seccompProfile.type}')"
+cap_drop="$(kubectl -n ztap-system get pod "$agent_pod" -o jsonpath='{.spec.containers[0].securityContext.capabilities.drop[0]}')"
+printf 'privileged=%s allowPrivilegeEscalation=%s seccompProfile=%s drop=%s\n' \
+  "$privileged" "$allow_privilege_escalation" "$seccomp_type" "$cap_drop"
+test "$privileged" = false
+test "$allow_privilege_escalation" = false
+test "$seccomp_type" = RuntimeDefault
+test "$cap_drop" = ALL
+capabilities=(BPF NET_ADMIN PERFMON SYS_RESOURCE)
+for index in "${!capabilities[@]}"; do
+  capability="${capabilities[$index]}"
+  cap_add="$(kubectl -n ztap-system get pod "$agent_pod" -o "jsonpath={.spec.containers[0].securityContext.capabilities.add[$index]}")"
+  printf 'capability[%s]=%s\n' "$capability" "$cap_add"
+  test "$cap_add" = "$capability"
+done
 kubectl -n ztap-system exec "$agent_pod" -- id
 kubectl -n ztap-system exec "$agent_pod" -- grep '^Cap' /proc/self/status
 kubectl -n ztap-system exec "$agent_pod" -- stat -f -c %T /host/sys/fs/cgroup
