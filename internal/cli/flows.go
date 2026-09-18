@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -19,159 +20,115 @@ import (
 func newFlowsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "flows",
-		Short: "View real-time network flow events",
-		Long: `Display real-time network flow events captured by the eBPF enforcer.
+		Short: "Stream live network flow events",
+		Long: `Stream live network flow events captured by the node-local eBPF agent.
 
 	This command requires:
-	  - Linux: kernel 5.7+ with eBPF support (best fidelity)
-	  - Windows: WFP NetEvents subscription (best effort; requires admin/BFE access)
-	  - Active Linux Kubernetes enforcement via 'ztap agent'
-	    to see block/allow decisions
+	  - Linux with eBPF support
+	  - An active Linux Kubernetes agent started with 'ztap agent'
+	  - Permission to read the agent's pinned flow map
 
 Examples:
-  ztap flows                    # Show recent flows
-  ztap flows --follow           # Stream flows in real-time
-  ztap flows --action blocked   # Show only blocked flows
-  ztap flows --protocol TCP     # Filter by protocol
-  ztap flows --limit 50         # Show last 50 flows`,
+	  ztap flows                    # Stream all live flows
+	  ztap flows --action blocked   # Show only blocked flows
+	  ztap flows --protocol TCP     # Filter by protocol
+	  ztap flows --direction egress # Filter by direction`,
 
-		Run: runFlows,
+		Args: cobra.NoArgs,
+		RunE: runFlows,
 	}
-	c.Flags().BoolP("follow", "f", false, "Stream flows in real-time")
-	c.Flags().StringP("action", "a", "", "Filter by action (allowed, blocked)")
-	c.Flags().StringP("protocol", "p", "", "Filter by protocol (TCP, UDP, ICMP)")
-	c.Flags().StringP("direction", "d", "", "Filter by direction (egress, ingress)")
-	c.Flags().IntP("limit", "n", 20, "Number of flows to display (0 = unlimited)")
-	c.Flags().StringP("output", "o", "table", "Output format (table, json)")
+	c.Flags().String("action", "", "Filter by action (allowed, blocked)")
+	c.Flags().String("protocol", "", "Filter by protocol (TCP, UDP)")
+	c.Flags().String("direction", "", "Filter by direction (egress, ingress)")
+	c.Flags().String("output", "table", "Output format (table, json)")
 	c.Flags().String("run-dir", "/run/ztap", "Directory containing the flow-reader lock")
 	return c
 }
 
-func runFlows(cmd *cobra.Command, args []string) {
-	follow, _ := cmd.Flags().GetBool("follow")
+func runFlows(cmd *cobra.Command, _ []string) error {
+	if cmd == nil {
+		return errors.New("flows command is nil")
+	}
 	action, _ := cmd.Flags().GetString("action")
 	protocol, _ := cmd.Flags().GetString("protocol")
 	direction, _ := cmd.Flags().GetString("direction")
-	limit, _ := cmd.Flags().GetInt("limit")
 	output, _ := cmd.Flags().GetString("output")
 	runDir, _ := cmd.Flags().GetString("run-dir")
 
-	// Build filter
+	action = strings.ToLower(strings.TrimSpace(action))
+	protocol = strings.ToUpper(strings.TrimSpace(protocol))
+	direction = strings.ToLower(strings.TrimSpace(direction))
+	output = strings.ToLower(strings.TrimSpace(output))
+	if action != "" && action != "allowed" && action != "blocked" {
+		return fmt.Errorf("invalid --action %q: want allowed or blocked", action)
+	}
+	if protocol != "" && protocol != "TCP" && protocol != "UDP" {
+		return fmt.Errorf("invalid --protocol %q: want TCP or UDP", protocol)
+	}
+	if direction != "" && direction != "egress" && direction != "ingress" {
+		return fmt.Errorf("invalid --direction %q: want egress or ingress", direction)
+	}
+	if output != "table" && output != "json" {
+		return fmt.Errorf("invalid --output %q: want table or json", output)
+	}
+
 	filter := flow.FlowFilter{
-		Action:    strings.ToLower(action),
-		Direction: strings.ToLower(direction),
-		Protocol:  strings.ToUpper(protocol),
+		Action:    action,
+		Direction: direction,
+		Protocol:  protocol,
 	}
-
-	// Check platform
-	if !isFlowMonitoringAvailable() {
-		fmt.Println("Flow monitoring is not available on this platform.")
-		fmt.Println("On macOS, flow events are simulated for demonstration.")
-		fmt.Println()
-	}
-
-	if follow {
-		streamFlows(filter, output, runDir)
-	} else {
-		displayRecentFlows(filter, limit, output)
-	}
+	return streamFlows(cmd.Context(), filter, output, runDir)
 }
 
-func isFlowMonitoringAvailable() bool {
-	// Linux: eBPF ring buffer; Windows: WFP NetEvents subscription.
-	return runtime.GOOS == "linux" || runtime.GOOS == "windows" || fileExists("/proc/version")
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func streamFlows(filter flow.FlowFilter, output, runDir string) {
-	var unlock func() error
-	if isFlowMonitoringAvailable() {
-		var err error
-		unlock, err = acquireFlowReaderLock(runDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error starting flow monitor: %v\n", err)
-			return
+func streamFlows(parent context.Context, filter flow.FlowFilter, output, runDir string) (returnErr error) {
+	if parent == nil {
+		return errors.New("flow stream context is nil")
+	}
+	if runtime.GOOS != "linux" {
+		return errors.New("real flow streaming is supported only on Linux")
+	}
+	unlock, err := acquireFlowReaderLock(runDir)
+	if err != nil {
+		return fmt.Errorf("acquire flow reader lock: %w", err)
+	}
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil && returnErr == nil {
+			returnErr = fmt.Errorf("release flow reader lock: %w", unlockErr)
 		}
-		defer func() {
-			if err := unlock(); err != nil {
-				fmt.Fprintf(os.Stderr, "Error releasing flow reader lock: %v\n", err)
-			}
-		}()
-	}
-	fmt.Println("Streaming flow events (Ctrl+C to stop)...")
-	fmt.Println()
-
-	// Create context that cancels on interrupt
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Handle signals
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		fmt.Println("\nStopping flow monitor...")
-		cancel()
 	}()
 
-	// Use the pinned engine ring buffer on Linux; the reader itself retains a
-	// compatibility fallback when no live agent has published one yet.
-	reader := createFlowReader()
+	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	reader, err := openStreamingFlowReader()
+	if err != nil {
+		return fmt.Errorf("open live flow stream: %w", err)
+	}
 	monitor := flow.NewMonitor(reader)
-
+	events := monitor.SubscribeBeforeStart(ctx)
 	if err := monitor.Start(ctx); err != nil {
-		fmt.Printf("Error starting flow monitor: %v\n", err)
-		return
+		_ = monitor.Stop()
+		return fmt.Errorf("start live flow stream: %w", err)
 	}
-	defer func() { _ = monitor.Stop() }()
-
-	// Subscribe to events
-	events := monitor.Subscribe(ctx)
-
-	// Print header for table output
-	if output == "table" {
-		printFlowHeader()
-	}
-
-	// Stream events
-	for event := range events {
-		if !filter.Matches(event) {
-			continue
+	defer func() {
+		if stopErr := monitor.Stop(); stopErr != nil && returnErr == nil {
+			returnErr = fmt.Errorf("stop live flow stream: %w", stopErr)
 		}
-
-		switch output {
-		case "json":
-			printFlowJSON(event)
-		default:
-			printFlowRow(event)
-		}
-	}
-
-	// Print final stats
-	stats := monitor.GetStats()
-	fmt.Println()
-	fmt.Printf("Total: %d events (%d allowed, %d blocked) | %.1f events/sec\n",
-		stats.TotalEvents, stats.AllowedEvents, stats.BlockedEvents, stats.EventsPerSec)
-}
-
-func displayRecentFlows(filter flow.FlowFilter, limit int, output string) {
-	// For now, show a message about how to use flow monitoring
-	// In a full implementation, this would read from a flow log file
-	fmt.Println("Recent flow events:")
-	fmt.Println()
+	}()
 
 	if output == "table" {
 		printFlowHeader()
 	}
-
-	// Show demo/simulated data when not on Linux
-	if !isFlowMonitoringAvailable() {
-		demoEvents := generateDemoFlows(limit)
-		for _, event := range demoEvents {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-events:
+			if !ok {
+				if streamErr := monitor.Err(); streamErr != nil {
+					return fmt.Errorf("live flow stream stopped: %w", streamErr)
+				}
+				return nil
+			}
 			if !filter.Matches(event) {
 				continue
 			}
@@ -182,13 +139,7 @@ func displayRecentFlows(filter flow.FlowFilter, limit int, output string) {
 				printFlowRow(event)
 			}
 		}
-		fmt.Println()
-		fmt.Println("(Simulated data - run on Linux with eBPF for real flows)")
-		return
 	}
-
-	fmt.Println("No flow data available. Ensure policies are being enforced with 'ztap agent'.")
-	fmt.Println("Use 'ztap flows --follow' to stream real-time events.")
 }
 
 func printFlowHeader() {
@@ -236,69 +187,6 @@ func formatFlowJSON(event flow.FlowEvent) string {
 		event.SchemaVersion)
 }
 
-func generateDemoFlows(limit int) []flow.FlowEvent {
-	if limit == 0 {
-		limit = 10
-	}
-
-	events := []flow.FlowEvent{
-		{
-			Timestamp:  time.Now().Add(-5 * time.Second),
-			SourceIP:   []byte{10, 0, 1, 1},
-			DestIP:     []byte{10, 0, 2, 1},
-			SourcePort: 45678,
-			DestPort:   5432,
-			Protocol:   "TCP",
-			Direction:  "egress",
-			Action:     "allowed",
-		},
-		{
-			Timestamp:  time.Now().Add(-4 * time.Second),
-			SourceIP:   []byte{192, 168, 1, 100},
-			DestIP:     []byte{10, 0, 1, 1},
-			SourcePort: 52341,
-			DestPort:   443,
-			Protocol:   "TCP",
-			Direction:  "ingress",
-			Action:     "allowed",
-		},
-		{
-			Timestamp:  time.Now().Add(-3 * time.Second),
-			SourceIP:   []byte{10, 0, 1, 1},
-			DestIP:     []byte{8, 8, 8, 8},
-			SourcePort: 54321,
-			DestPort:   53,
-			Protocol:   "UDP",
-			Direction:  "egress",
-			Action:     "blocked",
-		},
-		{
-			Timestamp:  time.Now().Add(-2 * time.Second),
-			SourceIP:   []byte{172, 16, 0, 50},
-			DestIP:     []byte{10, 0, 1, 1},
-			SourcePort: 22345,
-			DestPort:   22,
-			Protocol:   "TCP",
-			Direction:  "ingress",
-			Action:     "blocked",
-		},
-		{
-			Timestamp:  time.Now().Add(-1 * time.Second),
-			SourceIP:   []byte{10, 0, 1, 1},
-			DestIP:     []byte{10, 0, 3, 1},
-			SourcePort: 38901,
-			DestPort:   6379,
-			Protocol:   "TCP",
-			Direction:  "egress",
-			Action:     "allowed",
-		},
-	}
-
-	if limit < len(events) {
-		return events[:limit]
-	}
-	return events
-}
 func generateRawDemoFlows() []flow.RawFlowEvent {
 	return []flow.RawFlowEvent{
 		{

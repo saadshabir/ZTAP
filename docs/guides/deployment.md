@@ -398,7 +398,7 @@ Notes:
 - Docker Compose stack is Linux-first; on Windows, prefer running the stack under WSL2.
 
 > **Compatibility note:** If your Docker installation only provides the legacy `docker-compose` binary (hyphenated), substitute it for `docker compose` throughout this guide.
-- Windows flow monitoring uses WFP NetEvents and requires an elevated terminal. See `docs/runbooks/windows-flow-monitoring.md`.
+- The retained Windows WFP NetEvents reader requires an elevated terminal for integration validation. The `ztap flows` command is Linux-only; see `docs/runbooks/windows-flow-monitoring.md` for the Windows reader tests.
 
 ## Related Documentation
 

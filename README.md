@@ -113,7 +113,7 @@ Cluster backend:
 
 ### Observability
 
-- **Flow Monitoring** – Real-time on Linux with eBPF enforcement active; Windows via WFP NetEvents (Admin; ztap-only); simulated on macOS
+- **Flow Monitoring** – Live Linux stream from the node agent's pinned eBPF ring buffer
 - **Alerting (Webhooks)** – Slack and PagerDuty notifications
 - **Prometheus Metrics** – Pre-built exporters
 - **Grafana Dashboards** – Auto-provisioned
@@ -145,7 +145,7 @@ Full documentation lives under [`docs/`](docs/index.md).
 | **Guides**    | [Setup](docs/guides/setup.md), [Deployment](docs/guides/deployment.md), [Testing](docs/guides/testing.md), [etcd](docs/guides/etcd.md)                                                        |
 | **Concepts**  | [Architecture](docs/concepts/architecture.md), [eBPF](docs/concepts/ebpf.md), [Cluster](docs/concepts/cluster.md), [Audit](docs/concepts/audit.md), [Compliance](docs/concepts/compliance.md) |
 | **Reference** | [CLI](docs/reference/cli.md), [Configuration](docs/reference/config.md), [API](docs/reference/api.md)                                                                                         |
-| **Runbooks**  | [Windows Flow Monitoring](docs/runbooks/windows-flow-monitoring.md)                                                                                                                           |
+| **Runbooks**  | [Windows WFP Reader Tests](docs/runbooks/windows-flow-monitoring.md)                                                                                                                          |
 | **Project**   | [Project Status](docs/project-status.md), [Anomaly Detection](internal/anomaly/README.md)                                                                                                          |
 
 ---
@@ -272,7 +272,7 @@ Commands:
   status      Show on-premises and cloud resource status
   cluster     Manage cluster coordination (status, join, leave, list)
   policy      Distributed policy management (sync, list, watch, show, history, rollback)
-  flows       Real-time flow event monitoring (--follow, --action, --protocol)
+  flows       Live flow event streaming (--action, --protocol, --direction)
   logs        View ZTAP logs (with --follow, --level, --policy filters)
   metrics     Start Prometheus metrics server
   user        Manage users (create, login, list, change-password)
@@ -360,32 +360,26 @@ ztap policy rollback web-to-db --to 3        # Roll back by creating a new lates
 <summary><b>Flow Monitoring</b></summary>
 
 ```bash
-# View recent flow events
+# Stream live flow events from the node-local agent
 ztap flows
-
-# Stream flow events in real-time
-ztap flows --follow
 
 # Filter by action/protocol/direction
 ztap flows --action blocked --protocol TCP
-ztap flows --direction egress --limit 100
+ztap flows --direction egress
 
   # Output formats
   ztap flows --output table   # Default
   ztap flows --output json
 ```
 
-On Linux, if `ztap agent` is enforcing, `ztap flows --follow` streams real
-events from the pinned eBPF ring buffer map
+On Linux, if `ztap agent` is enforcing, `ztap flows` streams real events from
+the pinned eBPF ring buffer map
 (`/sys/fs/bpf/ztap/flow_events`). The reader also validates the pinned agent
 status heartbeat and holds `/run/ztap/flows.lock` so only one node-local reader
 consumes events. JSON records include the policy epoch, subject cgroup ID,
 bounded decision reason, and event-schema version. The node agent is the only
-Linux producer of the pinned engine flow stream.
-
-On Windows, `ztap flows --follow` streams WFP NetEvents (requires an elevated terminal). By default it emits only ZTAP-attributable decisions (`ztap-only`), so run `ztap enforce` first.
-
-On macOS, flow output remains simulated. (No real outflow options in the future).
+Linux producer of the pinned engine flow stream. The command is Linux-only and
+does not provide recent-history or simulated output.
 
 </details>
 

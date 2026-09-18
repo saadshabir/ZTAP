@@ -154,7 +154,7 @@ Audit log management.
 
 ### `ztap flows`
 
-Real-time flow event monitoring.
+Live flow event streaming from the node-local Linux agent.
 
 ```
 ztap flows [flags]
@@ -162,12 +162,10 @@ ztap flows [flags]
 
 | Flag | Short | Default | Description |
 | --- | --- | --- | --- |
-| `--follow` | `-f` | `false` | Stream events in real-time |
-| `--action` | `-a` | | Filter by action (`allowed`, `blocked`) |
-| `--protocol` | `-p` | | Filter by protocol (`TCP`, `UDP`, `ICMP`) |
-| `--direction` | `-d` | | Filter by direction (`egress`, `ingress`) |
-| `--limit` | `-n` | | Max events to display |
-| `--output` | `-o` | `table` | Output format (`table`, `json`) |
+| `--action` | | | Filter by action (`allowed`, `blocked`) |
+| `--protocol` | | | Filter by protocol (`TCP`, `UDP`) |
+| `--direction` | | | Filter by direction (`egress`, `ingress`) |
+| `--output` | | `table` | Output format (`table`, `json`) |
 | `--run-dir` | | `/run/ztap` | Directory containing the node-local flow-reader lock |
 
 ### `ztap logs`

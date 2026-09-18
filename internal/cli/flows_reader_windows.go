@@ -3,11 +3,13 @@
 package cli
 
 import (
+	"errors"
+
 	"ztap/internal/flow"
 )
 
-func createFlowReader() flow.FlowReader {
-	return flow.NewWindowsReader()
+func openStreamingFlowReader() (flow.FlowReader, error) {
+	return nil, errors.New("real flow streaming is supported only on Linux")
 }
 
 func createAnomalyFlowReader() (flow.FlowReader, error) {

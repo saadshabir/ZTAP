@@ -10,7 +10,7 @@ Current state of the ZTAP project: what has been delivered and what is planned.
 - Legacy iptables/eBPF loader retained only for migration coverage; the agent has no fallback
 - macOS enforcement via pf
 - Windows enforcement via Windows Filtering Platform (WFP) (experimental)
-- Windows flow monitoring via WFP NetEvents
+- Windows WFP NetEvents reader retained for integration validation
 - Graceful policy reload via atomic `bpf_link` updates (zero-downtime)
 - IPv4 TCP/UDP enforcement in the native engine; IPv6 support remains available
   in the Windows WFP backend
@@ -42,7 +42,7 @@ Current state of the ZTAP project: what has been delivered and what is planned.
 - Azure NSG synchronization
 - GCP VPC Firewall Rules synchronization
 - Expanded `ztap status` cloud coverage (Azure NSG, GCP firewall summaries)
-- Real-time flow event monitoring (`ztap flows --follow`)
+- Live Linux flow event streaming (`ztap flows`)
 - Prometheus metrics and Grafana dashboards
 - Alerting with webhook integrations (Slack, PagerDuty)
 - Python-based anomaly detection using Isolation Forest

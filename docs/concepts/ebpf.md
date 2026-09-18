@@ -203,13 +203,13 @@ On Linux, the native `ztap agent` pins the `flow_events` ring buffer map at:
 
 `/sys/fs/bpf/ztap/flow_events`
 
-`ztap flows --follow` opens this pinned map and the companion `agent_status`
-map, then streams events in real time. It holds `/run/ztap/flows.lock` (or the
-directory supplied with `--run-dir`) so only one reader consumes the node's
-ring buffer. The reader stops with a clear error when the status schema is
-incompatible, the agent stops enforcing, the heartbeat is older than five
-seconds, or the agent epoch changes. If the native maps are unavailable, the
-interactive command retains its compatibility simulated output.
+`ztap flows` opens this pinned map and the companion `agent_status` map, then
+streams events in real time. It holds `/run/ztap/flows.lock` (or the directory
+supplied with `--run-dir`) so only one reader consumes the node's ring buffer.
+The reader stops with a clear error when the status schema is incompatible, the
+agent stops enforcing, the heartbeat is older than five seconds, or the agent
+epoch changes. The command is Linux-only and has no recent-history or
+simulated-output fallback.
 
 ### Attachment Points
 

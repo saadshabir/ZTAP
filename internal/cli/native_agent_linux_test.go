@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,8 +19,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"ztap/internal/enforcer"
 	"ztap/internal/policy"
@@ -105,6 +109,388 @@ func TestAcquireNativeAgentLockIsExclusiveAndReleases(t *testing.T) {
 	}
 	if err := second(); err != nil {
 		t.Fatalf("second unlock: %v", err)
+	}
+}
+
+func TestNextNativeAgentRetryDelayUsesCappedExponentialBackoff(t *testing.T) {
+	if got := nextNativeAgentRetryDelay(0); got != time.Second {
+		t.Fatalf("initial retry delay = %s, want 1s", got)
+	}
+	previous := time.Second
+	for _, want := range []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, time.Minute} {
+		got := nextNativeAgentRetryDelay(previous)
+		if got != want {
+			t.Fatalf("retry delay after %s = %s, want %s", previous, got, want)
+		}
+		previous = got
+	}
+	if got := nextNativeAgentRetryDelay(time.Minute); got != time.Minute {
+		t.Fatalf("capped retry delay = %s, want 1m", got)
+	}
+}
+
+func TestWaitForNativeAgentCacheSyncTimesOut(t *testing.T) {
+	err := waitForNativeAgentCacheSync(context.Background(), 10*time.Millisecond, func() bool { return false })
+	if err == nil || !strings.Contains(err.Error(), "failed to sync within") {
+		t.Fatalf("cache sync error = %v, want bounded timeout failure", err)
+	}
+}
+
+func TestWaitForNativeAgentCacheSyncPreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := waitForNativeAgentCacheSync(ctx, time.Minute, func() bool { return false })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cache sync cancellation error = %v, want context.Canceled", err)
+	}
+}
+
+func TestSignalNativeAgentDirtyCoalescesEventBurst(t *testing.T) {
+	dirty := make(chan struct{}, 1)
+	for i := 0; i < 1000; i++ {
+		signalNativeAgentDirty(dirty)
+	}
+	if got := len(dirty); got != 1 {
+		t.Fatalf("dirty queue length after burst = %d, want one coalesced signal", got)
+	}
+	<-dirty
+	signalNativeAgentDirty(dirty)
+	if got := len(dirty); got != 1 {
+		t.Fatalf("dirty queue length after next signal = %d, want one", got)
+	}
+}
+
+func TestWaitNativeAgentDebounceConvergesDuringContinuousEvents(t *testing.T) {
+	dirty := make(chan struct{}, 1)
+	stopEvents := make(chan struct{})
+	eventsDone := make(chan struct{})
+	go func() {
+		defer close(eventsDone)
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopEvents:
+				return
+			case <-ticker.C:
+				signalNativeAgentDirty(dirty)
+			}
+		}
+	}()
+	defer func() {
+		close(stopEvents)
+		<-eventsDone
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan bool, 1)
+	go func() { result <- waitNativeAgentDebounce(ctx, dirty) }()
+	select {
+	case completed := <-result:
+		if !completed {
+			t.Fatal("debounce exited without reconciliation")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("continuous informer events postponed reconciliation")
+	}
+}
+
+func TestNativeAgentReconciliationLoopClearsQuarantineAfterCorrection(t *testing.T) {
+	bad := policy.CompileResult{
+		PolicySet: policy.PolicySet{Subjects: []policy.Subject{
+			{CgroupID: 1, Isolated: policy.DirectionIngress, Quarantined: policy.DirectionIngress},
+			{CgroupID: 2, Isolated: policy.DirectionEgress},
+		}},
+		Rejected: []policy.RejectedPolicy{{Namespace: "apps", Name: "bad", Generation: 1}},
+	}
+	corrected := policy.CompileResult{PolicySet: policy.PolicySet{Subjects: []policy.Subject{
+		{CgroupID: 1, Isolated: policy.DirectionIngress},
+		{CgroupID: 2, Isolated: policy.DirectionEgress},
+	}}}
+	deleted := policy.CompileResult{PolicySet: policy.PolicySet{Subjects: []policy.Subject{
+		{CgroupID: 2, Isolated: policy.DirectionEgress},
+	}}}
+	steps := []policy.CompileResult{bad, corrected, deleted}
+	entered := make(chan int, len(steps))
+	release := make(chan struct{})
+	step := 0
+	reconcile := func() (policy.CompileResult, int, nativeSnapshotTelemetry, error) {
+		if step >= len(steps) {
+			return policy.CompileResult{}, 0, nativeSnapshotTelemetry{}, errors.New("unexpected reconciliation")
+		}
+		current := step
+		step++
+		entered <- current
+		<-release
+		return steps[current], len(steps[current].Rejected) + 1, nativeSnapshotTelemetry{}, nil
+	}
+
+	status := &nativeAgentHTTP{reason: "starting"}
+	dirty := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runNativeAgentReconciliation(ctx, dirty, nil, status, NativeAgentOptions{NodeName: "node-a"}, reconcile)
+	}()
+
+	waitForStep := func(want int) {
+		t.Helper()
+		select {
+		case got := <-entered:
+			if got != want {
+				t.Fatalf("reconciliation step = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for reconciliation step %d", want)
+		}
+	}
+	waitForReady := func(wantStatus int, wantReason string) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			recorder := httptest.NewRecorder()
+			status.handleReady(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if recorder.Code == wantStatus && strings.Contains(recorder.Body.String(), `"reason":"`+wantReason+`"`) {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		recorder := httptest.NewRecorder()
+		status.handleReady(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		t.Fatalf("readiness = %d %s, want %d with reason %q", recorder.Code, recorder.Body.String(), wantStatus, wantReason)
+	}
+
+	waitForStep(0)
+	release <- struct{}{}
+	waitForReady(http.StatusServiceUnavailable, "quarantined")
+
+	dirty <- struct{}{}
+	waitForStep(1)
+	release <- struct{}{}
+	waitForReady(http.StatusOK, "ok")
+
+	dirty <- struct{}{}
+	waitForStep(2)
+	release <- struct{}{}
+	waitForReady(http.StatusOK, "ok")
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconciliation loop shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconciliation loop did not shut down")
+	}
+}
+
+type lastKnownGoodTestEngine struct {
+	applied policy.PolicySet
+	fail    error
+}
+
+func (e *lastKnownGoodTestEngine) Apply(_ context.Context, set policy.PolicySet) error {
+	if e.fail != nil {
+		return e.fail
+	}
+	e.applied = set
+	return nil
+}
+
+func (*lastKnownGoodTestEngine) Close() error { return nil }
+
+func TestNativeAgentReconciliationRetainsLastKnownGoodAfterApplyFailure(t *testing.T) {
+	policyTypes := []string{"Ingress"}
+	nativePolicy := policy.NativeNetworkPolicy{
+		APIVersion: policy.NativeNetworkPolicyAPIVersion,
+		Kind:       policy.NativeNetworkPolicyKind,
+		Metadata: &policy.NativeObjectMeta{
+			Namespace: "default",
+			Name:      "deny-api-ingress",
+		},
+		Spec: &policy.NativeNetworkPolicySpec{
+			PodSelector: &policy.NativeLabelSelector{MatchLabels: map[string]string{"app": "api"}},
+			PolicyTypes: &policyTypes,
+		},
+	}
+	input := policy.ResolutionInput{
+		NodeIPs:    []netip.Addr{netip.MustParseAddr("192.0.2.10")},
+		Namespaces: []policy.ResolvedNamespace{{Name: "default"}},
+		Pods: []policy.ResolvedPod{{
+			Namespace: "default",
+			Name:      "api",
+			Labels:    map[string]string{"app": "api"},
+			CgroupIDs: []uint64{42},
+			Local:     true,
+		}},
+	}
+	engine := &lastKnownGoodTestEngine{}
+	applyErr := errors.New("injected kernel apply failure")
+	entered := make(chan int, 3)
+	release := make(chan struct{})
+	step := 0
+	reconcile := func() (policy.CompileResult, int, nativeSnapshotTelemetry, error) {
+		current := step
+		step++
+		policies := []policy.NativeNetworkPolicy{nativePolicy}
+		if current == 2 {
+			policies = nil
+		}
+		if current == 1 {
+			engine.fail = applyErr
+		} else {
+			engine.fail = nil
+		}
+		result, err := enforcer.ReconcileNativePolicySnapshot(context.Background(), engine, policies, input)
+		entered <- current
+		<-release
+		return result, len(policies), nativeSnapshotTelemetry{}, err
+	}
+
+	status := &nativeAgentHTTP{reason: "starting"}
+	dirty := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runNativeAgentReconciliation(ctx, dirty, nil, status, NativeAgentOptions{NodeName: "node-a"}, reconcile)
+	}()
+	waitForStep := func(want int) {
+		t.Helper()
+		select {
+		case got := <-entered:
+			if got != want {
+				t.Fatalf("reconciliation step = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for reconciliation step %d", want)
+		}
+	}
+	waitForReadiness := func(wantReady bool, wantReason string) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			status.stateMu.RLock()
+			ready, reason := status.ready, status.reason
+			status.stateMu.RUnlock()
+			if ready == wantReady && reason == wantReason {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		status.stateMu.RLock()
+		ready, reason := status.ready, status.reason
+		status.stateMu.RUnlock()
+		t.Fatalf("readiness = %t/%q, want %t/%q", ready, reason, wantReady, wantReason)
+	}
+
+	waitForStep(0)
+	release <- struct{}{}
+	waitForReadiness(true, "ok")
+	lastGood := engine.applied
+	if len(lastGood.Subjects) != 1 || lastGood.Subjects[0].CgroupID != 42 {
+		t.Fatalf("initial engine state = %#v, want one applied subject", lastGood)
+	}
+
+	dirty <- struct{}{}
+	waitForStep(1)
+	release <- struct{}{}
+	waitForReadiness(false, "apply_error")
+	if !reflect.DeepEqual(engine.applied, lastGood) {
+		t.Fatalf("engine state after failed apply = %#v, want last-known-good %#v", engine.applied, lastGood)
+	}
+
+	dirty <- struct{}{}
+	waitForStep(2)
+	release <- struct{}{}
+	waitForReadiness(true, "ok")
+	if len(engine.applied.Subjects) != 0 || len(engine.applied.Rules) != 0 {
+		t.Fatalf("engine state after recovery = %#v, want empty corrected policy", engine.applied)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconciliation loop shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconciliation loop did not shut down")
+	}
+}
+
+func TestNativeAgentReconciliationRetriesTransientFailureWithoutDirtyEvent(t *testing.T) {
+	applyErr := errors.New("transient kernel apply failure")
+	calls := make(chan int, 3)
+	step := 0
+	reconcile := func() (policy.CompileResult, int, nativeSnapshotTelemetry, error) {
+		current := step
+		step++
+		calls <- current
+		if current == 1 {
+			return policy.CompileResult{}, 1, nativeSnapshotTelemetry{}, applyErr
+		}
+		return policy.CompileResult{}, 0, nativeSnapshotTelemetry{}, nil
+	}
+
+	status := &nativeAgentHTTP{reason: "starting"}
+	dirty := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runNativeAgentReconciliation(ctx, dirty, nil, status, NativeAgentOptions{NodeName: "node-a"}, reconcile)
+	}()
+
+	waitForCall := func(want int) {
+		t.Helper()
+		select {
+		case got := <-calls:
+			if got != want {
+				t.Fatalf("reconciliation call = %d, want %d", got, want)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting for reconciliation call %d", want)
+		}
+	}
+	waitForReadiness := func(wantReady bool, wantReason string) {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			status.stateMu.RLock()
+			ready, reason := status.ready, status.reason
+			status.stateMu.RUnlock()
+			if ready == wantReady && reason == wantReason {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		status.stateMu.RLock()
+		ready, reason := status.ready, status.reason
+		status.stateMu.RUnlock()
+		t.Fatalf("readiness = %t/%q, want %t/%q", ready, reason, wantReady, wantReason)
+	}
+
+	waitForCall(0)
+	waitForReadiness(true, "ok")
+	dirty <- struct{}{}
+	waitForCall(1)
+	waitForReadiness(false, "apply_error")
+	// No additional dirty signal is sent. The one-second retry timer must
+	// drive the successful recovery.
+	waitForCall(2)
+	waitForReadiness(true, "ok")
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconciliation loop shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconciliation loop did not shut down")
 	}
 }
 
@@ -391,6 +777,103 @@ func TestRunNativeKubernetesAgentDryRunLifecycle(t *testing.T) {
 			DryRun:     true,
 		})
 	}()
+	time.Sleep(250 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("agent shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent did not shut down")
+	}
+}
+
+func TestRunNativeKubernetesAgentCancellationBeforeCacheSyncIsClean(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := runNativeKubernetesAgent(ctx, fake.NewSimpleClientset(), NativeAgentOptions{
+		NodeName:   "node-a",
+		CgroupRoot: t.TempDir(),
+		BPFFSRoot:  t.TempDir(),
+		RunDir:     t.TempDir(),
+		Listen:     "127.0.0.1:0",
+		DryRun:     true,
+	})
+	if err != nil {
+		t.Fatalf("agent cancellation during cache sync = %v, want clean exit", err)
+	}
+}
+
+func TestRunNativeKubernetesAgentInitialFailureStopsInformers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	options := NativeAgentOptions{
+		NodeName:   "missing-node",
+		CgroupRoot: t.TempDir(),
+		BPFFSRoot:  t.TempDir(),
+		RunDir:     t.TempDir(),
+		Listen:     "127.0.0.1:0",
+		DryRun:     true,
+	}
+	done := make(chan error, 1)
+	go func() { done <- runNativeKubernetesAgent(ctx, fake.NewSimpleClientset(), options) }()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "get local node") {
+			t.Fatalf("initial reconciliation error = %v, want missing local node", err)
+		}
+		if ctx.Err() != nil {
+			t.Fatal("agent returned only after its caller context was cancelled")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent did not return after initial reconciliation failed")
+	}
+}
+
+func TestRunNativeKubernetesAgentFiltersLocalNodeList(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{{
+				Type: corev1.NodeInternalIP, Address: "192.0.2.10",
+			}}},
+		},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "apps"}},
+	)
+	fieldSelectors := make(chan string, 1)
+	client.PrependReactor("list", "nodes", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		listAction, ok := action.(k8stesting.ListAction)
+		if ok {
+			fieldSelectors <- listAction.GetListRestrictions().Fields.String()
+		}
+		return false, nil, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runNativeKubernetesAgent(ctx, client, NativeAgentOptions{
+			NodeName:   "node-a",
+			CgroupRoot: t.TempDir(),
+			BPFFSRoot:  t.TempDir(),
+			RunDir:     t.TempDir(),
+			Listen:     "127.0.0.1:0",
+			DryRun:     true,
+		})
+	}()
+
+	select {
+	case selector := <-fieldSelectors:
+		if selector != "metadata.name=node-a" {
+			t.Fatalf("Node informer field selector = %q, want metadata.name=node-a", selector)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Node informer did not issue a filtered list request")
+	}
+
 	time.Sleep(250 * time.Millisecond)
 	cancel()
 	select {
