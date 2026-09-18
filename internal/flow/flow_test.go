@@ -251,19 +251,240 @@ func (r *testReader) Available() bool {
 	return true
 }
 
+type terminalReader struct {
+	err error
+}
+
+func (r *terminalReader) Start(context.Context, chan<- RawFlowEvent) error {
+	return r.err
+}
+
+func (*terminalReader) Stop() error {
+	return nil
+}
+
+func (*terminalReader) Available() bool {
+	return true
+}
+
+type gatedStartReader struct {
+	startGate chan struct{}
+	stopOnce  sync.Once
+	stopCh    chan struct{}
+	mu        sync.Mutex
+	started   bool
+}
+
+func newGatedStartReader() *gatedStartReader {
+	return &gatedStartReader{startGate: make(chan struct{}), stopCh: make(chan struct{})}
+}
+
+func (r *gatedStartReader) Start(ctx context.Context, _ chan<- RawFlowEvent) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.startGate:
+	case <-r.stopCh:
+		return nil
+	}
+	r.mu.Lock()
+	r.started = true
+	r.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.stopCh:
+		return nil
+	}
+}
+
+func (r *gatedStartReader) Stop() error {
+	r.stopOnce.Do(func() { close(r.stopCh) })
+	r.mu.Lock()
+	r.started = false
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *gatedStartReader) Available() bool { return true }
+
+func (r *gatedStartReader) isStarted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.started
+}
+
+type slowStopReader struct {
+	started   chan struct{}
+	stopped   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
+	stopOnce  sync.Once
+}
+
+func newSlowStopReader() *slowStopReader {
+	return &slowStopReader{
+		started: make(chan struct{}),
+		stopped: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (r *slowStopReader) Start(ctx context.Context, _ chan<- RawFlowEvent) error {
+	r.startOnce.Do(func() { close(r.started) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.stopped:
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.release:
+		return nil
+	}
+}
+
+func (r *slowStopReader) Stop() error {
+	r.stopOnce.Do(func() { close(r.stopped) })
+	return nil
+}
+
+func (*slowStopReader) Available() bool { return true }
+
+func TestMonitorStopCannotStartReaderAfterOwnershipEnds(t *testing.T) {
+	reader := newGatedStartReader()
+	monitor := NewMonitor(reader)
+	ctx := t.Context()
+	if err := monitor.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := monitor.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	// Release a reader goroutine if it entered Start before Stop acquired the
+	// monitor lock. A reader that had not been invoked must never start now.
+	close(reader.startGate)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !reader.isStarted() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("flow reader remained started after monitor Stop")
+}
+
+func TestMonitorStopWaitsForReaderGoroutine(t *testing.T) {
+	reader := newSlowStopReader()
+	monitor := NewMonitor(reader)
+	if err := monitor.Start(t.Context()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-reader.started:
+	case <-time.After(time.Second):
+		t.Fatal("reader did not start")
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- monitor.Stop() }()
+	select {
+	case <-reader.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("monitor did not ask reader to stop")
+	}
+	select {
+	case err := <-stopped:
+		t.Fatalf("Stop() returned before reader goroutine unwound: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(reader.release)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not return after reader goroutine unwound")
+	}
+}
+
+func TestMonitorReportsTerminalReaderErrorAndClosesSubscribers(t *testing.T) {
+	wantErr := errors.New("pinned agent stopped enforcing")
+	monitor := NewMonitor(&terminalReader{err: wantErr})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	events := monitor.SubscribeBeforeStart(ctx)
+	if err := monitor.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("subscriber received an event from a terminal reader")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscriber was not closed after reader termination")
+	}
+	if !errors.Is(monitor.Err(), wantErr) {
+		t.Fatalf("monitor.Err() = %v, want %v", monitor.Err(), wantErr)
+	}
+	if monitor.IsRunning() {
+		t.Fatal("monitor remains running after reader termination")
+	}
+	if err := monitor.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestMonitorStaleEventProcessorCannotStopNewRun(t *testing.T) {
+	monitor := NewMonitor(&terminalReader{})
+	currentStop := make(chan struct{})
+	staleStop := make(chan struct{})
+	staleEvents := make(chan RawFlowEvent, 1)
+	staleEvents <- RawFlowEvent{DestPort: 443, Protocol: ProtocolTCP, Family: 4}
+	close(staleEvents)
+
+	monitor.mu.Lock()
+	monitor.running = true
+	monitor.started = true
+	monitor.stopCh = currentStop
+	monitor.runGeneration = 2
+	monitor.mu.Unlock()
+	currentEvents := monitor.Subscribe(t.Context())
+
+	// This simulates the tail of generation 1 arriving after generation 2
+	// has already taken ownership of the monitor state.
+	monitor.processEvents(t.Context(), staleEvents, time.Now(), staleStop, 1)
+	if !monitor.IsRunning() {
+		t.Fatal("stale event processor stopped the current monitor run")
+	}
+	if stats := monitor.GetStats(); stats.TotalEvents != 0 {
+		t.Fatalf("stale event processor changed current statistics: %+v", stats)
+	}
+	select {
+	case event := <-currentEvents:
+		t.Fatalf("stale event reached current subscriber: %+v", event)
+	default:
+	}
+}
+
 func TestMonitorIsRunning(t *testing.T) {
 	monitor := NewMonitor(&testReader{})
 	if monitor.IsRunning() {
 		t.Fatal("new monitor should not be running")
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	if err := monitor.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	if !monitor.IsRunning() {
 		t.Fatal("started monitor should be running")
 	}
+	cancel()
 	if err := monitor.Stop(); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
@@ -284,7 +505,10 @@ func TestMonitorSubscribeBeforeStart(t *testing.T) {
 	}}}
 	monitor := NewMonitor(reader)
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	defer func() {
+		cancel()
+		_ = monitor.Stop()
+	}()
 
 	// Register before Start so an immediately-emitting reader cannot race the
 	// subscriber setup.
@@ -292,7 +516,6 @@ func TestMonitorSubscribeBeforeStart(t *testing.T) {
 	if err := monitor.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer func() { _ = monitor.Stop() }()
 
 	select {
 	case event := <-events:
@@ -334,13 +557,15 @@ func TestMonitorSubscription(t *testing.T) {
 	monitor := NewMonitor(reader)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
+	defer func() {
+		cancel()
+		_ = monitor.Stop()
+	}()
 
 	// Start monitor first
 	if err := monitor.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer func() { _ = monitor.Stop() }()
 
 	// Subscribe after starting (monitor is now running)
 	eventCh := monitor.Subscribe(ctx)
@@ -425,10 +650,12 @@ func TestMonitorStats(t *testing.T) {
 	monitor := NewMonitor(reader)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
+	defer func() {
+		cancel()
+		_ = monitor.Stop()
+	}()
 
 	_ = monitor.Start(ctx)
-	defer func() { _ = monitor.Stop() }()
 
 	// Subscribe and drain events
 	eventCh := monitor.Subscribe(ctx)
@@ -600,6 +827,7 @@ func TestMonitor_SubscriberLifecycle_NoPanic(t *testing.T) {
 	time.Sleep(10 * time.Millisecond) // Give goroutine time to run
 
 	// Stop the monitor - should close remaining subscribers without panic
+	cancel()
 	if err := monitor.Stop(); err != nil {
 		t.Fatalf("Stop error: %v", err)
 	}
@@ -635,8 +863,9 @@ func TestMonitor_SubscribeAfterStop(t *testing.T) {
 	reader := &testReader{events: nil}
 	monitor := NewMonitor(reader)
 
-	ctx := t.Context()
+	ctx, cancel := context.WithCancel(t.Context())
 	_ = monitor.Start(ctx)
+	cancel()
 	_ = monitor.Stop()
 
 	// Subscribing after stop should return a closed channel
@@ -681,6 +910,7 @@ func TestMonitor_ConcurrentSubscribeUnsubscribe(t *testing.T) {
 
 	// Stop the monitor while subscribers are active
 	time.Sleep(100 * time.Millisecond)
+	cancel()
 	_ = monitor.Stop()
 
 	// Wait for all goroutines to finish without panic

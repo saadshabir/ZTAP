@@ -4,13 +4,10 @@ package cli
 
 import "testing"
 
-func TestCreateFlowReader_OtherPlatform(t *testing.T) {
-	reader := createFlowReader()
-	if reader == nil {
-		t.Fatalf("expected non-nil flow reader")
-	}
-	if !reader.Available() {
-		t.Fatalf("expected simulated flow reader to be available")
+func TestOpenStreamingFlowReader_OtherPlatform(t *testing.T) {
+	reader, err := openStreamingFlowReader()
+	if err == nil || reader != nil {
+		t.Fatalf("openStreamingFlowReader() = (%T, %v), want unsupported-platform error", reader, err)
 	}
 }
 

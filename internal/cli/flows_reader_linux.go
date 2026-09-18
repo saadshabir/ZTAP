@@ -244,16 +244,11 @@ func monotonicNowNS() (uint64, error) {
 	return uint64(current.Sec)*uint64(time.Second) + uint64(current.Nsec), nil
 }
 
-// createFlowReader retains the synthetic fallback for the interactive `flows`
-// command. Anomaly detection uses createAnomalyFlowReader instead and never
-// treats demo events as observed network traffic.
-func createFlowReader() flow.FlowReader {
-	reader, err := openPinnedFlowReader()
-	if err == nil {
-		return reader
-	}
-	fmt.Fprintf(os.Stderr, "note: using simulated flows (%v; run 'ztap agent' first)\n", err)
-	return flow.NewSimulatedReader(generateRawDemoFlows(), 500*time.Millisecond)
+// openStreamingFlowReader is the only reader used by the live `flows`
+// command. The pinned maps are intentionally opened eagerly so missing maps,
+// permissions, and an inactive agent are reported to the caller.
+func openStreamingFlowReader() (flow.FlowReader, error) {
+	return openPinnedFlowReader()
 }
 
 // createAnomalyFlowReader returns a reader that waits for the real pinned map

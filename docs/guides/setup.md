@@ -311,7 +311,7 @@ ZTAP uses Windows Filtering Platform (WFP) on Windows.
 - Windows enforcement supports IPv4/IPv6 `ipBlock.cidr` (arbitrary CIDRs) and TCP/UDP/ICMP.
   - For `protocol: ICMP`, the policy `port` is accepted by validation but ignored during enforcement.
   - By default, WFP installs permit rules only. Optional strict default-deny can be enabled with `ZTAP_WFP_STRICT=1` (use with care).
-- Flow monitoring on Windows uses WFP NetEvents and requires an elevated terminal. See `docs/runbooks/windows-flow-monitoring.md`.
+- The retained Windows WFP NetEvents reader requires an elevated terminal for integration validation. The `ztap flows` command is Linux-only; see `docs/runbooks/windows-flow-monitoring.md` for the Windows reader tests.
 
 ### 5. AWS Integration (Optional)
 

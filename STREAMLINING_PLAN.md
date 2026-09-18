@@ -1,6 +1,6 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Phase 2 complete — hosted Linux/kind evidence reviewed
+- **Status:** Phase 3 implementation slice complete — hosted Linux/kind acceptance pending
 - **Prepared:** 2026-09-10
 - **Last reviewed:** 2026-09-17
 - **Change type:** Intentional clean break
@@ -983,8 +983,9 @@ flow reader owns an OS lock at `<run-dir>/flows.lock` and validates the pinned
 agent-status schema, enforcing lifecycle, heartbeat age, and agent epoch while
 consuming the ring buffer; incompatible or stale status stops the reader. The
 reader's Linux stop channel is recreated after shutdown so a monitor can be
-started again safely. The legacy synthetic fallback remains for compatibility
-until the planned flow surface cutover.
+started again safely. The supported flow command now uses only the real pinned
+reader; the legacy synthetic fallback remains parked only for migration and
+anomaly compatibility coverage until the Phase 4 removal inventory is deleted.
 
 The native linker now queries each selected cgroup before and after attaching a
 direction and rejects an incompatible pre-existing program without replacing or
@@ -1113,27 +1114,118 @@ Exit criteria:
 
 ### Phase 3: Direct Kubernetes agent
 
+Progress (2026-09-17): The core Phase 3 implementation slice is in place,
+starting with the flow surface cutover. `ztap flows` is now a live stream of
+the node-local pinned eBPF ring buffer: the compatibility recent/demo mode,
+`--follow`, `--limit`,
+non-Linux readers, and synthetic command output are removed. The command
+accepts only the documented action, TCP/UDP protocol, direction, output, and
+run-directory options, acquires the node flow-reader lock, and returns
+distinct errors for lock, pinned-map, inactive-agent, and reader failures.
+The shared flow monitor now closes subscribers and exposes terminal reader
+errors, so an inactive or stopped agent cannot leave a flow command hanging.
+The Kubernetes resolver also treats a running Pod without a reported CRI
+container ID as pending (and excludes it from the unresolved-running gauge),
+while a known container ID whose exact cgroup cannot be resolved remains a
+candidate-blocking resolution error.
+The direct-agent retry loop now uses exponential backoff from one second to a
+one-minute cap, and the one-item dirty queue has an explicit burst-coalescing
+regression test. Snapshot coverage exercises policy add/delete, local Pod label
+changes, Namespace selector-label changes, Node address changes, and the
+restored desired state across those updates. Startup cancellation during the
+initial cache/engine reconciliation now exits without reporting a spurious
+apply failure.
+The reconciliation loop is now isolated from informer and engine setup, with
+coverage for a rejected local policy becoming ready again after correction or
+deletion while an unrelated accepted policy remains applied. A fake informer
+source also covers a missed watch followed by relist and confirms that the
+updated cache object signals the bounded dirty queue; a relisted Pod is also
+run through the immutable snapshot and compiler-to-engine boundary.
+The Linux-only relist tests (`TestNativeAgentRelistReconcilesUpdatedPodSnapshot`
+and `TestNativeAgentPolicyInformerConvergesAddUpdateDeleteRelist`) provide the
+full source-level add/update/delete/relist coverage for both Pod and
+NetworkPolicy informer paths; execution remains part of the hosted acceptance
+gate. The existing Linux `test-go` job runs these tests through
+`go test ./... -race`, while the privileged `ebpf-verification` job runs the
+`TestLinuxEngine...` flow-continuity coverage against real cgroups, packets,
+and the persistent ring map.
+The production agent now uses a dedicated field-filtered local Node informer;
+policy, Pod, and Namespace informers remain cluster-wide for peer resolution.
+The client-go request path has a regression test that verifies the Node list is
+constrained to `metadata.name=<node-name>`.
+Recovery coverage now injects a kernel-apply failure and verifies that the
+engine retains its last-known-good candidate, reports `apply_error`, and
+recovers on the next object-triggered reconciliation.
+The retry regression also verifies timer-driven recovery without a second
+Kubernetes event.
+The shared flow monitor now gates reader startup against monitor ownership, so
+an immediate `Stop` cannot let a reader begin after shutdown; the lifecycle
+regression passes under the race detector. It also tags each monitor run so a
+stale event processor from a fast stop/start cannot close subscribers or mark
+the replacement run stopped, mutate its statistics, deliver late events, or
+publish a stale reader error; the restart regression passes under the race
+detector as well. `Stop` now waits for the owned reader goroutine to unwind,
+and a replacement `Start` waits for the previous reader generation before
+launching; the new shutdown/restart regression passes under the race detector.
+Startup cancellation during informer synchronization now exits cleanly instead
+of returning `context.Canceled`, with a Linux regression test for the signal
+shutdown path. Cache synchronization also has a bounded one-minute startup
+deadline, so a persistent Kubernetes list/watch failure returns an explicit
+fatal error instead of leaving the agent blocked indefinitely; both timeout
+and cancellation paths have Linux regressions.
+The Phase 3 review also gives the informers a separately cancellable context,
+so a cache-sync timeout or initial reconciliation failure stops their workers
+before `Shutdown` waits for them. A Linux regression covers the initial-failure
+return path. On non-Linux hosts, `ztap flows` now reports platform support
+before trying to create the flow-reader lock directory. The reconciliation
+debounce now uses one fixed window after the first dirty signal so sustained
+informer activity cannot postpone a policy apply indefinitely. Unexpected
+Linux ring-buffer read failures now terminate the live stream with an error
+instead of looping and hiding a persistent reader failure.
+Focused macOS-compatible `go test ./internal/flow` and `go test ./internal/cli`
+pass on the development host. The latest repository-wide `go test -race ./...`
+run also passes with the host networking/filesystem permissions required by the
+existing listener and audit-log tests, including the monitor restart guard;
+`go vet ./...` and `git diff --check` pass as well.
+The Linux-specific Phase 3 test binary cross-compiles for `linux/amd64` and
+`linux/arm64`; the integration-tagged CLI and enforcer test binaries also
+compile for both architectures. The execution and the real eBPF/kind
+flow-continuity checks remain hosted Linux gates rather than macOS claims.
+Implementation accounting is currently 10/10 Phase 3 work items complete and
+7/9 exit criteria covered by local tests; the remaining two criteria require
+hosted Linux execution.
+
 Work:
 
-- Implement NetworkPolicy, Pod, Namespace, and local Node informer caches and immutable snapshots.
-- Implement local-node subject resolution, containerd/systemd cgroup lookup, cluster-wide IPv4 peer resolution, and explicit ClusterIP/IPBlock behavior.
-- Add the bounded reconciliation queue and debounce.
-- Wire compiler results into the engine.
-- Implement dry-run behavior, per-subject quarantine, and last-known-good state for kernel-application failure.
-- Implement health/readiness state and metrics.
-- Wire signal-based shutdown.
-- Convert `ztap flows` to real streaming only.
+- [x] Implement NetworkPolicy, Pod, Namespace, and local Node informer caches and immutable snapshots. The foundation was delivered with the Phase 2 agent wiring and is now covered by the Phase 3 convergence tests.
+- [x] Implement local-node subject resolution, containerd/systemd cgroup lookup, cluster-wide IPv4 peer resolution, and explicit ClusterIP/IPBlock behavior.
+- [x] Add the bounded reconciliation queue and debounce.
+- [x] Wire compiler results into the engine.
+- [x] Implement dry-run behavior, per-subject quarantine, and last-known-good state for kernel-application failure.
+- [x] Implement health/readiness state and metrics.
+- [x] Wire signal-based shutdown.
+- [x] Convert `ztap flows` to real streaming only; remove the command's
+  compatibility recent/demo path and propagate pinned-reader termination
+  errors.
+- [x] Treat running Pods without reported container IDs as pending, count only
+  known-ID cgroup failures as unresolved, and add one-snapshot convergence
+  coverage for policy, Pod, Namespace, and Node changes.
+- [x] Add bounded exponential retry backoff for transient direct-agent
+  reconciliation failures.
+- [x] Compile the Linux Phase 3 test binaries for amd64 and arm64, including
+  integration-tagged CLI and enforcer tests. Compilation is complete; runtime
+  convergence and real eBPF flow-continuity remain hosted acceptance gates.
 
 Exit criteria:
 
 - Add/update/delete/relist tests converge to the expected policy set.
-- Pod and namespace label changes trigger correct recompilation.
-- Node address changes trigger correct recompilation.
-- Selector peers do not infer Service frontends; explicit ClusterIP `ipBlock` rules match only the address and numeric port visible at the hook.
-- A rejected policy quarantines its selected local subjects, makes readiness false, and does not prevent unrelated accepted policies from updating.
-- Deleting or correcting the rejected policy removes quarantine without restart.
-- Dry-run remains healthy but never reports readiness or active enforcement.
-- Pod-start classification delay is measured and reported separately from reconciliation duration.
+- [x] Pod and namespace label changes trigger correct recompilation.
+- [x] Node address changes trigger correct recompilation.
+- [x] Selector peers do not infer Service frontends; explicit ClusterIP `ipBlock` rules match only the address and numeric port visible at the hook.
+- [x] A rejected policy quarantines its selected local subjects, makes readiness false, and does not prevent unrelated accepted policies from updating.
+- [x] Deleting or correcting the rejected policy removes quarantine without restart.
+- [x] Dry-run remains healthy but never reports readiness or active enforcement.
+- [x] Pod-start classification delay is measured and reported separately from reconciliation duration.
 - Flow streaming continues across policy replacements.
 
 ### Phase 4: Product cutover and deletion

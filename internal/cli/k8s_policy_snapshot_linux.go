@@ -77,7 +77,7 @@ func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *core
 			}
 			podCgroups, failure := r.resolvePodCgroupsCached(pod)
 			resolved.CgroupResolutionFailure = failure
-			if running := runningContainerCount(pod); running > len(podCgroups) {
+			if running := runningContainerWithIDCount(pod); running > len(podCgroups) {
 				unresolvedRunning += running - len(podCgroups)
 			}
 			seen := make(map[uint64]struct{})

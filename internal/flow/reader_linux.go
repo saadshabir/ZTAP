@@ -93,11 +93,21 @@ func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) er
 		default:
 			record, err := reader.Read()
 			if err != nil {
-				if err == ringbuf.ErrClosed {
-					return nil
+				if errors.Is(err, ringbuf.ErrClosed) {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					select {
+					case <-stopCh:
+						return nil
+					default:
+						return fmt.Errorf("flow ring buffer closed unexpectedly: %w", err)
+					}
 				}
-				logging.Warnf("Error reading from ring buffer: %v", err)
-				continue
+				if errors.Is(err, ringbuf.ErrFlushed) {
+					continue
+				}
+				return fmt.Errorf("read flow ring buffer: %w", err)
 			}
 
 			// Parse the raw event

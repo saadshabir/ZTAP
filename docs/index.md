@@ -33,7 +33,7 @@ Navigation hub for all ZTAP documentation.
 
 | Document | Description |
 | --- | --- |
-| [Windows Flow Monitoring](runbooks/windows-flow-monitoring.md) | Manual validation for WFP flows |
+| [Windows WFP Reader Tests](runbooks/windows-flow-monitoring.md) | Integration validation for the retained WFP reader |
 
 ## Project
 

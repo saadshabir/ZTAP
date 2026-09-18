@@ -19,6 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/informers"
@@ -33,6 +34,8 @@ import (
 
 const (
 	nativeAgentRetryInterval = time.Second
+	nativeAgentRetryMax      = time.Minute
+	nativeAgentCacheSyncMax  = time.Minute
 	nativeAgentDebounce      = 50 * time.Millisecond
 )
 
@@ -41,6 +44,8 @@ type nativeSnapshotTelemetry struct {
 	unresolvedRunningContainers int
 	valid                       bool
 }
+
+type nativeAgentReconcileFunc func() (policy.CompileResult, int, nativeSnapshotTelemetry, error)
 
 // runNativeKubernetesAgent owns one informer-cache snapshot and one
 // instance-owned engine for the life of the process. Every event causes a
@@ -87,11 +92,25 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 	}()
 
 	factory := informers.NewSharedInformerFactory(client, 0)
-	defer factory.Shutdown()
+	// Keep the cluster-wide policy, Pod, and Namespace views, but constrain the
+	// Node informer to the one object this agent can reconcile. This avoids
+	// retaining unrelated node state while preserving relist-driven updates.
+	nodeFactory := informers.NewSharedInformerFactoryWithOptions(client, 0, informers.WithTweakListOptions(func(listOptions *metav1.ListOptions) {
+		listOptions.FieldSelector = fields.OneTermEqualSelector("metadata.name", strings.TrimSpace(options.NodeName)).String()
+	}))
+	informerCtx, stopInformers := context.WithCancel(ctx)
+	defer func() {
+		// Shutdown waits for every informer goroutine. A startup error or cache
+		// sync timeout does not cancel the caller's context, so stop our own
+		// informer context before waiting for those goroutines to exit.
+		stopInformers()
+		nodeFactory.Shutdown()
+		factory.Shutdown()
+	}()
 	policyInformer := factory.Networking().V1().NetworkPolicies()
 	podInformer := factory.Core().V1().Pods()
 	namespaceInformer := factory.Core().V1().Namespaces()
-	nodeInformer := factory.Core().V1().Nodes()
+	nodeInformer := nodeFactory.Core().V1().Nodes()
 	dirty := make(chan struct{}, 1)
 	// The informer callbacks never block cache workers, even during a slow
 	// apply; bursts collapse into one pending reconciliation.
@@ -106,12 +125,18 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 		}
 	}
 
-	factory.Start(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), policyInformer.Informer().HasSynced, podInformer.Informer().HasSynced, namespaceInformer.Informer().HasSynced, nodeInformer.Informer().HasSynced) {
+	factory.Start(informerCtx.Done())
+	nodeFactory.Start(informerCtx.Done())
+	if err := waitForNativeAgentCacheSync(ctx, nativeAgentCacheSyncMax,
+		policyInformer.Informer().HasSynced,
+		podInformer.Informer().HasSynced,
+		namespaceInformer.Informer().HasSynced,
+		nodeInformer.Informer().HasSynced,
+	); err != nil {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil
 		}
-		return errors.New("kubernetes informer caches failed to sync")
+		return err
 	}
 
 	resolver := newK8sSubjectResolver(client, options.CgroupRoot).(*k8sSubjectResolver)
@@ -125,6 +150,9 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 			ResolveCgroupPath: resolver.ResolveCgroupPath,
 		})
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			return fmt.Errorf("create linux enforcement engine: %w", err)
 		}
 	}
@@ -149,35 +177,61 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 		result, err := enforcer.ReconcileNativePolicySnapshot(ctx, engine, policies, input)
 		return result, len(policies), telemetry, err
 	}
+	return runNativeAgentReconciliation(ctx, dirty, status.errorsCh(), status, options, reconcile)
+}
+
+func waitForNativeAgentCacheSync(ctx context.Context, timeout time.Duration, synced ...cache.InformerSynced) error {
+	if ctx == nil {
+		return errors.New("native agent cache sync context is nil")
+	}
+	if timeout <= 0 {
+		return errors.New("native agent cache sync timeout must be positive")
+	}
+	syncCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if cache.WaitForCacheSync(syncCtx.Done(), synced...) {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := syncCtx.Err(); err != nil {
+		return fmt.Errorf("kubernetes informer caches failed to sync within %s: %w", timeout, err)
+	}
+	return errors.New("kubernetes informer caches failed to sync")
+}
+
+// runNativeAgentReconciliation owns the single-consumer event loop after the
+// informer caches and engine have been initialized. Keeping this boundary
+// independent from client-go makes startup, rejection recovery, retries, and
+// shutdown testable without a Kubernetes API server or privileged eBPF maps.
+func runNativeAgentReconciliation(ctx context.Context, dirty <-chan struct{}, statusErrors <-chan error, status *nativeAgentHTTP, options NativeAgentOptions, reconcile nativeAgentReconcileFunc) error {
+	if ctx == nil {
+		return errors.New("native agent reconciliation context is nil")
+	}
+	if dirty == nil {
+		return errors.New("native agent dirty queue is nil")
+	}
+	if status == nil {
+		return errors.New("native agent status is nil")
+	}
+	if reconcile == nil {
+		return errors.New("native agent reconcile function is nil")
+	}
+
 	var reconcileSequence uint64
 	diagnosticState := newNativeDiagnosticLogState()
 	nextReconcileID := func() string {
 		return fmt.Sprintf("reconcile-%d", atomic.AddUint64(&reconcileSequence, 1))
 	}
 
-	operationID := nextReconcileID()
-	reconcileStart := time.Now()
-	result, observedPolicies, telemetry, err := reconcile()
-	reconcileDuration := time.Since(reconcileStart)
-	if telemetry.valid {
-		status.recordResolutionTelemetry(telemetry.unresolvedRunningContainers)
-	}
-	status.recordReconciliation(observedPolicies, result, err, reconcileDuration, options.DryRun)
-	if err != nil {
-		status.markApplyFailure()
-		logNativeReconcileFailure(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, err, true, diagnosticState)
-		return fmt.Errorf("initial native policy reconciliation: %w", err)
-	}
-	status.markApplied(result, options.DryRun)
-	classification := status.recordClassification(telemetry.classificationObservedAt, result.PolicySet, time.Now(), options.DryRun)
-	status.refreshEngineMetrics()
-	logNativeReconcile(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, classification, diagnosticState)
-
 	var retryTimer *time.Timer
 	var retryC <-chan time.Time
+	retryDelay := time.Duration(0)
 	scheduleRetry := func() {
+		retryDelay = nextNativeAgentRetryDelay(retryDelay)
 		if retryTimer == nil {
-			retryTimer = time.NewTimer(nativeAgentRetryInterval)
+			retryTimer = time.NewTimer(retryDelay)
 			retryC = retryTimer.C
 			return
 		}
@@ -187,24 +241,58 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 			default:
 			}
 		}
-		retryTimer.Reset(nativeAgentRetryInterval)
+		retryTimer.Reset(retryDelay)
 	}
 	stopRetry := func() {
-		if retryTimer == nil {
-			return
-		}
-		if !retryTimer.Stop() {
-			select {
-			case <-retryTimer.C:
-			default:
+		if retryTimer != nil {
+			if !retryTimer.Stop() {
+				select {
+				case <-retryTimer.C:
+				default:
+				}
 			}
+			retryTimer = nil
 		}
-		retryTimer = nil
 		retryC = nil
+		retryDelay = 0
 	}
 	defer stopRetry()
 
-	statusErrors := status.errorsCh()
+	reconcileOnce := func(initial bool) error {
+		operationID := nextReconcileID()
+		reconcileStart := time.Now()
+		result, observedPolicies, telemetry, err := reconcile()
+		reconcileDuration := time.Since(reconcileStart)
+		if telemetry.valid {
+			status.recordResolutionTelemetry(telemetry.unresolvedRunningContainers)
+		}
+		status.recordReconciliation(observedPolicies, result, err, reconcileDuration, options.DryRun)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if initial {
+				status.markApplyFailure()
+				logNativeReconcileFailure(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, err, true, diagnosticState)
+				return fmt.Errorf("initial native policy reconciliation: %w", err)
+			}
+			status.markApplyFailure()
+			logNativeReconcileFailure(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, err, false, diagnosticState)
+			scheduleRetry()
+			return nil
+		}
+
+		stopRetry()
+		status.markApplied(result, options.DryRun)
+		classification := status.recordClassification(telemetry.classificationObservedAt, result.PolicySet, time.Now(), options.DryRun)
+		status.refreshEngineMetrics()
+		logNativeReconcile(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, classification, diagnosticState)
+		return nil
+	}
+
+	if err := reconcileOnce(true); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -219,48 +307,27 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 			if !waitNativeAgentDebounce(ctx, dirty) {
 				return nil
 			}
-			operationID := nextReconcileID()
-			reconcileStart := time.Now()
-			result, observedPolicies, telemetry, err := reconcile()
-			reconcileDuration := time.Since(reconcileStart)
-			if telemetry.valid {
-				status.recordResolutionTelemetry(telemetry.unresolvedRunningContainers)
+			if err := reconcileOnce(false); err != nil {
+				return err
 			}
-			status.recordReconciliation(observedPolicies, result, err, reconcileDuration, options.DryRun)
-			if err != nil {
-				status.markApplyFailure()
-				logNativeReconcileFailure(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, err, false, diagnosticState)
-				scheduleRetry()
-				continue
-			}
-			stopRetry()
-			status.markApplied(result, options.DryRun)
-			classification := status.recordClassification(telemetry.classificationObservedAt, result.PolicySet, time.Now(), options.DryRun)
-			status.refreshEngineMetrics()
-			logNativeReconcile(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, classification, diagnosticState)
 		case <-retryC:
 			retryTimer = nil
 			retryC = nil
-			operationID := nextReconcileID()
-			reconcileStart := time.Now()
-			result, observedPolicies, telemetry, err := reconcile()
-			reconcileDuration := time.Since(reconcileStart)
-			if telemetry.valid {
-				status.recordResolutionTelemetry(telemetry.unresolvedRunningContainers)
+			if err := reconcileOnce(false); err != nil {
+				return err
 			}
-			status.recordReconciliation(observedPolicies, result, err, reconcileDuration, options.DryRun)
-			if err != nil {
-				status.markApplyFailure()
-				logNativeReconcileFailure(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, err, false, diagnosticState)
-				scheduleRetry()
-				continue
-			}
-			status.markApplied(result, options.DryRun)
-			classification := status.recordClassification(telemetry.classificationObservedAt, result.PolicySet, time.Now(), options.DryRun)
-			status.refreshEngineMetrics()
-			logNativeReconcile(options, operationID, observedPolicies, reconcileDuration, result, telemetry.unresolvedRunningContainers, classification, diagnosticState)
 		}
 	}
+}
+
+func nextNativeAgentRetryDelay(previous time.Duration) time.Duration {
+	if previous <= 0 {
+		return nativeAgentRetryInterval
+	}
+	if previous >= nativeAgentRetryMax/2 {
+		return nativeAgentRetryMax
+	}
+	return previous * 2
 }
 
 func waitNativeAgentDebounce(ctx context.Context, dirty <-chan struct{}) bool {
@@ -271,14 +338,8 @@ func waitNativeAgentDebounce(ctx context.Context, dirty <-chan struct{}) bool {
 		case <-ctx.Done():
 			return false
 		case <-dirty:
-			// Keep waiting until the event burst is quiet.
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(nativeAgentDebounce)
+			// Drain events in one fixed window. Resetting the timer for every
+			// event could postpone reconciliation indefinitely under churn.
 		case <-timer.C:
 			return true
 		}

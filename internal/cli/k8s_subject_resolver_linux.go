@@ -105,7 +105,9 @@ func (r *k8sSubjectResolver) ResolveCgroupIDs(ctx context.Context, tenant string
 		}
 	}
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("matched %d pods but resolved 0 cgroup IDs (namespace=%s selector=%s)", len(pods.Items), tenant, sel)
+		// A selected pod may be pending while Kubernetes has not reported its
+		// container IDs yet. It will be picked up by the next pod event.
+		return []uint64{}, nil
 	}
 
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
@@ -150,7 +152,8 @@ func (r *k8sSubjectResolver) ResolveSubjectPorts(ctx context.Context, tenant str
 		}
 	}
 	if len(infos) == 0 {
-		return nil, fmt.Errorf("matched %d pods but resolved 0 cgroup IDs (namespace=%s selector=%s)", len(pods.Items), tenant, sel)
+		// Keep pending pods non-fatal for the same reason as ResolveCgroupIDs.
+		return []enforcer.SubjectPortInfo{}, nil
 	}
 	return infos, nil
 }
@@ -204,8 +207,9 @@ func extractRunningContainerdIDs(pod *corev1.Pod) ([]string, policy.CgroupResolu
 		if status.State.Running == nil {
 			return
 		}
-		if status.ContainerID == "" {
-			failure = policy.CgroupResolutionFailureNotFound
+		if strings.TrimSpace(status.ContainerID) == "" {
+			// Kubelet can report Running before it publishes the CRI identity.
+			// This is pending state, not an unresolved supported-runtime error.
 			return
 		}
 		containerID, err := parseContainerdContainerID(status.ContainerID)
@@ -416,14 +420,14 @@ func (r *k8sSubjectResolver) resolvePodCgroupsCached(pod *corev1.Pod) ([]resolve
 	return cgroups, failure
 }
 
-func runningContainerCount(pod *corev1.Pod) int {
+func runningContainerWithIDCount(pod *corev1.Pod) int {
 	if pod == nil {
 		return 0
 	}
 	count := 0
 	countRunning := func(statuses []corev1.ContainerStatus) {
 		for _, status := range statuses {
-			if status.State.Running != nil {
+			if status.State.Running != nil && strings.TrimSpace(status.ContainerID) != "" {
 				count++
 			}
 		}
