@@ -1,6 +1,6 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Phase 3 implementation slice complete — hosted Linux/kind acceptance pending
+- **Status:** Phase 3 complete — hosted Linux/kind acceptance passed
 - **Prepared:** 2026-09-10
 - **Last reviewed:** 2026-09-17
 - **Change type:** Intentional clean break
@@ -1148,7 +1148,9 @@ NetworkPolicy informer paths; execution remains part of the hosted acceptance
 gate. The existing Linux `test-go` job runs these tests through
 `go test ./... -race`, while the privileged `ebpf-verification` job runs the
 `TestLinuxEngine...` flow-continuity coverage against real cgroups, packets,
-and the persistent ring map.
+and the persistent ring map. Hosted run `35301646083` passed the Linux race
+suite, privileged eBPF verification, the kind capability-only agent smoke test,
+and the aggregate `All Checks Passed` gate.
 The production agent now uses a dedicated field-filtered local Node informer;
 policy, Pod, and Namespace informers remain cluster-wide for peer resolution.
 The client-go request path has a regression test that verifies the Node list is
@@ -1190,10 +1192,10 @@ existing listener and audit-log tests, including the monitor restart guard;
 The Linux-specific Phase 3 test binary cross-compiles for `linux/amd64` and
 `linux/arm64`; the integration-tagged CLI and enforcer test binaries also
 compile for both architectures. The execution and the real eBPF/kind
-flow-continuity checks remain hosted Linux gates rather than macOS claims.
+flow-continuity checks passed in hosted run `35301646083`; they remain hosted
+Linux evidence rather than macOS claims.
 Implementation accounting is currently 10/10 Phase 3 work items complete and
-7/9 exit criteria covered by local tests; the remaining two criteria require
-hosted Linux execution.
+9/9 exit criteria covered by local and hosted tests.
 
 Work:
 
@@ -1213,12 +1215,14 @@ Work:
 - [x] Add bounded exponential retry backoff for transient direct-agent
   reconciliation failures.
 - [x] Compile the Linux Phase 3 test binaries for amd64 and arm64, including
-  integration-tagged CLI and enforcer tests. Compilation is complete; runtime
-  convergence and real eBPF flow-continuity remain hosted acceptance gates.
+  integration-tagged CLI and enforcer tests. Compilation is complete, and
+  hosted run `35301646083` passed the runtime convergence and real eBPF
+  flow-continuity gates.
 
 Exit criteria:
 
-- Add/update/delete/relist tests converge to the expected policy set.
+- [x] Add/update/delete/relist tests converge to the expected policy set. The
+  Linux hosted test suite passed in run `35301646083`.
 - [x] Pod and namespace label changes trigger correct recompilation.
 - [x] Node address changes trigger correct recompilation.
 - [x] Selector peers do not infer Service frontends; explicit ClusterIP `ipBlock` rules match only the address and numeric port visible at the hook.
@@ -1226,7 +1230,8 @@ Exit criteria:
 - [x] Deleting or correcting the rejected policy removes quarantine without restart.
 - [x] Dry-run remains healthy but never reports readiness or active enforcement.
 - [x] Pod-start classification delay is measured and reported separately from reconciliation duration.
-- Flow streaming continues across policy replacements.
+- [x] Flow streaming continues across policy replacements. The privileged
+  eBPF verification passed in hosted run `35301646083`.
 
 ### Phase 4: Product cutover and deletion
 
