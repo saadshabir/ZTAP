@@ -1157,7 +1157,7 @@ func prefixContainsPrefix(container, candidate netip.Prefix) bool {
 func nativePrefixRange(prefix netip.Prefix) (uint64, uint64) {
 	address := prefix.Masked().Addr().As4()
 	start := uint64(uint32(address[0])<<24 | uint32(address[1])<<16 | uint32(address[2])<<8 | uint32(address[3]))
-	size := uint64(1) << uint64(32-prefix.Bits())
+	size := uint64(1) << uint64(32-prefix.Bits()) // #nosec G115 -- IPv4 prefix bits are always in the inclusive 0..32 range.
 	return start, start + size - 1
 }
 
@@ -1168,13 +1168,13 @@ func appendNativeRangePrefixes(prefixes *[]netip.Prefix, start, end uint64) erro
 			alignment = uint64(1) << 32
 		}
 		remaining := end - start + 1
-		largestRemaining := uint64(1) << uint(bits.Len64(remaining)-1)
+		largestRemaining := uint64(1) << uint(bits.Len64(remaining)-1) // #nosec G115 -- bits.Len64 returns at most 64 for this IPv4 range.
 		size := alignment
 		if largestRemaining < size {
 			size = largestRemaining
 		}
 		prefixBits := 32 - (bits.Len64(size) - 1)
-		value := uint32(start)
+		value := uint32(start) // #nosec G115 -- start is bounded to the 32-bit IPv4 address space.
 		address := netip.AddrFrom4([4]byte{byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)})
 		*prefixes = append(*prefixes, netip.PrefixFrom(address, prefixBits))
 		if len(*prefixes) > MaxIPBlockExpansion {

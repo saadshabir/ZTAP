@@ -587,7 +587,7 @@ func acquireNativeAgentLock(runDir string) (func() error, error) {
 		return nil, fmt.Errorf("create agent run directory %q: %w", runDir, err)
 	}
 	lockPath := filepath.Join(runDir, "agent.lock")
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- the lock is intentionally created beneath the explicit agent run directory.
 	if err != nil {
 		return nil, fmt.Errorf("open agent lock %q: %w", lockPath, err)
 	}

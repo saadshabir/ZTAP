@@ -25,7 +25,7 @@ func acquireFlowReaderLock(runDir string) (func() error, error) {
 		return nil, fmt.Errorf("create flow reader run directory %q: %w", runDir, err)
 	}
 	lockPath := filepath.Join(runDir, "flows.lock")
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- the lock is intentionally created beneath the explicit flow run directory.
 	if err != nil {
 		return nil, fmt.Errorf("open flow reader lock %q: %w", lockPath, err)
 	}

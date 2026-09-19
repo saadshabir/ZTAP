@@ -75,11 +75,11 @@ func run() error {
 // inlineObject replaces the go:embed directive in the bpf2go-generated file
 // with an inline byte literal so no binary artifact is committed.
 func inlineObject(goFile, objectFile, bytesVar string) error {
-	data, err := os.ReadFile(objectFile)
+	data, err := os.ReadFile(objectFile) // #nosec G304 -- objectFile is constructed from the checked-in source name and generator output directory.
 	if err != nil {
 		return fmt.Errorf("read %s: %w", objectFile, err)
 	}
-	content, err := os.ReadFile(goFile)
+	content, err := os.ReadFile(goFile) // #nosec G304 -- goFile is constructed from the checked-in source name and generator output directory.
 	if err != nil {
 		return fmt.Errorf("read %s: %w", goFile, err)
 	}

@@ -339,7 +339,7 @@ func (s *linuxEngineStore) metricsSnapshot(ctx context.Context) (EngineMetricsSn
 					return EngineMetricsSnapshot{}, err
 				}
 				index := (reason*2+int(direction))*2 + int(action)
-				count, err := lookupPerCPUCounter(decisionMap, uint32(index))
+				count, err := lookupPerCPUCounter(decisionMap, uint32(index)) // #nosec G115 -- index is bounded by the fixed decision-label dimensions above.
 				if err != nil {
 					return EngineMetricsSnapshot{}, fmt.Errorf("read decision counter %d: %w", index, err)
 				}
@@ -354,7 +354,7 @@ func (s *linuxEngineStore) metricsSnapshot(ctx context.Context) (EngineMetricsSn
 		if err := ctx.Err(); err != nil {
 			return EngineMetricsSnapshot{}, err
 		}
-		count, err := lookupPerCPUCounter(dropMap, uint32(reason))
+		count, err := lookupPerCPUCounter(dropMap, uint32(reason)) // #nosec G115 -- reason indexes the fixed event-drop label array.
 		if err != nil {
 			return EngineMetricsSnapshot{}, fmt.Errorf("read event-drop counter %d: %w", reason, err)
 		}
@@ -944,7 +944,7 @@ func rejectIncompatibleCgroupProgram(path string, attach ebpf.AttachType, expect
 	if !ok {
 		return errors.New("expected cgroup program has no kernel ID")
 	}
-	cgroup, err := os.Open(path)
+	cgroup, err := os.Open(path) // #nosec G304 -- path is the validated cgroup path selected by the resolver.
 	if err != nil {
 		return fmt.Errorf("open cgroup: %w", err)
 	}
@@ -1058,7 +1058,7 @@ func requireFilesystemType(path string, want int64, name string) error {
 		return fmt.Errorf("inspect %s filesystem %q: %w", name, path, err)
 	}
 	if stat.Type != want {
-		return fmt.Errorf("%s path %q is not %s (filesystem magic %#x)", name, path, name, uint64(stat.Type))
+		return fmt.Errorf("%s path %q is not %s (filesystem magic %#x)", name, path, name, stat.Type)
 	}
 	return nil
 }
@@ -1080,5 +1080,8 @@ func monotonicNowNS() (uint64, error) {
 	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &current); err != nil {
 		return 0, fmt.Errorf("read monotonic clock: %w", err)
 	}
-	return uint64(current.Sec)*uint64(time.Second) + uint64(current.Nsec), nil
+	if current.Sec < 0 || current.Nsec < 0 {
+		return 0, errors.New("monotonic clock returned a negative value")
+	}
+	return uint64(current.Sec)*uint64(time.Second) + uint64(current.Nsec), nil // #nosec G115 -- clock_gettime returns non-negative seconds and nanoseconds after the checks above.
 }

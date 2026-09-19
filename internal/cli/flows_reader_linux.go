@@ -240,7 +240,10 @@ func monotonicNowNS() (uint64, error) {
 	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &current); err != nil {
 		return 0, fmt.Errorf("read monotonic clock: %w", err)
 	}
-	return uint64(current.Sec)*uint64(time.Second) + uint64(current.Nsec), nil
+	if current.Sec < 0 || current.Nsec < 0 {
+		return 0, errors.New("monotonic clock returned a negative value")
+	}
+	return uint64(current.Sec)*uint64(time.Second) + uint64(current.Nsec), nil // #nosec G115 -- clock_gettime returns non-negative seconds and nanoseconds after the checks above.
 }
 
 // openStreamingFlowReader is the only reader used by the live `flows`
