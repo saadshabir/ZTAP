@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 
 	"github.com/cilium/ebpf"
 )

@@ -1,6 +1,0 @@
-{"timestamp":"<ts>","level":"debug","message":"debug message","fields":{"component":"debugger","count":3}}
-{"timestamp":"<ts>","level":"info","message":"info message","fields":{"component":"test","latency_ms":42}}
-{"timestamp":"<ts>","level":"warn","message":"warn message","fields":{"component":"test","warn":true}}
-{"timestamp":"<ts>","level":"error","message":"error message"}
-{"timestamp":"<ts>","level":"info","message":"multi line message","fields":{"component":"test"}}
-{"timestamp":"<ts>","level":"info","message":"blank field keys","fields":{"kept key":"trimmed","valid":"value"}}

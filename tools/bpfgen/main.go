@@ -22,10 +22,7 @@ type programSource struct {
 	source string
 }
 
-var programSources = []programSource{
-	{stem: "bpf", source: "../../bpf/filter.c"},
-	{stem: "engine", source: "../../bpf/engine.c"},
-}
+var programSources = []programSource{{stem: "engine", source: "../../bpf/engine.c"}}
 
 func main() {
 	if err := run(); err != nil {
@@ -141,7 +138,7 @@ func indentFor(chunk int) string {
 
 // hostEnv returns the current environment with GOOS/GOARCH/CGO_ENABLED
 // stripped so the spawned bpf2go always builds natively (go generate may be
-// invoked with GOOS=linux from a macOS/Windows checkout).
+// invoked with GOOS=linux from another development host).
 func hostEnv() []string {
 	var env []string
 	for _, kv := range os.Environ() {

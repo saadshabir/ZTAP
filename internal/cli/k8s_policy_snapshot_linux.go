@@ -14,7 +14,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 // BuildResolutionSnapshot converts one caller-owned Kubernetes object snapshot

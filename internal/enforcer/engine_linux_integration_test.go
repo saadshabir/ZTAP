@@ -14,12 +14,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"ztap/internal/flow"
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/flow"
+	"github.com/saadshabir/ZTAP/internal/policy"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
@@ -29,7 +30,7 @@ import (
 )
 
 func TestLinuxEngineRejectsIncompatibleCgroupProgram(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -68,7 +69,7 @@ func TestLinuxEngineRejectsIncompatibleCgroupProgram(t *testing.T) {
 }
 
 func TestLinuxEnginePublishesLifecycleStatus(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -98,7 +99,7 @@ func TestLinuxEnginePublishesLifecycleStatus(t *testing.T) {
 }
 
 func TestLinuxEnginePublishesStoppingLifecycleStatus(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	engine := newLinuxEngineForTest(t, nil)
 	status, err := ebpf.LoadPinnedMap(engine.store.agentStatusPin, nil)
@@ -124,7 +125,7 @@ func TestLinuxEnginePublishesStoppingLifecycleStatus(t *testing.T) {
 }
 
 func TestLinuxEngineMetricsSnapshotReadsStableCounters(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	engine := newLinuxEngineForTest(t, nil)
 	snapshot, err := engine.MetricsSnapshot(context.Background())
@@ -155,7 +156,7 @@ func TestLinuxEngineMetricsSnapshotReadsStableCounters(t *testing.T) {
 }
 
 func TestLinuxEngineDirectionAndBypassSemantics(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	root := createTestCgroup(t)
 	selected := createSubCgroup(t, root, "selected")
@@ -257,7 +258,7 @@ func TestLinuxEngineDirectionAndBypassSemantics(t *testing.T) {
 }
 
 func TestLinuxEngineIngressDirectionSpecificDeny(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	descendant := createSubCgroup(t, cgroup, "selected-child")
@@ -304,7 +305,7 @@ func TestLinuxEngineIngressDirectionSpecificDeny(t *testing.T) {
 }
 
 func TestLinuxEngineRejectsIPv6ForIsolatedSubject(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -330,7 +331,7 @@ func TestLinuxEngineRejectsIPv6ForIsolatedSubject(t *testing.T) {
 }
 
 func TestLinuxEngineFlowEventRateLimitPersistsAcrossPolicyEpochs(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -392,7 +393,7 @@ func TestLinuxEngineFlowEventRateLimitPersistsAcrossPolicyEpochs(t *testing.T) {
 }
 
 func TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -440,7 +441,7 @@ func TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch(t *testing.T) {
 }
 
 func TestLinuxEngineAllowsTCPReplyTrafficWithoutReverseRule(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -497,7 +498,7 @@ func TestLinuxEngineAllowsTCPReplyTrafficWithoutReverseRule(t *testing.T) {
 }
 
 func TestLinuxEngineReplyStateExpiresAcrossReusedSlot(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -561,7 +562,7 @@ func TestLinuxEngineReplyStateExpiresAcrossReusedSlot(t *testing.T) {
 }
 
 func TestLinuxEngineConcurrentTrafficSeesCompletePolicyEpoch(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -705,7 +706,7 @@ func parseEngineFlipObservation(data []byte) (engineFlipObservation, bool) {
 }
 
 func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	parent := createTestCgroup(t)
 	activeCgroup := createSubCgroup(t, parent, "active")
@@ -752,7 +753,7 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 }
 
 func TestLinuxEngineKernelMapWriteFailurePreservesActivePackets(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	for _, tc := range []struct {
 		name    string
@@ -805,7 +806,7 @@ func TestLinuxEngineKernelMapWriteFailurePreservesActivePackets(t *testing.T) {
 }
 
 func TestLinuxEngineRetiredSlotQuiescenceIgnoresCurrentTraffic(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	engine := newLinuxEngineForTest(t, nil)
 	if err := engine.Apply(context.Background(), policy.PolicySet{NodeIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
@@ -834,7 +835,7 @@ func TestLinuxEngineRetiredSlotQuiescenceIgnoresCurrentTraffic(t *testing.T) {
 }
 
 func TestLinuxEngineRepeatedApplyCloseReleasesOwnedResources(t *testing.T) {
-	requirePhase0LinuxRoot(t)
+	requireLinuxEBPFRoot(t)
 
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
@@ -862,6 +863,16 @@ func TestLinuxEngineRepeatedApplyCloseReleasesOwnedResources(t *testing.T) {
 				t.Fatalf("cycle %d left engine pin %q: %v", cycle, pin, err)
 			}
 		}
+	}
+}
+
+func requireLinuxEBPFRoot(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("integration test only runs on Linux")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("requires root privileges; re-run with sudo or CAP_BPF + CAP_NET_ADMIN")
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"sort"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 // enginePolicyRulesMapFlags is BPF_F_NO_PREALLOC. Keep the ABI flag in the

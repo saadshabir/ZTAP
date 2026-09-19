@@ -7,12 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
-	"ztap/internal/enforcer"
-	"ztap/internal/flow"
+	"github.com/saadshabir/ZTAP/internal/enforcer"
+	"github.com/saadshabir/ZTAP/internal/flow"
 
 	"github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
@@ -249,82 +248,4 @@ func monotonicNowNS() (uint64, error) {
 // permissions, and an inactive agent are reported to the caller.
 func openStreamingFlowReader() (flow.FlowReader, error) {
 	return openPinnedFlowReader()
-}
-
-// createAnomalyFlowReader returns a reader that waits for the real pinned map
-// to become available. This covers agent startup, where policy enforcement may
-// pin the map shortly after the anomaly runner starts, without ever emitting
-// synthetic events.
-func createAnomalyFlowReader() (flow.FlowReader, error) {
-	return &retryingAnomalyReader{}, nil
-}
-
-type retryingAnomalyReader struct {
-	mu     sync.Mutex
-	inner  flow.FlowReader
-	stopCh chan struct{}
-}
-
-func (r *retryingAnomalyReader) Start(ctx context.Context, eventCh chan<- flow.RawFlowEvent) error {
-	r.mu.Lock()
-	stopCh := make(chan struct{})
-	r.stopCh = stopCh
-	r.mu.Unlock()
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	var lastLog time.Time
-
-	for {
-		reader, err := openPinnedFlowReader()
-		if err == nil {
-			r.mu.Lock()
-			r.inner = reader
-			r.mu.Unlock()
-
-			startErr := reader.Start(ctx, eventCh)
-			_ = reader.Stop()
-			r.mu.Lock()
-			if r.inner == reader {
-				r.inner = nil
-			}
-			if r.stopCh == stopCh {
-				r.stopCh = nil
-			}
-			r.mu.Unlock()
-			return startErr
-		}
-
-		if lastLog.IsZero() || time.Since(lastLog) >= 10*time.Second {
-			fmt.Fprintf(os.Stderr, "note: anomaly flow reader waiting for %s: %v\n", enforcer.DefaultFlowEventsPinPath, err)
-			lastLog = time.Now()
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-stopCh:
-			return nil
-		case <-ticker.C:
-		}
-	}
-}
-
-func (r *retryingAnomalyReader) Stop() error {
-	r.mu.Lock()
-	stopCh := r.stopCh
-	if stopCh != nil {
-		close(stopCh)
-		r.stopCh = nil
-	}
-	inner := r.inner
-	r.inner = nil
-	r.mu.Unlock()
-	if inner != nil {
-		return inner.Stop()
-	}
-	return nil
-}
-
-func (r *retryingAnomalyReader) Available() bool {
-	return true // It can become available when enforcement pins the map.
 }

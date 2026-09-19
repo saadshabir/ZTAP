@@ -8,30 +8,6 @@ import (
 	"unsafe"
 )
 
-func TestParseLegacyFlowEvent(t *testing.T) {
-	data := make([]byte, legacyRawEventSize)
-	binary.LittleEndian.PutUint64(data[0:8], 123)
-	binary.LittleEndian.PutUint32(data[8:12], 0x0a000001)
-	binary.LittleEndian.PutUint32(data[24:28], 0xc0000201)
-	binary.LittleEndian.PutUint16(data[40:42], 45678)
-	binary.LittleEndian.PutUint16(data[42:44], 443)
-	data[44] = ProtocolTCP
-	data[45] = DirectionEgress
-	data[46] = ActionAllowed
-	data[47] = 4
-
-	got, err := parseRawEvent(data)
-	if err != nil {
-		t.Fatalf("parse legacy event: %v", err)
-	}
-	if got.TimestampNs != 123 || got.SrcIP[0] != 0x0a000001 || got.DestIP[0] != 0xc0000201 {
-		t.Fatalf("legacy tuple decode = %+v", got)
-	}
-	if got.PolicyEpoch != 0 || got.CgroupID != 0 || got.SchemaVersion != 0 || got.Reason != 0 {
-		t.Fatalf("legacy event unexpectedly has v1 metadata: %+v", got)
-	}
-}
-
 func TestParseEngineFlowEvent(t *testing.T) {
 	data := make([]byte, engineRawEventSize)
 	binary.LittleEndian.PutUint64(data[0:8], 123)
@@ -68,7 +44,7 @@ func TestParseEngineFlowEvent(t *testing.T) {
 }
 
 func TestParseFlowEventRejectsUnknownSizeAndSchema(t *testing.T) {
-	if _, err := parseRawEvent(make([]byte, legacyRawEventSize+1)); err == nil {
+	if _, err := parseRawEvent(make([]byte, engineRawEventSize+1)); err == nil {
 		t.Fatal("expected an unknown event size to be rejected")
 	}
 	data := make([]byte, engineRawEventSize)

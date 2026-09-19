@@ -13,9 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -1015,6 +1016,18 @@ func validateCgroupTarget(root, target string, expectedID uint64) (string, error
 		return "", fmt.Errorf("cgroup path %q has ID %d, want %d", resolved, cgroupID, expectedID)
 	}
 	return resolved, nil
+}
+
+func cgroupInodeID(cgroupPath string) (uint64, error) {
+	info, err := os.Stat(cgroupPath)
+	if err != nil {
+		return 0, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("unexpected stat type %T", info.Sys())
+	}
+	return uint64(stat.Ino), nil
 }
 
 func absoluteDirectoryPath(path, fallback string) (string, error) {

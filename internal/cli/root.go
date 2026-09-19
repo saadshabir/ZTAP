@@ -2,124 +2,129 @@ package cli
 
 import (
 	"fmt"
-
-	"ztap/internal/config"
-	"ztap/internal/logging"
+	"log/slog"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-// App carries per-invocation state (currently the single parsed config).
-// NewRootCmd owns one App; PersistentPreRunE parses the config once and the
-// subcommands read it via app.Config(). Precedence is flag > env > file > default.
-// Commands invoked directly (e.g. in unit tests) without the root
-// PersistentPreRunE get a lazy load on first use and must handle the error.
-type App struct {
-	cfg *config.Config
-}
+// primaryUsageTemplate keeps Cobra's support commands callable without
+// presenting them as part of ZTAP's four-command product surface. Cobra's
+// default template special-cases a command named "help" and lists it even
+// when Hidden is true.
+const primaryUsageTemplate = `Usage:{{if .Runnable}}
+  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
+  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
 
-// Config returns the parsed configuration, or an error when loading it fails.
-// In the normal CLI path PersistentPreRunE has already loaded and cached the
-// config, so this returns the cached value; the lazy path exists for direct
-// invocations and surfaces the error to the caller instead of exiting.
-func (a *App) Config() (*config.Config, error) {
-	if a.cfg == nil {
-		cfg, err := config.Load("")
-		if err != nil {
-			return nil, err
-		}
-		a.cfg = cfg
-	}
-	return a.cfg, nil
-}
+Aliases:
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
 
-// NewRootCmd builds the ztap root command with every subcommand registered.
-// Command construction is explicit (no init() side effects); main calls this
-// once and executes the returned command.
+Examples:
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}{{$cmds := .Commands}}{{if eq (len .Groups) 0}}
+
+Available Commands:{{range $cmds}}{{if .IsAvailableCommand}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{else}}{{range $group := .Groups}}
+
+{{.Title}}{{range $cmds}}{{if (and (eq .GroupID $group.ID) .IsAvailableCommand)}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if not .AllChildCommandsHaveGroup}}
+
+Additional Commands:{{range $cmds}}{{if (and (eq .GroupID "") .IsAvailableCommand)}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+
+Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
+
+Global Flags:
+{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasHelpSubCommands}}
+
+Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
+  {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
+
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+`
+
+// NewRootCmd builds the focused ZTAP command surface. Command construction is
+// explicit (no init side effects); main calls this once and executes it.
 func NewRootCmd(version string) *cobra.Command {
-	app := &App{}
 	Version = version
-	clusterStarted := false
 
 	root := &cobra.Command{
 		Use:           "ztap",
-		Short:         "Zero Trust Access Platform - Microsegmentation for hybrid environments",
+		Short:         "Linux eBPF enforcement for Kubernetes NetworkPolicy",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Long: `ZTAP enforces zero-trust network policies across on-premises and cloud workloads.
-It uses eBPF on Linux and pf on macOS to enforce fine-grained traffic rules.`,
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if commandSkipsConfig(cmd) {
-				return nil
-			}
-			cfg, err := config.Load("")
-			if err != nil {
-				return err
-			}
-			app.cfg = cfg
-
-			lcfg := logging.Config{
-				Level:  string(cfg.Logging.Level),
-				File:   cfg.Logging.File,
-				Format: string(cfg.Logging.Format),
-			}
-			if level, _ := cmd.Flags().GetString("log-level"); level != "" {
-				lcfg.Level = level
-			}
-			if format, _ := cmd.Flags().GetString("log-format"); format != "" {
-				lcfg.Format = format
-			}
-			if file, _ := cmd.Flags().GetString("log-file"); file != "" {
-				lcfg.File = file
-			}
-
-			if _, err := logging.Configure(lcfg); err != nil {
-				return fmt.Errorf("configure logging: %w", err)
-			}
-			if commandUsesClusterBackend(cmd) {
-				if err := startClusterBackendWithConfig(cmd.Context(), cfg, "127.0.0.1:9090"); err != nil {
-					return err
-				}
-				clusterStarted = true
-			}
-			return nil
-		},
-		PersistentPostRun: func(cmd *cobra.Command, args []string) {
-			if clusterStarted {
-				stopClusterBackend()
-				clusterStarted = false
-			}
+		Long: `ZTAP watches native Kubernetes NetworkPolicy resources on a Linux node,
+compiles the supported subset, and enforces it with per-container eBPF programs.`,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			return configureLogging(cmd)
 		},
 	}
+	root.CompletionOptions.HiddenDefaultCmd = true
+	root.SetUsageTemplate(primaryUsageTemplate)
 
-	root.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")
-	root.PersistentFlags().String("log-format", "", "Log format (json, text)")
-	root.PersistentFlags().String("log-file", "", "Log output file")
-
+	root.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
+	root.PersistentFlags().String("log-format", "json", "Log format (json, text)")
 	root.AddCommand(
+		newAgentCmd(),
 		newValidateCmd(),
-		newAgentCmd(app),
-		newAlertCmd(app),
-		newApiCmd(app),
-		newAuditCmd(app),
-		newAwsCmd(app),
-		newAzureCmd(app),
-		newClusterCmdWithApp(app),
-		newComplianceCmd(),
-		newDiscoveryCmd(app),
-		newEnforceCmd(app),
 		newFlowsCmd(),
-		newGcpCmd(app),
-		newGrpcCmd(app),
-		newLogsCmd(app),
-		newMetricsCmd(app),
-		newPolicyCmd(app),
-		newStatusCmd(app),
-		newUserCmd(app),
 		newVersionCmd(),
 	)
-
-	initClusterBackend()
-
+	root.InitDefaultHelpCmd()
+	for _, command := range root.Commands() {
+		if command.Name() == "help" {
+			// Keep Cobra's built-in help behavior and familiar command name, but
+			// omit it from the product command list via primaryUsageTemplate.
+			command.Hidden = true
+			break
+		}
+	}
 	return root
+}
+
+func configureLogging(cmd *cobra.Command) error {
+	if cmd == nil {
+		return fmt.Errorf("logging command is nil")
+	}
+	levelName, err := cmd.Flags().GetString("log-level")
+	if err != nil {
+		return err
+	}
+	format, err := cmd.Flags().GetString("log-format")
+	if err != nil {
+		return err
+	}
+	level, err := parseLogLevel(levelName)
+	if err != nil {
+		return err
+	}
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format != "json" && format != "text" {
+		return fmt.Errorf("invalid log format %q: want json or text", format)
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	if format == "text" {
+		handler = slog.NewTextHandler(os.Stderr, opts)
+	} else {
+		handler = slog.NewJSONHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(handler))
+	return nil
+}
+
+func parseLogLevel(value string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info", "":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("invalid log level %q: want debug, info, warn, or error", value)
+	}
 }

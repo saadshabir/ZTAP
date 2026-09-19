@@ -52,7 +52,7 @@ func TestValidateCommandExitCodes(t *testing.T) {
 		{
 			name: "invalid policy",
 			args: []string{"validate", "-f", "-"},
-			data: `apiVersion: ztap/v1
+			data: `apiVersion: example.invalid/v1
 kind: NetworkPolicy
 metadata:
   name: old
@@ -118,31 +118,6 @@ spec:
 
 	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "write validation result") {
 		t.Fatalf("error = %v, want output write error", err)
-	}
-}
-
-func TestCommandSkipsConfigForNativeTopLevelCommands(t *testing.T) {
-	root := NewRootCmd("test")
-	topLevelValidate, _, err := root.Find([]string{"validate"})
-	if err != nil {
-		t.Fatalf("find top-level validate: %v", err)
-	}
-	legacyValidate, _, err := root.Find([]string{"policy", "validate"})
-	if err != nil {
-		t.Fatalf("find legacy policy validate: %v", err)
-	}
-	if !commandSkipsConfig(topLevelValidate) {
-		t.Fatal("top-level validate should skip legacy config")
-	}
-	if commandSkipsConfig(legacyValidate) {
-		t.Fatal("nested policy validate must retain legacy config setup")
-	}
-	nativeAgent, _, err := root.Find([]string{"agent"})
-	if err != nil {
-		t.Fatalf("find native agent: %v", err)
-	}
-	if !commandSkipsConfig(nativeAgent) {
-		t.Fatal("native agent should not load the legacy config")
 	}
 }
 

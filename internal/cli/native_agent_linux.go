@@ -28,8 +28,8 @@ import (
 	networkinglisters "k8s.io/client-go/listers/networking/v1"
 	"k8s.io/client-go/tools/cache"
 
-	"ztap/internal/enforcer"
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/enforcer"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 const (
@@ -139,7 +139,7 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 		return err
 	}
 
-	resolver := newK8sSubjectResolver(client, options.CgroupRoot).(*k8sSubjectResolver)
+	resolver := newK8sSubjectResolver(client, options.CgroupRoot)
 	var engine enforcer.Engine
 	if options.DryRun {
 		engine = nativeDryRunEngine{}

@@ -1,6 +1,0 @@
-<ts> [DEBUG] debug message component=debugger count=3
-<ts> [INFO] info message component=test latency_ms=42
-<ts> [WARN] warn message component=test warn=true
-<ts> [ERROR] error message
-<ts> [INFO] multi line message component=test
-<ts> [INFO] blank field keys kept key=trimmed valid=value

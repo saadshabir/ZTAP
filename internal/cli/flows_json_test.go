@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"ztap/internal/flow"
+	"github.com/saadshabir/ZTAP/internal/flow"
 )
 
 func TestFormatFlowJSONIncludesEngineMetadata(t *testing.T) {

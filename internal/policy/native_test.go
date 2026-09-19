@@ -258,7 +258,7 @@ func TestNativePolicyRejectsUnsupportedContent(t *testing.T) {
 	}{
 		{
 			name:  "wrong api version",
-			yaml:  strings.Replace(validNativePolicyYAML, "networking.k8s.io/v1", "ztap/v1", 1),
+			yaml:  strings.Replace(validNativePolicyYAML, "networking.k8s.io/v1", "github.com/saadshabir/ZTAP/v1", 1),
 			field: "apiVersion",
 		},
 		{

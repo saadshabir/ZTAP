@@ -6,14 +6,14 @@ import (
 	"io"
 	"os"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 
 	"github.com/spf13/cobra"
 )
 
 // newValidateCmd implements the standalone offline validation command from
-// the streamlined product contract. It deliberately does not load the legacy
-// config file or initialize cluster services.
+// the streamlined product contract. It deliberately does not load runtime
+// configuration or initialize cluster services.
 func newValidateCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "validate",
@@ -73,12 +73,4 @@ func newValidateCmd() *cobra.Command {
 		return &ExitError{Status: 2, Err: err}
 	})
 	return c
-}
-
-func commandSkipsConfig(cmd *cobra.Command) bool {
-	if cmd == nil {
-		return false
-	}
-	parent := cmd.Parent()
-	return parent != nil && parent.Parent() == nil && (cmd.Name() == "validate" || cmd.Name() == "version" || cmd.Name() == "agent")
 }
