@@ -1,8 +1,8 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Phase 3 complete — hosted Linux/kind acceptance passed
+- **Status:** Phase 4 implementation complete — hosted acceptance evidence pending
 - **Prepared:** 2026-09-10
-- **Last reviewed:** 2026-09-17
+- **Last reviewed:** 2026-09-18
 - **Change type:** Intentional clean break
 - **Target:** Linux/Kubernetes eBPF network-policy enforcer
 
@@ -1235,36 +1235,69 @@ Exit criteria:
 
 ### Phase 4: Product cutover and deletion
 
+Progress (2026-09-18): The product cutover is implemented locally. The
+command surface exposes only `agent`, `validate`, `flows`, and `version`; the
+legacy file configuration, logging wrapper, cluster/control-plane, cloud,
+auth, audit, compliance, anomaly, operator, discovery, and platform-specific
+enforcement packages and assets are removed. The retained native compiler,
+instance-owned eBPF engine, Linux flow reader, and Kubernetes agent use the
+canonical module path and standard-library `slog`. The repository now has one
+DaemonSet manifest, one scratch runtime image, one retained eBPF program, and
+the four maintained documents. Local race, vet, build, Linux cross-compile,
+integration-tag compilation, manifest, CLI-help, dependency, and actionlint
+checks pass. Hosted Linux eBPF and kind acceptance evidence is still required
+before closing this phase; those checks are execution-only on Linux and are not
+macOS implementation gaps.
+
+Review follow-up (2026-09-18): The release-path review is resolved locally.
+The image builder now consumes Docker's target OS and architecture, the
+deployment guide builds and publishes the same multi-architecture registry tag
+with release metadata, and Cobra keeps `help` and `completion` callable under
+their standard names while hiding them from the primary command list. Focused
+CLI tests, the full unit suite, race tests, vet, and Linux amd64/arm64
+cross-builds pass. Docker image execution and privileged Kubernetes/eBPF
+behavior remain hosted Linux checks.
+
 Work:
 
-- Make the new `agent`, `validate`, `flows`, and `version` commands the only primary commands.
-- Delete all feature areas listed in the removal inventory.
-- Delete the custom config system and use explicit flags.
-- Migrate retained logging calls to `slog` and remove the wrapper.
-- Remove old deployment assets and produce the single DaemonSet manifest.
-- Replace the runtime image with the single minimal image.
-- Remove unused direct dependencies and run `go mod tidy`.
-- Change the module path.
+- [x] Make the new `agent`, `validate`, `flows`, and `version` commands the only primary commands.
+- [x] Delete the retained-source feature areas listed in the removal inventory.
+- [x] Delete the custom config system and use explicit flags.
+- [x] Migrate retained logging calls to `slog` and remove the wrapper.
+- [x] Remove old deployment assets and produce the single DaemonSet manifest.
+- [x] Replace the runtime image with the single minimal image.
+- [x] Remove unused direct dependencies and run `go mod tidy`.
+- [x] Change the module path.
 
 Exit criteria:
 
-- `ztap --help` exposes only the agreed command surface.
-- `rg` finds no source or documentation references to removed commands, APIs, config keys, CRDs, platforms, or services except the breaking-change record.
-- `go list -deps` contains none of the removed dependency families.
-- The repository builds without generated local executables in its root.
+- [x] `ztap --help` lists only `agent`, `validate`, `flows`, and `version`; Cobra's `help` and `completion` commands remain callable but hidden from the primary command list.
+- [x] `rg` finds no source or maintained-documentation references to removed commands, APIs, config keys, CRDs, platforms, or services outside this temporary plan and the breaking-change record.
+- [x] `go list -deps ./...` contains none of the removed direct dependency families: cloud SDKs, AWS/Azure/GCP clients, etcd, gRPC, SQLite, or controller-runtime. Kubernetes's transitive protobuf and `go-logr` packages remain because `client-go` requires them.
+- [x] `go build ./...` and `make build` pass; the latter writes only `bin/ztap`, and `make clean` removes it without creating a repository-root executable.
+
+The `main` branch-protection rule was inspected on 2026-09-18 and still
+requires `Required CI` from GitHub Actions. The replacement retains the
+`Migration CI` workflow file/name and `Required CI` job name. Phase 4 remains
+open for a hosted run of this exact diff to confirm that check is reported and
+to review `ebpf-engine-evidence` and `capability-agent-evidence`. The
+target-architecture image build remains a Phase 5 release gate. The local
+implementation checklist above is complete; the hosted artifacts are the
+remaining phase-close evidence, and non-Linux checks cannot establish the
+kernel and container-runtime claims.
 
 ### Phase 5: Documentation, tooling, and release gate
 
 Work:
 
-- Create the four-document end state.
-- Convert and validate the three examples.
+- [x] Create the four-document end state; final editorial review remains part of the release gate.
+- [x] Convert and validate the three examples through `ztap validate`.
 - Finalize every Makefile target listed in Section 10.2.
-- Replace the temporary `Migration CI` with the final Linux CI defined in Section 12.2.
+- [x] Replace the temporary `Migration CI` jobs with the Linux CI jobs while preserving the workflow file and `Required CI` check name; hosted acceptance and branch-protection verification remain open.
 - Recreate the simplified release workflow only after the final CI and acceptance gates pass.
 - Restore narrowed monthly Dependabot updates and verify branch protection still requires `Required CI`.
 - Verify `make clean` leaves no tracked or ignored workspace debris; artifact deletion itself was completed in Phase 0.
-- Add the `v0.1.0` breaking-change entry and migration notes.
+- [x] Add the `v0.1.0` breaking-change entry and migration notes.
 - Once all checklist items are recorded as complete, delete this temporary plan in the release-preparation commit.
 - Run the full unit, generated-code, Docker, manifest, and Linux integration gates.
 - Run the Section 14.5 performance/resource gates and retain raw results with the release artifacts.
