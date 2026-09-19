@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -85,7 +86,7 @@ compiles the supported subset, and enforces it with per-container eBPF programs.
 
 func configureLogging(cmd *cobra.Command) error {
 	if cmd == nil {
-		return fmt.Errorf("logging command is nil")
+		return errors.New("logging command is nil")
 	}
 	levelName, err := cmd.Flags().GetString("log-level")
 	if err != nil {

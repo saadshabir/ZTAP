@@ -29,12 +29,13 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print ZTAP version",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			v := Version
 			if v == "" {
 				v = "dev"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "version=%s commit=%s build_date=%s go=%s os=%s arch=%s\n", v, Commit, BuildDate, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "version=%s commit=%s build_date=%s go=%s os=%s arch=%s\n", v, Commit, BuildDate, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+			return err
 		},
 	}
 	return c

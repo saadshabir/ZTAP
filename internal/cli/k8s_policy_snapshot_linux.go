@@ -158,18 +158,6 @@ type resolvedPodCgroup struct {
 	Path string
 }
 
-func (r *k8sSubjectResolver) rememberCgroupPath(id uint64, path string) {
-	if id == 0 || strings.TrimSpace(path) == "" {
-		return
-	}
-	r.mu.Lock()
-	if r.cgroupPath == nil {
-		r.cgroupPath = make(map[uint64]string)
-	}
-	r.cgroupPath[id] = filepath.Clean(path)
-	r.mu.Unlock()
-}
-
 func (r *k8sSubjectResolver) replaceCgroupPaths(paths map[uint64]string) {
 	copyPaths := make(map[uint64]string, len(paths))
 	for id, path := range paths {

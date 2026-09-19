@@ -32,11 +32,12 @@ func TestNewRootCmdCommandSurface(t *testing.T) {
 		t.Fatal("retired --log-file flag remains exposed")
 	}
 	command, _, err := root.Find([]string{"help"})
-	if err != nil {
+	switch {
+	case err != nil:
 		t.Errorf("missing help command: %v", err)
-	} else if command.Name() != "help" {
+	case command.Name() != "help":
 		t.Errorf("help command name = %q, want help", command.Name())
-	} else if !command.Hidden {
+	case !command.Hidden:
 		t.Error("help command is visible in the primary command list")
 	}
 }

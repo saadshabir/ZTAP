@@ -116,24 +116,6 @@ func parseContainerdContainerID(raw string) (string, error) {
 	return strings.ToLower(containerID), nil
 }
 
-func podCgroupResolutionError(pod *corev1.Pod, failure policy.CgroupResolutionFailure) error {
-	podName := "<unknown>"
-	if pod != nil {
-		podName = pod.Name
-		if pod.Namespace != "" {
-			podName = pod.Namespace + "/" + pod.Name
-		}
-	}
-	switch failure {
-	case policy.CgroupResolutionFailureNotFound:
-		return fmt.Errorf("resolve cgroups for pod %s: a running container cgroup was not found", podName)
-	case policy.CgroupResolutionFailureUnsupportedRuntime:
-		return fmt.Errorf("resolve cgroups for pod %s: a running container has an unsupported runtime identity", podName)
-	default:
-		return fmt.Errorf("resolve cgroups for pod %s: unknown resolution failure", podName)
-	}
-}
-
 func cgroupIDFromPath(path string) (uint64, error) {
 	identity, err := cgroupFilesystemIdentityForPath(path)
 	if err != nil {
