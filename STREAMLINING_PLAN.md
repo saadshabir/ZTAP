@@ -1,8 +1,8 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Phase 4 implementation complete — hosted acceptance evidence pending
+- **Status:** Phase 4 complete — hosted acceptance evidence recorded
 - **Prepared:** 2026-09-10
-- **Last reviewed:** 2026-09-18
+- **Last reviewed:** 2026-09-19
 - **Change type:** Intentional clean break
 - **Target:** Linux/Kubernetes eBPF network-policy enforcer
 
@@ -1235,7 +1235,7 @@ Exit criteria:
 
 ### Phase 4: Product cutover and deletion
 
-Progress (2026-09-18): The product cutover is implemented locally. The
+Progress (2026-09-19): The product cutover is implemented. The
 command surface exposes only `agent`, `validate`, `flows`, and `version`; the
 legacy file configuration, logging wrapper, cluster/control-plane, cloud,
 auth, audit, compliance, anomaly, operator, discovery, and platform-specific
@@ -1245,9 +1245,11 @@ canonical module path and standard-library `slog`. The repository now has one
 DaemonSet manifest, one scratch runtime image, one retained eBPF program, and
 the four maintained documents. Local race, vet, build, Linux cross-compile,
 integration-tag compilation, manifest, CLI-help, dependency, and actionlint
-checks pass. Hosted Linux eBPF and kind acceptance evidence is still required
-before closing this phase; those checks are execution-only on Linux and are not
-macOS implementation gaps.
+checks pass. Hosted run `35418652492` passed the required lint, build, Docker,
+unit, integration, eBPF, kind capability-only agent, and aggregate checks; the
+`ebpf-engine-evidence` and `capability-agent-evidence` artifacts were uploaded.
+Those acceptance checks are execution-only on Linux and are not macOS
+implementation gaps.
 
 Review follow-up (2026-09-18): The release-path review is resolved locally.
 The image builder now consumes Docker's target OS and architecture, the
@@ -1275,16 +1277,15 @@ Exit criteria:
 - [x] `rg` finds no source or maintained-documentation references to removed commands, APIs, config keys, CRDs, platforms, or services outside this temporary plan and the breaking-change record.
 - [x] `go list -deps ./...` contains none of the removed direct dependency families: cloud SDKs, AWS/Azure/GCP clients, etcd, gRPC, SQLite, or controller-runtime. Kubernetes's transitive protobuf and `go-logr` packages remain because `client-go` requires them.
 - [x] `go build ./...` and `make build` pass; the latter writes only `bin/ztap`, and `make clean` removes it without creating a repository-root executable.
+- [x] Hosted run `35418652492` reports `Required CI` success and records Linux eBPF and kind capability-only agent evidence for this exact diff.
 
 The `main` branch-protection rule was inspected on 2026-09-18 and still
 requires `Required CI` from GitHub Actions. The replacement retains the
 `Migration CI` workflow file/name and `Required CI` job name. Phase 4 remains
-open for a hosted run of this exact diff to confirm that check is reported and
-to review `ebpf-engine-evidence` and `capability-agent-evidence`. The
-target-architecture image build remains a Phase 5 release gate. The local
-implementation checklist above is complete; the hosted artifacts are the
-remaining phase-close evidence, and non-Linux checks cannot establish the
-kernel and container-runtime claims.
+closed by hosted run `35418652492`, which confirms that check is reported and
+that `ebpf-engine-evidence` and `capability-agent-evidence` are available. The
+target-architecture image build remains a Phase 5 release gate. Non-Linux
+checks cannot establish the kernel and container-runtime claims.
 
 ### Phase 5: Documentation, tooling, and release gate
 
