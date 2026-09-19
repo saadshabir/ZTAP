@@ -43,16 +43,13 @@ jobs:
         with:
           version: v2.12.2
           args: --timeout=5m
-          # Formatters (gofmt/goimports) are not part of `golangci-lint run` in
-          # v2; `fmt: true` applies them so the diff check below can gate on
-          # formatting.
-          fmt: true
 
-      - name: Fail on unformatted files
+      - name: Check gofmt
         run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            git diff --stat
-            echo "::error::golangci-lint fmt modified files; run 'golangci-lint fmt' locally before pushing"
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            printf '%s\n' "$files"
+            echo "::error::gofmt would modify files; run 'gofmt -w' locally before pushing"
             exit 1
           fi
 
