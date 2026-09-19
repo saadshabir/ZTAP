@@ -3,7 +3,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -16,12 +15,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 
-	"ztap/internal/enforcer"
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 type k8sSubjectResolver struct {
@@ -54,7 +50,7 @@ type cachedPodCgroup struct {
 	identity cgroupFilesystemIdentity
 }
 
-func newK8sSubjectResolver(client kubernetes.Interface, cgroupRoot string) enforcer.SubjectResolver {
+func newK8sSubjectResolver(client kubernetes.Interface, cgroupRoot string) *k8sSubjectResolver {
 	cgroupRoot = strings.TrimSpace(cgroupRoot)
 	if cgroupRoot == "" {
 		cgroupRoot = "/sys/fs/cgroup"
@@ -66,134 +62,6 @@ func newK8sSubjectResolver(client kubernetes.Interface, cgroupRoot string) enfor
 		cgroupCache:       make(map[cgroupCacheKey]cachedPodCgroup),
 		runningObservedAt: make(map[cgroupCacheKey]time.Time),
 	}
-}
-
-func (r *k8sSubjectResolver) ResolveCgroupIDs(ctx context.Context, tenant string, podSelector policy.PodSelectorSpec) ([]uint64, error) {
-	tenant = strings.TrimSpace(tenant)
-	if tenant == "" {
-		tenant = "default"
-	}
-
-	selector, err := selectorFromPolicy(podSelector)
-	if err != nil {
-		return nil, err
-	}
-	sel := selector.String()
-	pods, err := r.client.CoreV1().Pods(tenant).List(ctx, metav1.ListOptions{LabelSelector: sel})
-	if err != nil {
-		return nil, err
-	}
-	if len(pods.Items) == 0 {
-		return []uint64{}, nil
-	}
-
-	ids := make([]uint64, 0, len(pods.Items))
-	seen := make(map[uint64]struct{}, len(pods.Items))
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		podCgroups, failure := r.resolvePodCgroupsCached(pod)
-		if failure != policy.CgroupResolutionFailureNone {
-			return nil, podCgroupResolutionError(pod, failure)
-		}
-		for _, cgroup := range podCgroups {
-			if _, ok := seen[cgroup.ID]; ok {
-				continue
-			}
-			seen[cgroup.ID] = struct{}{}
-			ids = append(ids, cgroup.ID)
-			r.rememberCgroupPath(cgroup.ID, cgroup.Path)
-		}
-	}
-	if len(ids) == 0 {
-		// A selected pod may be pending while Kubernetes has not reported its
-		// container IDs yet. It will be picked up by the next pod event.
-		return []uint64{}, nil
-	}
-
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids, nil
-}
-
-func (r *k8sSubjectResolver) ResolveSubjectPorts(ctx context.Context, tenant string, podSelector policy.PodSelectorSpec) ([]enforcer.SubjectPortInfo, error) {
-	tenant = strings.TrimSpace(tenant)
-	if tenant == "" {
-		tenant = "default"
-	}
-
-	selector, err := selectorFromPolicy(podSelector)
-	if err != nil {
-		return nil, err
-	}
-	sel := selector.String()
-	pods, err := r.client.CoreV1().Pods(tenant).List(ctx, metav1.ListOptions{LabelSelector: sel})
-	if err != nil {
-		return nil, err
-	}
-	if len(pods.Items) == 0 {
-		return []enforcer.SubjectPortInfo{}, nil
-	}
-
-	infos := make([]enforcer.SubjectPortInfo, 0)
-	seen := make(map[uint64]struct{})
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		ports := podPortsFromSpec(pod)
-		podCgroups, failure := r.resolvePodCgroupsCached(pod)
-		if failure != policy.CgroupResolutionFailureNone {
-			return nil, podCgroupResolutionError(pod, failure)
-		}
-		for _, cgroup := range podCgroups {
-			if _, ok := seen[cgroup.ID]; ok {
-				continue
-			}
-			seen[cgroup.ID] = struct{}{}
-			infos = append(infos, enforcer.SubjectPortInfo{CgroupID: cgroup.ID, Ports: ports, PodName: pod.Name})
-			r.rememberCgroupPath(cgroup.ID, cgroup.Path)
-		}
-	}
-	if len(infos) == 0 {
-		// Keep pending pods non-fatal for the same reason as ResolveCgroupIDs.
-		return []enforcer.SubjectPortInfo{}, nil
-	}
-	return infos, nil
-}
-
-func podPortsFromSpec(pod *corev1.Pod) []policy.PodPort {
-	ports := make([]policy.PodPort, 0)
-	for _, container := range pod.Spec.Containers {
-		for _, port := range container.Ports {
-			name := strings.TrimSpace(port.Name)
-			if name == "" {
-				continue
-			}
-			proto := strings.ToUpper(string(port.Protocol))
-			if proto == "" {
-				proto = "TCP"
-			}
-			ports = append(ports, policy.PodPort{
-				Name:     name,
-				Protocol: proto,
-				Port:     int(port.ContainerPort),
-			})
-		}
-	}
-	return ports
-}
-
-func selectorFromPolicy(selector policy.PodSelectorSpec) (labels.Selector, error) {
-	if len(selector.MatchExpressions) == 0 {
-		return labels.Set(selector.MatchLabels).AsSelector(), nil
-	}
-	reqs := make([]metav1.LabelSelectorRequirement, 0, len(selector.MatchExpressions))
-	for _, expr := range selector.MatchExpressions {
-		reqs = append(reqs, metav1.LabelSelectorRequirement{
-			Key:      expr.Key,
-			Operator: metav1.LabelSelectorOperator(expr.Operator),
-			Values:   expr.Values,
-		})
-	}
-	labelSelector := &metav1.LabelSelector{MatchLabels: selector.MatchLabels, MatchExpressions: reqs}
-	return metav1.LabelSelectorAsSelector(labelSelector)
 }
 
 func extractRunningContainerdIDs(pod *corev1.Pod) ([]string, policy.CgroupResolutionFailure) {
@@ -246,24 +114,6 @@ func parseContainerdContainerID(raw string) (string, error) {
 		return "", errors.New("container identity must use containerd with a full 64-hex ID")
 	}
 	return strings.ToLower(containerID), nil
-}
-
-func podCgroupResolutionError(pod *corev1.Pod, failure policy.CgroupResolutionFailure) error {
-	podName := "<unknown>"
-	if pod != nil {
-		podName = pod.Name
-		if pod.Namespace != "" {
-			podName = pod.Namespace + "/" + pod.Name
-		}
-	}
-	switch failure {
-	case policy.CgroupResolutionFailureNotFound:
-		return fmt.Errorf("resolve cgroups for pod %s: a running container cgroup was not found", podName)
-	case policy.CgroupResolutionFailureUnsupportedRuntime:
-		return fmt.Errorf("resolve cgroups for pod %s: a running container has an unsupported runtime identity", podName)
-	default:
-		return fmt.Errorf("resolve cgroups for pod %s: unknown resolution failure", podName)
-	}
 }
 
 func cgroupIDFromPath(path string) (uint64, error) {

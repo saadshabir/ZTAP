@@ -414,11 +414,14 @@ func (s *compileState) addRules(policy *NativeNetworkPolicy, subjects []Resolved
 		for _, cgroupID := range pod.CgroupIDs {
 			for _, prefix := range prefixes {
 				for _, port := range ports {
+					if port.Port < 1 || port.Port > 65535 {
+						return fmt.Errorf("port %d is outside the valid TCP/UDP range", port.Port)
+					}
 					protocol := ProtocolTCP
 					if port.Protocol == "UDP" {
 						protocol = ProtocolUDP
 					}
-					rule := Rule{CgroupID: cgroupID, Direction: direction, Peer: prefix, Protocol: protocol, Port: uint16(port.Port)}
+					rule := Rule{CgroupID: cgroupID, Direction: direction, Peer: prefix, Protocol: protocol, Port: uint16(port.Port)} // #nosec G115 -- the port range is checked immediately above.
 					if _, exists := s.rules[rule]; exists {
 						continue
 					}

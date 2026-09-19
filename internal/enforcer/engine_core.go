@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 const slotQuiescenceTimeout = 5 * time.Second

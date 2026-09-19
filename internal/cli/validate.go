@@ -6,14 +6,14 @@ import (
 	"io"
 	"os"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 
 	"github.com/spf13/cobra"
 )
 
 // newValidateCmd implements the standalone offline validation command from
-// the streamlined product contract. It deliberately does not load the legacy
-// config file or initialize cluster services.
+// the streamlined product contract. It deliberately does not load runtime
+// configuration or initialize cluster services.
 func newValidateCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "validate",
@@ -37,7 +37,7 @@ func newValidateCmd() *cobra.Command {
 			if path == "-" {
 				data, err = io.ReadAll(cmd.InOrStdin())
 			} else {
-				data, err = os.ReadFile(path)
+				data, err = os.ReadFile(path) // #nosec G304 -- --file intentionally selects the user-provided validation input.
 			}
 			if err != nil {
 				return &ExitError{Status: 2, Err: fmt.Errorf("read policy input: %w", err)}
@@ -73,12 +73,4 @@ func newValidateCmd() *cobra.Command {
 		return &ExitError{Status: 2, Err: err}
 	})
 	return c
-}
-
-func commandSkipsConfig(cmd *cobra.Command) bool {
-	if cmd == nil {
-		return false
-	}
-	parent := cmd.Parent()
-	return parent != nil && parent.Parent() == nil && (cmd.Name() == "validate" || cmd.Name() == "version" || cmd.Name() == "agent")
 }

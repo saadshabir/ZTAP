@@ -31,32 +31,6 @@ updates:
           - "k8s.io/*"
           - "sigs.k8s.io/*"
 
-  - package-ecosystem: "pip"
-    directory: "/internal/anomaly"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "UTC"
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "automated"
-    groups:
-      python-minor-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      python-major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -77,19 +51,6 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "UTC"
-    cooldown:
-      default-days: 7
-    labels:
-      - "dependencies"
-      - "automated"
-
-  - package-ecosystem: "docker"
-    directory: "/internal/anomaly"
     schedule:
       interval: "weekly"
       day: "monday"

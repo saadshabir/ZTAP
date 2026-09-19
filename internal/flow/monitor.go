@@ -3,10 +3,9 @@ package flow
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
-
-	"ztap/internal/logging"
 )
 
 // subscriber wraps a flow event channel with close-once semantics.
@@ -126,7 +125,7 @@ func (m *Monitor) Start(ctx context.Context) error {
 	// Process events and distribute to subscribers
 	go m.processEvents(ctx, rawEvents, bootTime, stopCh, runGeneration)
 
-	logging.Info("Flow monitor started", nil)
+	slog.Default().Info("flow monitor started")
 	return nil
 }
 
@@ -181,7 +180,7 @@ func (m *Monitor) Stop() error {
 		return stopErr
 	}
 
-	logging.Info("Flow monitor stopped", nil)
+	slog.Default().Info("flow monitor stopped")
 	return nil
 }
 

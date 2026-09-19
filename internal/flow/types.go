@@ -37,7 +37,6 @@ const (
 )
 
 const (
-	legacyRawEventSize = 48
 	engineRawEventSize = 72
 	engineEventSchema  = 1
 )
@@ -50,7 +49,7 @@ const (
 	ProtocolUDP    = 17
 )
 
-// FlowEvent is the platform-neutral view of a kernel or Windows flow event.
+// FlowEvent is the user-facing view of a Linux eBPF flow event.
 type FlowEvent struct {
 	Timestamp     time.Time // Event timestamp
 	PolicyEpoch   uint64    // Active policy generation that decided the packet
@@ -63,15 +62,14 @@ type FlowEvent struct {
 	Direction     string    // "egress" or "ingress"
 	Action        string    // "allowed" or "blocked"
 	Reason        string    // Bounded decision reason from the eBPF engine
-	SchemaVersion uint8     // Raw event schema version, zero for legacy/platform events
+	SchemaVersion uint8     // Raw event schema version
 }
 
-// RawFlowEvent is the normalized raw event shared by Linux and Windows readers.
-// Linux decoding supports the legacy 48-byte event and engine schema v1.
+// RawFlowEvent is the versioned event emitted by the Linux eBPF engine.
 type RawFlowEvent struct {
 	TimestampNs   uint64    // Kernel timestamp in nanoseconds
-	PolicyEpoch   uint64    // Engine policy generation; zero for legacy/platform events
-	CgroupID      uint64    // Subject cgroup; zero for legacy/platform events
+	PolicyEpoch   uint64    // Engine policy generation
+	CgroupID      uint64    // Subject cgroup
 	SrcIP         [4]uint32 // Source IP (v4 uses first word)
 	DestIP        [4]uint32 // Destination IP (v4 uses first word)
 	SrcPort       uint16    // Source port
@@ -81,7 +79,7 @@ type RawFlowEvent struct {
 	Action        uint8     // 0=blocked, 1=allowed
 	Reason        uint8     // Bounded engine decision reason
 	Family        uint8     // 4=IPv4, 6=IPv6
-	SchemaVersion uint8     // Zero for legacy/platform events
+	SchemaVersion uint8     // Engine event schema version
 }
 
 // ToFlowEvent converts a raw eBPF event to a FlowEvent.
@@ -108,40 +106,16 @@ func (r *RawFlowEvent) ToFlowEvent(bootTime time.Time) FlowEvent {
 	}
 }
 
-// parseRawEvent decodes both the legacy v0 event and the current versioned
-// engine event. Unknown sizes are rejected rather than guessed.
+// parseRawEvent decodes the current versioned engine event. Unknown sizes and
+// schema versions are rejected rather than guessed.
 func parseRawEvent(data []byte) (RawFlowEvent, error) {
-	switch len(data) {
-	case legacyRawEventSize:
-		return parseLegacyRawEvent(data), nil
-	case engineRawEventSize:
-		if data[65] != engineEventSchema {
-			return RawFlowEvent{}, fmt.Errorf("unsupported engine flow event schema %d", data[65])
-		}
-		return parseEngineRawEvent(data), nil
-	default:
+	if len(data) != engineRawEventSize {
 		return RawFlowEvent{}, fmt.Errorf("unexpected flow event size: %d bytes", len(data))
 	}
-}
-
-func parseLegacyRawEvent(data []byte) RawFlowEvent {
-	var event RawFlowEvent
-	event.TimestampNs = binary.LittleEndian.Uint64(data[0:8])
-	for i := 0; i < 4; i++ {
-		start := 8 + i*4
-		event.SrcIP[i] = binary.LittleEndian.Uint32(data[start : start+4])
+	if data[65] != engineEventSchema {
+		return RawFlowEvent{}, fmt.Errorf("unsupported engine flow event schema %d", data[65])
 	}
-	for i := 0; i < 4; i++ {
-		start := 24 + i*4
-		event.DestIP[i] = binary.LittleEndian.Uint32(data[start : start+4])
-	}
-	event.SrcPort = binary.LittleEndian.Uint16(data[40:42])
-	event.DestPort = binary.LittleEndian.Uint16(data[42:44])
-	event.Protocol = data[44]
-	event.Direction = data[45]
-	event.Action = data[46]
-	event.Family = data[47]
-	return event
+	return parseEngineRawEvent(data), nil
 }
 
 func parseEngineRawEvent(data []byte) RawFlowEvent {
@@ -199,7 +173,7 @@ type FlowMonitor interface {
 type FlowFilter struct {
 	Action    string // "allowed", "blocked", or empty for all
 	Direction string // "egress", "ingress", or empty for all
-	Protocol  string // "TCP", "UDP", "ICMP", or empty for all
+	Protocol  string // "TCP", "UDP", or empty for all
 	SourceIP  net.IP // Filter by source IP, nil for all
 	DestIP    net.IP // Filter by destination IP, nil for all
 	Port      uint16 // Filter by port (src or dest), 0 for all

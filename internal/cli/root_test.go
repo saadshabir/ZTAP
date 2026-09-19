@@ -1,174 +1,128 @@
 package cli
 
 import (
-	"context"
-	"io"
-	"os"
+	"bytes"
 	"strings"
 	"testing"
-	"time"
-
-	"ztap/internal/config"
 )
 
-// expectedTree mirrors the command surface captured as the Phase C baseline
-// (see docs/modernization-plan.md, pre-flight 0.2). Any change to command
-// names, nesting, or flags here is a user-visible CLI change.
-func TestNewRootCmdCommandTree(t *testing.T) {
+func TestNewRootCmdCommandSurface(t *testing.T) {
 	root := NewRootCmd("test-version")
-
-	if root.Use != "ztap" {
-		t.Errorf("root Use = %q, want %q", root.Use, "ztap")
-	}
-	if root.Version != "" { // Version is set via the version subcommand, not cobra's field
-		t.Errorf("unexpected root.Version = %q", root.Version)
-	}
-
-	wantPersistent := []string{"log-level", "log-format", "log-file"}
-	for _, f := range wantPersistent {
-		if root.PersistentFlags().Lookup(f) == nil {
-			t.Errorf("missing persistent flag --%s", f)
+	want := []string{"agent", "flows", "validate", "version"}
+	var visible []string
+	for _, command := range root.Commands() {
+		if !command.Hidden {
+			visible = append(visible, command.Name())
 		}
 	}
-
-	// Top-level commands and their direct children.
-	want := map[string][]string{
-		"validate":   nil,
-		"agent":      nil,
-		"alert":      {"test"},
-		"api":        {"serve"},
-		"audit":      {"view", "verify", "keygen", "stats"},
-		"aws":        {"sg-sync", "inventory"},
-		"azure":      {"nsg-sync"},
-		"cluster":    {"status", "join", "leave", "list", "config", "test-etcd"},
-		"compliance": {"export", "report"},
-		"discovery":  {"register", "deregister", "resolve", "list"},
-		"enforce":    nil,
-		"flows":      nil,
-		"gcp":        {"firewall-sync"},
-		"grpc":       {"serve"},
-		"logs":       nil,
-		"metrics":    nil,
-		"policy":     {"sync", "list", "watch", "show", "history", "rollback", "validate"},
-		"status":     nil,
-		"user":       {"create", "list", "change-password", "disable", "enable", "login", "logout"},
-		"version":    nil,
+	if strings.Join(visible, ",") != strings.Join(want, ",") {
+		t.Fatalf("visible root commands = %v, want %v", visible, want)
 	}
-
-	got := map[string][]string{}
-	for _, c := range root.Commands() {
-		got[c.Name()] = nil
-	}
-	for name, children := range want {
-		if _, ok := got[name]; !ok {
-			t.Errorf("missing top-level command %q", name)
-			continue
-		}
-		cmd, _, err := root.Find([]string{name})
-		if err != nil {
-			t.Errorf("root.Find(%q): %v", name, err)
-			continue
-		}
-		var have []string
-		for _, cc := range cmd.Commands() {
-			have = append(have, cc.Name())
-		}
-		for _, child := range children {
-			if !slicesContains(have, child) {
-				t.Errorf("command %q missing subcommand %q (have %v)", name, child, have)
-			}
+	for _, name := range want {
+		if _, _, err := root.Find([]string{name}); err != nil {
+			t.Errorf("missing command %q: %v", name, err)
 		}
 	}
-	if len(got) != len(want) {
-		t.Errorf("root has %d commands, want %d", len(got), len(want))
+	for _, name := range []string{"log-level", "log-format"} {
+		if root.PersistentFlags().Lookup(name) == nil {
+			t.Errorf("missing persistent flag --%s", name)
+		}
+	}
+	if root.PersistentFlags().Lookup("log-file") != nil {
+		t.Fatal("retired --log-file flag remains exposed")
+	}
+	command, _, err := root.Find([]string{"help"})
+	switch {
+	case err != nil:
+		t.Errorf("missing help command: %v", err)
+	case command.Name() != "help":
+		t.Errorf("help command name = %q, want help", command.Name())
+	case !command.Hidden:
+		t.Error("help command is visible in the primary command list")
 	}
 }
 
-func TestNewRootCmdSetsVersion(t *testing.T) {
-	root := NewRootCmd("9.9.9-test")
-	root.SetArgs([]string{"version"})
+func TestRootSupportCommandsRemainCallable(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "help", args: []string{"help", "agent"}, want: "Run ZTAP node agent"},
+		{name: "completion", args: []string{"completion", "bash"}, want: "bash completion V2 for ztap"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := NewRootCmd("test-version")
+			output := &bytes.Buffer{}
+			root.SetOut(output)
+			root.SetErr(&bytes.Buffer{})
+			root.SetArgs(test.args)
+			if err := root.Execute(); err != nil {
+				t.Fatalf("%s failed: %v", test.name, err)
+			}
+			if !strings.Contains(output.String(), test.want) {
+				t.Fatalf("%s output missing %q", test.name, test.want)
+			}
+			command, _, err := root.Find(test.args[:1])
+			if err != nil || !command.Hidden {
+				t.Fatalf("%s support command is unavailable or visible: %v", test.name, err)
+			}
+		})
+	}
+}
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	err := root.Execute()
-	_ = w.Close()
-	os.Stdout = oldStdout
-	if err != nil {
+func TestRootHelpListsOnlyPrimaryCommands(t *testing.T) {
+	root := NewRootCmd("test-version")
+	output := &bytes.Buffer{}
+	root.SetOut(output)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("root help failed: %v", err)
+	}
+	parts := strings.SplitN(output.String(), "Available Commands:\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("root help has no available commands section: %q", output.String())
+	}
+	commands := strings.SplitN(parts[1], "\n\n", 2)[0]
+	for _, line := range []string{"  agent ", "  flows ", "  validate ", "  version "} {
+		if !strings.Contains(commands, line) {
+			t.Errorf("root help missing %q", line)
+		}
+	}
+	for _, line := range []string{"  help ", "  completion ", "  __help "} {
+		if strings.Contains(commands, line) {
+			t.Errorf("root help exposes support command %q", line)
+		}
+	}
+}
+
+func TestVersionCommandUsesStableRecord(t *testing.T) {
+	SetBuildInfo("9.9.9-test", "abc123", "2026-09-18T00:00:00Z")
+	t.Cleanup(func() { SetBuildInfo("dev", "unknown", "unknown") })
+	root := NewRootCmd("9.9.9-test")
+	output := &bytes.Buffer{}
+	root.SetOut(output)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"version"})
+	if err := root.Execute(); err != nil {
 		t.Fatalf("version command failed: %v", err)
 	}
-	out, _ := io.ReadAll(r)
-	_ = r.Close()
-	if !strings.Contains(string(out), "ztap 9.9.9-test") {
-		t.Errorf("version output = %q, want it to contain %q", out, "ztap 9.9.9-test")
+	line := strings.TrimSpace(output.String())
+	for _, field := range []string{"version=9.9.9-test", "commit=abc123", "build_date=2026-09-18T00:00:00Z", "go=", "os=", "arch="} {
+		if !strings.Contains(line, field) {
+			t.Errorf("version output = %q, missing %q", line, field)
+		}
+	}
+	if strings.Contains(line, "\n") {
+		t.Fatalf("version output has more than one record: %q", line)
 	}
 }
 
-func TestClusterBackendUsesCentralConfig(t *testing.T) {
-	initClusterBackend()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cfg := &config.Config{
-		Cluster: config.Cluster{
-			Backend:     "memory",
-			NodeID:      "configured-node",
-			NodeAddress: "127.0.0.1:9191",
-			Election: config.ClusterElection{
-				HeartbeatInterval: config.Duration(10 * time.Millisecond),
-			},
-		},
-	}
-	if err := startClusterBackendWithConfig(ctx, cfg, "127.0.0.1:9090"); err != nil {
-		t.Fatalf("startClusterBackendWithConfig returned error: %v", err)
-	}
-	defer stopClusterBackend()
-
-	node := clusterElection.GetNode("configured-node")
-	if node == nil {
-		t.Fatal("configured node was not registered")
-	}
-	if node.Address != "127.0.0.1:9191" {
-		t.Fatalf("node address = %q, want configured address", node.Address)
-	}
-}
-
-func TestClusterBackendLifecycle(t *testing.T) {
-	initClusterBackend()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := startClusterBackend(ctx); err != nil {
-		t.Fatalf("startClusterBackend returned error: %v", err)
-	}
-	defer stopClusterBackend()
-
-	if clusterElection == nil || !clusterElection.IsLeader() {
-		t.Fatal("cluster backend did not elect the local node")
-	}
-}
-
-func TestNewRootCmdPersistentPreRunLogging(t *testing.T) {
-	// The PersistentPreRunE must be wired on the root command so logging
-	// flags apply to every subcommand (baseline behavior preserved).
+func TestConfigureLoggingRejectsInvalidOptions(t *testing.T) {
 	root := NewRootCmd("test")
-	if root.PersistentPreRunE == nil {
-		t.Fatal("root command has no PersistentPreRunE")
+	root.SetArgs([]string{"version", "--log-level", "invalid"})
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "invalid log level") {
+		t.Fatalf("configureLogging error = %v, want invalid log level", err)
 	}
-	// Setting a log format flag must not error during pre-run for --help-less
-	// invocations; exercise the flag definitions.
-	for _, f := range []string{"log-level", "log-format", "log-file"} {
-		if root.PersistentFlags().Lookup(f) == nil {
-			t.Errorf("persistent flag --%s not registered", f)
-		}
-	}
-}
-
-func slicesContains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

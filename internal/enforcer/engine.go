@@ -4,17 +4,19 @@ import (
 	"context"
 	"log/slog"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 // Agent status ABI constants are shared by the engine and readers of its
 // stable status pin. Keep the wire values explicit because they are persisted
 // in bpffs while the agent is running.
 const (
-	AgentStatusSchemaVersion uint32 = 1
-	AgentLifecycleStarting   uint32 = 1
-	AgentLifecycleEnforcing  uint32 = 2
-	AgentLifecycleStopping   uint32 = 3
+	AgentStatusSchemaVersion  uint32 = 1
+	AgentLifecycleStarting    uint32 = 1
+	AgentLifecycleEnforcing   uint32 = 2
+	AgentLifecycleStopping    uint32 = 3
+	DefaultFlowEventsPinPath         = "/sys/fs/bpf/ztap/flow_events"
+	DefaultAgentStatusPinPath        = "/sys/fs/bpf/ztap/agent_status"
 )
 
 // Engine applies complete, kernel-neutral policy snapshots to one node.

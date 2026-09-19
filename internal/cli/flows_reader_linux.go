@@ -7,12 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
-	"ztap/internal/enforcer"
-	"ztap/internal/flow"
+	"github.com/saadshabir/ZTAP/internal/enforcer"
+	"github.com/saadshabir/ZTAP/internal/flow"
 
 	"github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
@@ -241,7 +240,10 @@ func monotonicNowNS() (uint64, error) {
 	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &current); err != nil {
 		return 0, fmt.Errorf("read monotonic clock: %w", err)
 	}
-	return uint64(current.Sec)*uint64(time.Second) + uint64(current.Nsec), nil
+	if current.Sec < 0 || current.Nsec < 0 {
+		return 0, errors.New("monotonic clock returned a negative value")
+	}
+	return uint64(current.Sec)*uint64(time.Second) + uint64(current.Nsec), nil // #nosec G115 -- clock_gettime returns non-negative seconds and nanoseconds after the checks above.
 }
 
 // openStreamingFlowReader is the only reader used by the live `flows`
@@ -249,82 +251,4 @@ func monotonicNowNS() (uint64, error) {
 // permissions, and an inactive agent are reported to the caller.
 func openStreamingFlowReader() (flow.FlowReader, error) {
 	return openPinnedFlowReader()
-}
-
-// createAnomalyFlowReader returns a reader that waits for the real pinned map
-// to become available. This covers agent startup, where policy enforcement may
-// pin the map shortly after the anomaly runner starts, without ever emitting
-// synthetic events.
-func createAnomalyFlowReader() (flow.FlowReader, error) {
-	return &retryingAnomalyReader{}, nil
-}
-
-type retryingAnomalyReader struct {
-	mu     sync.Mutex
-	inner  flow.FlowReader
-	stopCh chan struct{}
-}
-
-func (r *retryingAnomalyReader) Start(ctx context.Context, eventCh chan<- flow.RawFlowEvent) error {
-	r.mu.Lock()
-	stopCh := make(chan struct{})
-	r.stopCh = stopCh
-	r.mu.Unlock()
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	var lastLog time.Time
-
-	for {
-		reader, err := openPinnedFlowReader()
-		if err == nil {
-			r.mu.Lock()
-			r.inner = reader
-			r.mu.Unlock()
-
-			startErr := reader.Start(ctx, eventCh)
-			_ = reader.Stop()
-			r.mu.Lock()
-			if r.inner == reader {
-				r.inner = nil
-			}
-			if r.stopCh == stopCh {
-				r.stopCh = nil
-			}
-			r.mu.Unlock()
-			return startErr
-		}
-
-		if lastLog.IsZero() || time.Since(lastLog) >= 10*time.Second {
-			fmt.Fprintf(os.Stderr, "note: anomaly flow reader waiting for %s: %v\n", enforcer.DefaultFlowEventsPinPath, err)
-			lastLog = time.Now()
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-stopCh:
-			return nil
-		case <-ticker.C:
-		}
-	}
-}
-
-func (r *retryingAnomalyReader) Stop() error {
-	r.mu.Lock()
-	stopCh := r.stopCh
-	if stopCh != nil {
-		close(stopCh)
-		r.stopCh = nil
-	}
-	inner := r.inner
-	r.inner = nil
-	r.mu.Unlock()
-	if inner != nil {
-		return inner.Stop()
-	}
-	return nil
-}
-
-func (r *retryingAnomalyReader) Available() bool {
-	return true // It can become available when enforcement pins the map.
 }

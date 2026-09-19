@@ -12,7 +12,6 @@ on:
       - "**.md"
       - "docs/**"
       - "LICENSE"
-      - ".github/copilot-instructions.md"
       - ".github/dependabot.yml"
   pull_request:
     # Run lightweight security checks on PRs; heavy checks run on main only
@@ -47,16 +46,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Cache security tools
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: ~/go/bin
-          key: security-tools-${{ runner.os }}-${{ hashFiles('scripts/security_check.sh') }}
-
-      - name: Run scripted security checks
+      - name: Run Go vulnerability check
         run: |
-          chmod +x scripts/security_check.sh
-          ./scripts/security_check.sh
+          go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+      - name: Run gosec
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.8 ./...
 
   security-deep:
     name: Trivy + SARIF upload (main only)

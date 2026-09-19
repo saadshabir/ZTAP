@@ -13,10 +13,7 @@ CLANG_FLAGS = -O2 -target bpf -g -c \
 	-Wno-compare-distinct-pointer-types \
 	-Wno-address-of-packed-member
 
-all: filter.o engine.o
-
-filter.o: filter.c
-	$(CLANG) $(CLANG_FLAGS) -o $@ $<
+all: engine.o
 
 engine.o: engine.c
 	$(CLANG) $(CLANG_FLAGS) -o $@ $<
@@ -24,7 +21,7 @@ engine.o: engine.c
 clean:
 	rm -f *.o
 
-verify: filter.o engine.o
-	$(LLVM_OBJDUMP) -S filter.o engine.o
+verify: engine.o
+	$(LLVM_OBJDUMP) -S engine.o
 
 .PHONY: all clean verify

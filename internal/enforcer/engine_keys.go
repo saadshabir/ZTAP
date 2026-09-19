@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"sort"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 // enginePolicyRulesMapFlags is BPF_F_NO_PREALLOC. Keep the ABI flag in the
@@ -211,7 +211,7 @@ func encodePolicyRuleKey(slot uint32, rule policy.Rule) (policyRuleKey, error) {
 	masked := rule.Peer.Masked()
 	address := masked.Addr().As4()
 	return policyRuleKey{
-		PrefixLength: uint32(96 + masked.Bits()),
+		PrefixLength: uint32(96 + masked.Bits()), // #nosec G115 -- an IPv4 prefix produces a value in the fixed 96..128 range.
 		Meta:         (slot << 31) | (direction << 30) | (uint32(rule.Protocol) << 16) | uint32(rule.Port),
 		CgroupID:     rule.CgroupID,
 		Peer:         address,

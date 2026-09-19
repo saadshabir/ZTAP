@@ -8,7 +8,7 @@ please report it responsibly.
 Preferred: report privately via GitHub Security Advisories:
 
 - `Security` tab -> `Advisories` -> `Report a vulnerability`
-- Direct link: https://github.com/msaadshabir/ZTAP/security/advisories/new
+- Direct link: https://github.com/saadshabir/ZTAP/security/advisories/new
 
 Please do not open a public GitHub issue for security reports.
 

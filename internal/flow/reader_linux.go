@@ -7,10 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
-
-	"ztap/internal/logging"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
@@ -81,7 +80,7 @@ func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) er
 		_ = reader.Close()
 	}()
 
-	logging.Info("Linux flow reader started", nil)
+	slog.Default().Info("linux flow reader started")
 
 	// Read events in a loop
 	for {
@@ -113,7 +112,7 @@ func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) er
 			// Parse the raw event
 			event, err := parseRawEvent(record.RawSample)
 			if err != nil {
-				logging.Warnf("Error parsing flow event: %v", err)
+				slog.Default().Warn("failed to parse flow event", "error", err)
 				continue
 			}
 
@@ -152,7 +151,7 @@ func (r *LinuxReader) Stop() error {
 		return closeErr
 	}
 
-	logging.Info("Linux flow reader stopped", nil)
+	slog.Default().Info("linux flow reader stopped")
 	return nil
 }
 

@@ -12,7 +12,7 @@ import (
 )
 
 func TestNativeAgentManifestsUseTheCapabilityOnlyProfile(t *testing.T) {
-	for _, path := range []string{"ztap-agent.yaml", "ztap-install.yaml"} {
+	for _, path := range []string{"ztap-agent.yaml"} {
 		t.Run(path, func(t *testing.T) {
 			objects, err := loadManifestObjects(path)
 			if err != nil {

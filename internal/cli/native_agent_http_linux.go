@@ -17,8 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"ztap/internal/enforcer"
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/enforcer"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 type nativeAgentHTTP struct {

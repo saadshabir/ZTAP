@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 // ReconcileNativePolicySnapshot compiles one caller-provided Kubernetes

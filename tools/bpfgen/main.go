@@ -22,10 +22,7 @@ type programSource struct {
 	source string
 }
 
-var programSources = []programSource{
-	{stem: "bpf", source: "../../bpf/filter.c"},
-	{stem: "engine", source: "../../bpf/engine.c"},
-}
+var programSources = []programSource{{stem: "engine", source: "../../bpf/engine.c"}}
 
 func main() {
 	if err := run(); err != nil {
@@ -78,11 +75,11 @@ func run() error {
 // inlineObject replaces the go:embed directive in the bpf2go-generated file
 // with an inline byte literal so no binary artifact is committed.
 func inlineObject(goFile, objectFile, bytesVar string) error {
-	data, err := os.ReadFile(objectFile)
+	data, err := os.ReadFile(objectFile) // #nosec G304 -- objectFile is constructed from the checked-in source name and generator output directory.
 	if err != nil {
 		return fmt.Errorf("read %s: %w", objectFile, err)
 	}
-	content, err := os.ReadFile(goFile)
+	content, err := os.ReadFile(goFile) // #nosec G304 -- goFile is constructed from the checked-in source name and generator output directory.
 	if err != nil {
 		return fmt.Errorf("read %s: %w", goFile, err)
 	}
@@ -141,7 +138,7 @@ func indentFor(chunk int) string {
 
 // hostEnv returns the current environment with GOOS/GOARCH/CGO_ENABLED
 // stripped so the spawned bpf2go always builds natively (go generate may be
-// invoked with GOOS=linux from a macOS/Windows checkout).
+// invoked with GOOS=linux from another development host).
 func hostEnv() []string {
 	var env []string
 	for _, kv := range os.Environ() {

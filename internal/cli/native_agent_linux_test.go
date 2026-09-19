@@ -24,8 +24,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"ztap/internal/enforcer"
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/enforcer"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 func TestNativeNetworkPolicyFromKubePreservesSupportedFields(t *testing.T) {
@@ -645,9 +645,6 @@ func TestNativeAgentPublishesReconciliationAndEngineMetrics(t *testing.T) {
 		t.Fatalf("metrics status = %d, want 200", recorder.Code)
 	}
 	body := recorder.Body.String()
-	if strings.Contains(body, "ztap_anomaly_score") || strings.Contains(body, "ztap_flows_allowed_total") {
-		t.Fatalf("native agent metrics leaked legacy process metrics: %s", body)
-	}
 	for _, want := range []string{
 		`ztap_network_policies{state="observed"} 3`,
 		`ztap_network_policies{state="accepted"} 2`,

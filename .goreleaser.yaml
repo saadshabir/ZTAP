@@ -5,20 +5,17 @@ builds:
   - id: ztap
     main: ./cmd/ztap
     binary: ztap
-    goos: [linux, darwin, windows]
+    goos: [linux]
     goarch: [amd64, arm64]
     env:
       - CGO_ENABLED=0
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X main.Version={{.Version}}
+      - -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}} -X main.BuildDate={{.Date}}
 
 archives:
   - formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     name_template: "{{ .ProjectName }}-{{ .Tag }}-{{ .Os }}-{{ .Arch }}"
 
 checksum:

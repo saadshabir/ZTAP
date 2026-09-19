@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 type recordingNativeEngine struct {

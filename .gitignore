@@ -43,36 +43,14 @@ $RECYCLE.BIN/
 *.sqlite3
 .ztap/
 
-# Configuration (keep template)
-config.local.yaml
-*.local.yaml
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.Python
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-*.egg-info/
+# Local build output
 dist/
 build/
-
-# Docker
-docker-compose.override.yml
-.dockerignore
-
-# Prometheus/Grafana data
-deployments/prometheus-data/
-deployments/grafana-data/
 
 # eBPF compiled objects
 bpf/*.o
 bpf/*.ll
-internal/enforcer/bpf_bpf*.o
+internal/enforcer/engine_bpf*.o
 
 # Temporary files
 *.tmp
@@ -100,7 +78,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Caches and Python test artifacts
+# Caches and test artifacts
 .cache/
 .mypy_cache/
 .pytest_cache/

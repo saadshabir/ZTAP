@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"ztap/internal/policy"
+	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
 type fakePolicyStore struct {

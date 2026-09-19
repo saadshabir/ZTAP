@@ -12,7 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"ztap/internal/flow"
+	"github.com/saadshabir/ZTAP/internal/flow"
 
 	"github.com/spf13/cobra"
 )
@@ -185,50 +185,4 @@ func formatFlowJSON(event flow.FlowEvent) string {
 		event.Action,
 		event.Reason,
 		event.SchemaVersion)
-}
-
-func generateRawDemoFlows() []flow.RawFlowEvent {
-	return []flow.RawFlowEvent{
-		{
-			TimestampNs: unixNanoUint64(),
-			SrcIP:       [4]uint32{0x0A000101}, // 10.0.1.1
-			DestIP:      [4]uint32{0x0A000201}, // 10.0.2.1
-			SrcPort:     45678,
-			DestPort:    5432,
-			Protocol:    6, // TCP
-			Direction:   0, // egress
-			Action:      1, // allowed
-			Family:      4,
-		},
-		{
-			TimestampNs: unixNanoUint64(),
-			SrcIP:       [4]uint32{0xC0A86464}, // 192.168.100.100
-			DestIP:      [4]uint32{0x0A000101}, // 10.0.1.1
-			SrcPort:     52341,
-			DestPort:    443,
-			Protocol:    6,
-			Direction:   1, // ingress
-			Action:      1,
-			Family:      4,
-		},
-		{
-			TimestampNs: unixNanoUint64(),
-			SrcIP:       [4]uint32{0x0A000101},
-			DestIP:      [4]uint32{0x08080808}, // 8.8.8.8
-			SrcPort:     54321,
-			DestPort:    53,
-			Protocol:    17, // UDP
-			Direction:   0,
-			Action:      0, // blocked
-			Family:      4,
-		},
-	}
-}
-
-func unixNanoUint64() uint64 {
-	ns := time.Now().UnixNano()
-	if ns < 0 {
-		return 0
-	}
-	return uint64(ns)
 }
