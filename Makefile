@@ -16,7 +16,7 @@ GO_FILES := $(shell find . -type f -name '*.go' \
 	-not -path './bin/*' \
 	-not -path './dist/*')
 
-.PHONY: build test vet fmt-check lint check generate check-generated integration docker phase0-fixture clean
+.PHONY: build test vet fmt-check lint check generate check-generated integration docker clean
 
 build:
 	@mkdir -p "$(BIN_DIR)"
@@ -53,7 +53,7 @@ generate:
 	BPF2GO_CC="$(BPF2GO_CC)" GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) generate ./internal/enforcer/...
 
 check-generated: generate
-	git diff --exit-code -- internal/enforcer/bpf_bpfel.go internal/enforcer/bpf_bpfeb.go internal/enforcer/engine_bpfel.go internal/enforcer/engine_bpfeb.go
+	git diff --exit-code -- internal/enforcer/engine_bpfel.go internal/enforcer/engine_bpfeb.go
 
 integration:
 	@test "$$($(GO) env GOOS)" = linux || { printf '%s\n' 'integration requires Linux'; exit 2; }
@@ -62,11 +62,8 @@ integration:
 docker:
 	docker build -t ztap:dev .
 
-phase0-fixture:
-	sh scripts/phase0_reference_fixture.sh --output "$(CURDIR)/dist/phase0-v0.1.0" --force
-
 clean:
 	@if [ -d ./.cache ]; then chmod -R u+w ./.cache; fi
-	rm -f -- ./ztap ./ztap-operator ./bpfgen ./*.exe ./*.test ./coverage*.out ./coverage.html
-	rm -rf -- ./bin ./dist ./.cache ./.pytest_cache ./.ruff_cache ./internal/anomaly/.pytest_cache ./internal/anomaly/.ruff_cache
+	rm -f -- ./ztap ./bpfgen ./*.exe ./*.test ./coverage*.out ./coverage.html
+	rm -rf -- ./bin ./dist ./.cache ./.pytest_cache ./.ruff_cache
 	$(MAKE) -C bpf clean
