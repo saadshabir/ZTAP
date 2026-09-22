@@ -294,8 +294,30 @@ func TestLinuxEnginePolicyDeletionRemovesSelectedContribution(t *testing.T) {
 	if len(engine.orphanLinks) != 0 {
 		t.Fatalf("policy deletion retained orphan cgroup links: %#v", engine.orphanLinks)
 	}
-	assertEngineSlotEmpty(t, engine, 0)
-	assertEngineSlotEmpty(t, engine, 1)
+	activeSlot := engine.engineCore.active.Slot
+	retiredSlot := activeSlot ^ 1
+	assertEnginePolicySlotEmpty(t, engine, activeSlot)
+	assertEngineSlotEmpty(t, engine, retiredSlot)
+	wantNode := nodeBypassKey{Slot: activeSlot, Address: [4]byte{127, 0, 0, 1}}
+	var nodeKey nodeBypassKey
+	var nodeValue uint8
+	iter := engine.store.maps["node_bypass"].Iterate()
+	var activeNodeEntries int
+	for iter.Next(&nodeKey, &nodeValue) {
+		if nodeKey.Slot != activeSlot {
+			continue
+		}
+		if nodeKey != wantNode {
+			t.Fatalf("policy deletion retained unexpected active node bypass: %+v", nodeKey)
+		}
+		activeNodeEntries++
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("iterate active node bypass entries: %v", err)
+	}
+	if activeNodeEntries != 1 {
+		t.Fatalf("active node bypass entries = %d, want exactly the configured node IP", activeNodeEntries)
+	}
 
 	// With the attachment removed, traffic to a port that was never allowed by
 	// the deleted policy is no longer subject to that policy's default deny.
@@ -1467,6 +1489,23 @@ func assertEngineEpochEventDropCountAtLeast(t *testing.T, countsMap *ebpf.Map, e
 
 func assertEngineSlotEmpty(t *testing.T, engine *LinuxEngine, slot uint32) {
 	t.Helper()
+	assertEnginePolicySlotEmpty(t, engine, slot)
+
+	var nodeKey nodeBypassKey
+	var nodeValue uint8
+	iter := engine.store.maps["node_bypass"].Iterate()
+	for iter.Next(&nodeKey, &nodeValue) {
+		if nodeKey.Slot == slot {
+			t.Fatalf("node_bypass retained slot %d entry: %+v", slot, nodeKey)
+		}
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("iterate node_bypass: %v", err)
+	}
+}
+
+func assertEnginePolicySlotEmpty(t *testing.T, engine *LinuxEngine, slot uint32) {
+	t.Helper()
 	var subjectKey subjectStateKey
 	var subjectValue subjectStateValue
 	iter := engine.store.maps["subject_state"].Iterate()
@@ -1477,18 +1516,6 @@ func assertEngineSlotEmpty(t *testing.T, engine *LinuxEngine, slot uint32) {
 	}
 	if err := iter.Err(); err != nil {
 		t.Fatalf("iterate subject_state: %v", err)
-	}
-
-	var nodeKey nodeBypassKey
-	var nodeValue uint8
-	iter = engine.store.maps["node_bypass"].Iterate()
-	for iter.Next(&nodeKey, &nodeValue) {
-		if nodeKey.Slot == slot {
-			t.Fatalf("node_bypass retained slot %d entry: %+v", slot, nodeKey)
-		}
-	}
-	if err := iter.Err(); err != nil {
-		t.Fatalf("iterate node_bypass: %v", err)
 	}
 
 	var selfKey selfBypassKey

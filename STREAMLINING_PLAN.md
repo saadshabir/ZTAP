@@ -2711,6 +2711,31 @@ reports 0 issues; exact-diff hosted rerun is pending. The implementation
 checklist remains 90/90 complete (0% remaining); final acceptance remains
 12/39 complete with 27/39 items open (69.2% remaining).
 
+Continuation audit (2026-09-22): exact-head Migration CI run `35773690300`
+for `d12542c1b733da5f279e7ee13f9a9ef421dadc52` passed lint/format/vet,
+workflow security, dependency review, generated-code verification, Docker
+build and image scan, Linux Go tests, Linux integration-test compile/vet, and
+Linux asset, example, and manifest validation. The privileged eBPF suite failed
+two tests: the policy-deletion assertion treated the explicitly configured
+active `127.0.0.1` node-bypass entry as stale state, while the fragment test
+timed out without a matching flow event. The deletion assertion now checks the
+active policy maps separately and requires exactly the configured node bypass;
+the raw sender reports syscall errors and flow-event timeouts retain a bounded
+sample of unmatched events for diagnosis. The capability-only job's status and
+unselected-control checks passed, and the selected-client request timed out as
+expected, but its smoke gate failed the whole-sample validation of the decision
+counter. The artifact did not retain the raw metric line, so the exact text
+mismatch is unconfirmed; the gate now validates exact label names and values
+independent of exposition order. These corrections are locally syntax-checked
+and the Linux integration test binary compiles, but the fragment root cause and
+runtime fixes remain subject to an exact-head hosted rerun; the failed job's
+later reference-fixture, measurements, rolling-update, and flow-streaming steps
+did not run. The repository-quality acceptance item therefore remains open.
+The implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete with 27/39 items open (69.2% remaining).
+Section 14.5 measurements and release publication and provenance archive remain
+hosted gates.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.

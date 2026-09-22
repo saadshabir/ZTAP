@@ -115,7 +115,11 @@ func TestCgroupRawIPv4SendHelper(t *testing.T) {
 	// The eBPF decision is the assertion. A policy drop can surface as a
 	// send error after the cgroup hook, so the helper deliberately ignores it.
 	destination := unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}
-	_ = unix.Sendto(fd, packet, 0, &destination)
+	if err := unix.Sendto(fd, packet, 0, &destination); err != nil {
+		t.Logf("send raw IPv4 %s packet returned: %v", kind, err)
+	} else {
+		t.Logf("send raw IPv4 %s packet completed", kind)
+	}
 }
 
 func TestCgroupRawIPv4IngressHelper(t *testing.T) {
@@ -602,10 +606,11 @@ func reserveUDPPort(t *testing.T) int {
 func readFlowEvent(t *testing.T, reader *ringbuf.Reader, destPort uint16, protocol, direction uint8, timeout time.Duration) flow.RawFlowEvent {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
+	var unmatched []flow.RawFlowEvent
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			t.Fatalf("timeout waiting for flow event destPort=%d protocol=%d direction=%d", destPort, protocol, direction)
+			t.Fatalf("timeout waiting for flow event destPort=%d protocol=%d direction=%d; unmatched events=%+v", destPort, protocol, direction, unmatched)
 		}
 		records := make(chan ringbuf.Record, 1)
 		errors := make(chan error, 1)
@@ -629,6 +634,9 @@ func readFlowEvent(t *testing.T, reader *ringbuf.Reader, destPort uint16, protoc
 				t.Fatalf("parse versioned raw event: %v", err)
 			}
 			if raw.DestPort != destPort || raw.Protocol != protocol || raw.Direction != direction {
+				if len(unmatched) < 4 {
+					unmatched = append(unmatched, raw)
+				}
 				continue
 			}
 			return raw

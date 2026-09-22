@@ -538,20 +538,78 @@ jobs:
             local metric="$1"
             local text="$2"
             local value
-            if value="$(awk -v metric="$metric" '
+            if value="$(awk -v specification="$metric" '
+              BEGIN {
+                part_count = split(specification, parts, "{")
+                expected_base = parts[1]
+                expected_count = 0
+                if (part_count > 1) {
+                  label_text = parts[2]
+                  sub(/}$/, "", label_text)
+                  expected_count = split(label_text, expected_pairs, ",")
+                  for (i = 1; i <= expected_count; i++) {
+                    separator = index(expected_pairs[i], "=")
+                    if (separator == 0) {
+                      invalid = 1
+                      continue
+                    }
+                    expected_name = substr(expected_pairs[i], 1, separator - 1)
+                    expected_value = substr(expected_pairs[i], separator + 1)
+                    if (expected_name == "" || expected_name in expected_labels) {
+                      invalid = 1
+                    }
+                    expected_names[i] = expected_name
+                    expected_labels[expected_name] = expected_value
+                  }
+                }
+              }
               {
                 sample=$1
                 base=sample
                 sub(/\{.*$/, "", base)
-                expected_base=metric
-                sub(/\{.*$/, "", expected_base)
               }
               base == expected_base {
                 matches++
-                if (sample != metric || NF != 2 || $2 !~ /^[0-9]+(\.0+)?$/ || matches > 1) {
+                if (matches > 1) {
+                  invalid=1
+                  next
+                }
+                if (NF != 2 || $2 !~ /^[0-9]+(\.0+)?$/) {
                   invalid=1
                 } else {
                   value=$2
+                }
+                actual_label_text=sample
+                sub(/^[^{]*\{/, "", actual_label_text)
+                if (actual_label_text == sample) {
+                  invalid=1
+                  next
+                }
+                sub(/}$/, "", actual_label_text)
+                actual_count=split(actual_label_text, actual_pairs, ",")
+                if (actual_count != expected_count) {
+                  invalid=1
+                }
+                for (i = 1; i <= actual_count; i++) {
+                  separator=index(actual_pairs[i], "=")
+                  if (separator == 0) {
+                    invalid=1
+                    continue
+                  }
+                  actual_name=substr(actual_pairs[i], 1, separator - 1)
+                  actual_value=substr(actual_pairs[i], separator + 1)
+                  if (actual_name == "" || actual_name in actual_labels) {
+                    invalid=1
+                  }
+                  actual_labels[actual_name]=actual_value
+                  if (!(actual_name in expected_labels) || expected_labels[actual_name] != actual_value) {
+                    invalid=1
+                  }
+                }
+                for (i = 1; i <= expected_count; i++) {
+                  if (!(expected_names[i] in actual_labels)) {
+                    invalid=1
+                  }
                 }
               }
               END {
