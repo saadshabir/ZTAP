@@ -2784,6 +2784,48 @@ The implementation checklist remains 90/90 complete (0% remaining); final
 acceptance remains 12/39 complete with 27/39 items open (69.2% remaining).
 Release publication and provenance archive remain hosted gates.
 
+Continuation audit (2026-09-22): exact-head Migration CI run `35791876787`
+for `44773aa8fa97fb314c8870bfeed865ab8f1f772b` passed all nine standard CI
+jobs, including lint/format/vet, `govulncheck`, generated-code verification,
+Linux race tests, Linux integration compile/vet, Docker/image scanning, and
+asset/manifest validation. The privileged eBPF job also passed; its retained
+log records `TestLinuxEngineRejectsIPv4FragmentsForIsolatedSubject` passing
+with blocked-fragment counter `1` and both event-drop counters `0`. The
+capability-only run verified node capacity 300, `/23` PodCIDR, the exact
+two-CPU quota, the shipped DaemonSet smoke, and all 250 Pods/25 policies/2,500
+rules. Three real five-second resource samples passed the 0.10-core/200-MiB
+budgets: maximum CPU `0.000779941` cores and maximum `memory.current`
+`48.246094` MiB. The rolling-update step then failed without observing any
+successful selected-client probe; its transcript ends after the selected
+client's blocked baseline and rollout start. Retained diagnostics show the
+old agent replaced by a Ready Pod on the same node and the replacement's first
+policy reconciliation completing about 0.84 seconds after container start.
+This does not establish a zero fail-open interval: the existing one-second
+`wget`/`kubectl exec` probe did not observe an allowed response, and live-flow
+verification was skipped. The next harness revision must increase packet-probe
+resolution before drawing a rollout conclusion. Because the privileged
+acceptance workflow did not complete, no final-acceptance item is credited from
+this run. Section 14.5 latency, throughput, flow-loss, and rollout evidence
+and the release publication/provenance archive remain open. The Phase 5
+implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete, with 27/39 items open (69.2% remaining).
+
+Continuation audit (2026-09-22): after run `35791876787` did not observe a
+successful selected-client request during the DaemonSet update, the rolling
+measurement harness now builds a static Linux/amd64 probe and runs it inside
+the selected smoke-client Pod. It opens fresh HTTP connections at a 10-ms
+interval, requires the exact `200`/`ok\n` response, and records the first
+success plus recovery after two consecutive blocked probes; it does not infer
+a zero gap when no success is observed. The focused transition test, static
+Linux/amd64 build, `make lint`, exact-step Bash syntax check, and diff check
+pass locally. A local HTTP integration test could not bind a loopback listener
+under the current sandbox, so the actual in-Pod network measurement remains a
+hosted gate. No checklist credit is taken before that exact-head rerun. The
+implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete with 27/39 open (69.2% remaining).
+Section 14.5 measurements and release publication/provenance archive remain
+hosted gates.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.

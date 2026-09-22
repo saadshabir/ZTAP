@@ -1141,6 +1141,46 @@ jobs:
             exit 1
           fi
           printf '%s\n' 'baseline_selected_smoke_client=blocked'
+
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$RUNNER_TEMP/ztap-rollout-probe" ./tools/phase5probe
+          kubectl cp "$RUNNER_TEMP/ztap-rollout-probe" ztap-smoke/smoke-client:/tmp/ztap-rollout-probe -c client
+          kubectl -n ztap-smoke exec smoke-client -c client -- chmod 0755 /tmp/ztap-rollout-probe
+          kubectl -n ztap-smoke exec smoke-client -c client -- rm -f /tmp/ztap-rollout-probe.stop
+          probe_output="$RUNNER_TEMP/rolling-probe.txt"
+          : > "$probe_output"
+          probe_pid=""
+          cleanup_rollout_probe() {
+            if [ -n "$probe_pid" ]; then
+              if timeout 5s kubectl -n ztap-smoke exec smoke-client -c client -- touch /tmp/ztap-rollout-probe.stop >/dev/null 2>&1; then
+                wait "$probe_pid" 2>/dev/null || true
+              else
+                kill "$probe_pid" 2>/dev/null || true
+                wait "$probe_pid" 2>/dev/null || true
+              fi
+            fi
+          }
+          trap cleanup_rollout_probe EXIT
+          kubectl -n ztap-smoke exec smoke-client -c client -- /tmp/ztap-rollout-probe \
+            -url "http://$server_ip:8080/" \
+            -interval=10ms \
+            -request-timeout=100ms \
+            -max-duration=5m \
+            -stop-file=/tmp/ztap-rollout-probe.stop \
+            > "$probe_output" 2>&1 &
+          probe_pid=$!
+          sleep 0.2
+          probe_running=0
+          for running_pid in $(jobs -pr); do
+            if [ "$running_pid" = "$probe_pid" ]; then
+              probe_running=1
+            fi
+          done
+          if [ "$probe_running" -ne 1 ] || [ -s "$probe_output" ]; then
+            cat "$probe_output" >&2
+            printf '%s\n' 'rolling probe did not remain blocked and running before the rollout' >&2
+            exit 1
+          fi
+
           rollout_started_ns="$(date +%s%N)"
           printf 'smoke_client_node=%s\nold_namespace=ztap-system\nold_pod=%s\nold_uid=%s\nold_node=%s\nold_ready=true\nrollout_started_ns=%s\n' \
             "$smoke_client_node" "$old_pod" "$old_uid" "$old_node" "$rollout_started_ns"
@@ -1154,55 +1194,98 @@ jobs:
           replacement_node=""
           replacement_observed_ns=""
           replacement_ready=""
-          blocked_after_open=0
-          for ((attempt = 0; attempt < 180; attempt++)); do
-            pod_records="$(kubectl -n ztap-system get pods -l app=ztap-agent -o json 2>/dev/null || true)"
-            mapfile -t replacement_rows < <(jq -r --arg old_pod "$old_pod" --arg old_node "$old_node" '
-              .items[]
-              | select(.metadata.name != $old_pod)
-              | select(.spec.nodeName == $old_node)
-              | select(.status.phase == "Running")
-              | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))
-              | [
-                  .metadata.name,
-                  .metadata.uid,
-                  .metadata.creationTimestamp,
-                  .spec.nodeName,
-                  (any(.status.conditions[]?; .type == "Ready" and .status == "True") | tostring)
-                ]
-              | @tsv
-            ' <<< "$pod_records" 2>/dev/null || true)
-            if [ -z "$replacement_pod" ] && [ "${#replacement_rows[@]}" -eq 1 ]; then
-              IFS=$'\t' read -r current_pod current_uid current_created_at current_node current_ready <<< "${replacement_rows[0]}"
-              replacement_pod="$current_pod"
-              replacement_uid="$current_uid"
-              replacement_created_at="$current_created_at"
-              replacement_node="$current_node"
-              replacement_observed_ns="$(date +%s%N)"
-              replacement_ready="$current_ready"
+          probe_finished=0
+          for ((attempt = 0; attempt < 3600; attempt++)); do
+            if [ -z "$replacement_pod" ]; then
+              pod_records="$(kubectl -n ztap-system get pods -l app=ztap-agent -o json 2>/dev/null || true)"
+              mapfile -t replacement_rows < <(jq -r --arg old_pod "$old_pod" --arg old_node "$old_node" '
+                .items[]
+                | select(.metadata.name != $old_pod)
+                | select(.spec.nodeName == $old_node)
+                | select(.status.phase == "Running")
+                | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))
+                | [
+                    .metadata.name,
+                    .metadata.uid,
+                    .metadata.creationTimestamp,
+                    .spec.nodeName,
+                    (any(.status.conditions[]?; .type == "Ready" and .status == "True") | tostring)
+                  ]
+                | @tsv
+              ' <<< "$pod_records" 2>/dev/null || true)
+              if [ "${#replacement_rows[@]}" -eq 1 ]; then
+                IFS=$'\t' read -r current_pod current_uid current_created_at current_node current_ready <<< "${replacement_rows[0]}"
+                replacement_pod="$current_pod"
+                replacement_uid="$current_uid"
+                replacement_created_at="$current_created_at"
+                replacement_node="$current_node"
+                replacement_observed_ns="$(date +%s%N)"
+                replacement_ready="$current_ready"
+              fi
             fi
-            control_response="$(kubectl -n ztap-smoke exec smoke-control -- wget -qO- -T 1 "http://$server_ip:8080/" 2>/dev/null || true)"
-            if [ "$control_response" != ok ]; then
-              printf 'rolling probe failed: unselected control client returned %q\n' "$control_response" >&2
+
+            if [ "$((attempt % 10))" -eq 0 ]; then
+              control_response="$(kubectl -n ztap-smoke exec smoke-control -- wget -qO- -T 1 "http://$server_ip:8080/" 2>/dev/null || true)"
+              if [ "$control_response" != ok ]; then
+                printf 'rolling probe failed: unselected control client returned %q\n' "$control_response" >&2
+                exit 1
+              fi
+            fi
+
+            probe_start_count="$(awk -F= '$1 == "fail_open_start_ns" { count++ } END { print count + 0 }' "$probe_output")"
+            probe_end_count="$(awk -F= '$1 == "fail_open_end_ns" { count++ } END { print count + 0 }' "$probe_output")"
+            if [ "$probe_start_count" -gt 1 ] || [ "$probe_end_count" -gt 1 ]; then
+              printf '%s\n' 'rolling probe emitted duplicate fail-open timestamps' >&2
               exit 1
             fi
-            response="$(kubectl -n ztap-smoke exec smoke-client -- wget -qO- -T 1 "http://$server_ip:8080/" 2>/dev/null || true)"
-            now_ns="$(date +%s%N)"
-            if [ "$response" = ok ]; then
-              blocked_after_open=0
-              if [ -z "$fail_open_start_ns" ]; then
-                fail_open_start_ns="$now_ns"
-                printf 'fail_open_start_ns=%s\n' "$fail_open_start_ns"
+            if [ "$probe_start_count" -eq 1 ]; then
+              fail_open_start_ns="$(awk -F= '$1 == "fail_open_start_ns" { print $2 }' "$probe_output")"
+            fi
+            if [ "$probe_end_count" -eq 1 ]; then
+              fail_open_end_ns="$(awk -F= '$1 == "fail_open_end_ns" { print $2 }' "$probe_output")"
+            fi
+            if [ -n "$replacement_pod" ] && [ -n "$fail_open_start_ns" ] && [ -n "$fail_open_end_ns" ]; then
+              if [ "$probe_finished" -ne 1 ]; then
+                wait "$probe_pid"
+                probe_finished=1
               fi
-            elif [ -n "$fail_open_start_ns" ]; then
-              blocked_after_open=$((blocked_after_open + 1))
-              if [ "$blocked_after_open" -ge 2 ]; then
-                fail_open_end_ns="$now_ns"
-                break
+              probe_pid=""
+              break
+            fi
+
+            if [ "$probe_finished" -ne 1 ]; then
+              probe_running=0
+              for running_pid in $(jobs -pr); do
+                if [ "$running_pid" = "$probe_pid" ]; then
+                  probe_running=1
+                fi
+              done
+              if [ "$probe_running" -ne 1 ]; then
+                if [ -n "$fail_open_start_ns" ] && [ -n "$fail_open_end_ns" ]; then
+                  wait "$probe_pid"
+                  probe_finished=1
+                elif wait "$probe_pid"; then
+                  printf '%s\n' 'rolling probe exited without a complete fail-open interval' >&2
+                  exit 1
+                else
+                  cat "$probe_output" >&2
+                  printf '%s\n' 'rolling probe failed before a complete fail-open interval' >&2
+                  exit 1
+                fi
               fi
             fi
-            sleep 1
+
+            sleep 0.1
           done
+
+          if [ -n "$probe_pid" ]; then
+            if [ "$probe_finished" -eq 1 ]; then
+              printf '%s\n' 'fail-open interval was captured, but no Ready replacement agent was observed before the deadline' >&2
+            else
+              printf '%s\n' 'rolling probe did not finish before the observation deadline' >&2
+            fi
+            exit 1
+          fi
 
           kubectl -n ztap-system rollout status daemonset/ztap-agent --timeout=180s >/dev/null
           test -n "$replacement_pod"
