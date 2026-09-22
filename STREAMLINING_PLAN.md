@@ -2679,6 +2679,23 @@ local gates pass after these fixes, but exact-diff hosted validation is still
 pending. Final acceptance remains 12/39 complete, with 27/39 items open
 (69.2% remaining); no skipped hosted result is counted as a pass.
 
+Continuation audit (2026-09-22): the next hosted PR run (`35771692888`) and
+push run (`35771688053`) for `fba272e` passed generated-code, actionlint, and
+workflow-security checks but failed lint; required aggregation consequently
+failed and Linux, Docker, eBPF, and Kubernetes jobs were skipped. The lint
+logs identified three additional unchecked Linux descriptor closes. A
+Linux-targeted `errcheck` pass then exposed one unchecked close in the existing
+node-lock helper as well. The three startup-path closes and the lock-directory
+close now propagate errors and release any already-open result handle if its
+parent descriptor cannot be closed. On the updated working tree,
+Linux-targeted `errcheck` reports 0 issues and `make check-generated` passes.
+The prior aggregate `make check` passed before the final Linux-only lock-helper
+adjustment; macOS does not compile that build-tagged path, so exact-diff hosted
+CI remains necessary. The Phase 5 implementation checklist is 90/90 complete
+(0% remaining); final acceptance is 12/39 complete, with 27/39 items open
+(69.2% remaining). Section 14.5 measurements and release publication and
+provenance archive remain hosted gates.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.

@@ -174,7 +174,7 @@ func (r *mapOwningReader) Available() bool {
 	return !closed && inner != nil && inner.Available()
 }
 
-func openPinnedFlowReader(bpffsRoot string) (flow.FlowReader, error) {
+func openPinnedFlowReader(bpffsRoot string) (result flow.FlowReader, resultErr error) {
 	if bpffsRoot == "" {
 		bpffsRoot = "/sys/fs/bpf"
 	}
@@ -186,7 +186,15 @@ func openPinnedFlowReader(bpffsRoot string) (flow.FlowReader, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unix.Close(rootFD)
+	defer func() {
+		if err := unix.Close(rootFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close pinned flow bpffs root: %w", err))
+			if result != nil {
+				resultErr = errors.Join(resultErr, result.Stop())
+				result = nil
+			}
+		}
+	}()
 
 	pinDirectory := filepath.Join(rootPath, "ztap")
 	pinDirectoryFD, err := unix.Openat(rootFD, "ztap", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -199,7 +207,15 @@ func openPinnedFlowReader(bpffsRoot string) (flow.FlowReader, error) {
 		}
 		return nil, fmt.Errorf("open pinned flow directory %q: %w", pinDirectory, err)
 	}
-	defer unix.Close(pinDirectoryFD)
+	defer func() {
+		if err := unix.Close(pinDirectoryFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close pinned flow directory: %w", err))
+			if result != nil {
+				resultErr = errors.Join(resultErr, result.Stop())
+				result = nil
+			}
+		}
+	}()
 
 	flowEventsPath := filepath.Join(pinDirectory, "flow_events")
 	m, err := loadPinnedFlowMapAt(pinDirectoryFD, "flow_events", flowEventsPath)

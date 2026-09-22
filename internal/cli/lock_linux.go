@@ -15,7 +15,7 @@ import (
 // openZTAPLock creates or opens a node-local lock file without following
 // symlinked path components. The run directory is created one component at a
 // time so an attacker cannot redirect MkdirAll through an existing symlink.
-func openZTAPLock(runDir, lockName, owner string) (*os.File, string, error) {
+func openZTAPLock(runDir, lockName, owner string) (result *os.File, resultPath string, resultErr error) {
 	runDir = strings.TrimSpace(runDir)
 	if runDir == "" {
 		runDir = "/run/ztap"
@@ -33,7 +33,16 @@ func openZTAPLock(runDir, lockName, owner string) (*os.File, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	defer unix.Close(directoryFD)
+	defer func() {
+		if err := unix.Close(directoryFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close %s run directory %q: %w", owner, absRunDir, err))
+			if result != nil {
+				resultErr = errors.Join(resultErr, result.Close())
+				result = nil
+				resultPath = ""
+			}
+		}
+	}()
 
 	fd, err := unix.Openat(directoryFD, lockName, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {

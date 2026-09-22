@@ -333,12 +333,22 @@ func ensureEnginePinDirectory(root string) error {
 	return pinDirectory.Close()
 }
 
-func openOrCreateEnginePinDirectory(root string) (*os.File, error) {
+func openOrCreateEnginePinDirectory(root string) (result *os.File, resultErr error) {
 	rootFD, err := openEngineDirectoryNoFollow(root, "ZTAP bpffs root")
 	if err != nil {
 		return nil, fmt.Errorf("open bpffs root %q: %w", root, err)
 	}
-	defer unix.Close(rootFD)
+	defer func() {
+		if err := unix.Close(rootFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close ZTAP bpffs root: %w", err))
+			if result != nil {
+				if closeErr := result.Close(); closeErr != nil {
+					resultErr = errors.Join(resultErr, fmt.Errorf("close ZTAP bpffs directory: %w", closeErr))
+				}
+				result = nil
+			}
+		}
+	}()
 
 	openDirectory := func() (int, error) {
 		return unix.Openat(rootFD, "ztap", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -361,7 +371,9 @@ func openOrCreateEnginePinDirectory(root string) (*os.File, error) {
 	}
 	pinDirectory := os.NewFile(uintptr(pinFD), filepath.Join(root, "ztap"))
 	if pinDirectory == nil {
-		_ = unix.Close(pinFD)
+		if closeErr := unix.Close(pinFD); closeErr != nil {
+			return nil, errors.Join(errors.New("create ZTAP bpffs directory handle"), fmt.Errorf("close ZTAP bpffs directory: %w", closeErr))
+		}
 		return nil, errors.New("create ZTAP bpffs directory handle")
 	}
 	return pinDirectory, nil
