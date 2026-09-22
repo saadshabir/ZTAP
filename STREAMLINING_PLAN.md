@@ -2696,6 +2696,21 @@ CI remains necessary. The Phase 5 implementation checklist is 90/90 complete
 (69.2% remaining). Section 14.5 measurements and release publication and
 provenance archive remain hosted gates.
 
+Continuation audit (2026-09-22): exact-commit Migration CI run `35772863835`
+for `5e00952` passed lint/format, vet, module tidiness, `govulncheck`, generated
+code, actionlint, workflow-security, dependency review, Linux integration,
+Docker build/image scan, and native asset/manifest validation. Its Linux unit
+suite failed existing symlink-rejection regressions: Linux can report
+`ENOTDIR` for `O_NOFOLLOW|O_DIRECTORY` on a symlink, and the descriptor-walk
+code labeled that as an ordinary non-directory. The eBPF and capability-only
+Kubernetes jobs were skipped because they depend on the failed Linux unit job;
+`Required CI` therefore failed. The path walkers and pinned-directory opens
+now use descriptor-relative `fstatat` with `AT_SYMLINK_NOFOLLOW` to distinguish
+that symlink case without following it. Updated Linux-targeted `errcheck`
+reports 0 issues; exact-diff hosted rerun is pending. The implementation
+checklist remains 90/90 complete (0% remaining); final acceptance remains
+12/39 complete with 27/39 items open (69.2% remaining).
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.

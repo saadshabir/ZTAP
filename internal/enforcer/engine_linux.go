@@ -167,7 +167,8 @@ func RemoveStalePins(bpffsRoot string) (resultErr error) {
 		return nil
 	}
 	if err != nil {
-		if errors.Is(err, unix.ELOOP) {
+		if errors.Is(err, unix.ELOOP) ||
+			(errors.Is(err, unix.ENOTDIR) && engineEntryIsSymlinkAt(rootFD, "ztap")) {
 			return fmt.Errorf("ZTAP bpffs path %q is a symlink", pinDirectory)
 		}
 		if errors.Is(err, unix.ENOTDIR) {
@@ -361,7 +362,8 @@ func openOrCreateEnginePinDirectory(root string) (result *os.File, resultErr err
 		pinFD, err = openDirectory()
 	}
 	if err != nil {
-		if errors.Is(err, unix.ELOOP) {
+		if errors.Is(err, unix.ELOOP) ||
+			(errors.Is(err, unix.ENOTDIR) && engineEntryIsSymlinkAt(rootFD, "ztap")) {
 			return nil, errors.New("ztap pin directory is a symlink")
 		}
 		if errors.Is(err, unix.ENOTDIR) {
@@ -1284,7 +1286,8 @@ func openValidatedCgroup(root, target string, expectedID uint64) (*os.File, stri
 		}
 		nextFD, openErr := unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if openErr != nil {
-			if errors.Is(openErr, unix.ELOOP) {
+			if errors.Is(openErr, unix.ELOOP) ||
+				(errors.Is(openErr, unix.ENOTDIR) && engineEntryIsSymlinkAt(currentFD, component)) {
 				return nil, "", fmt.Errorf("cgroup path %q contains symlink component %q", resolved, component)
 			}
 			if errors.Is(openErr, unix.ENOTDIR) {
@@ -1375,10 +1378,12 @@ func openEngineDirectoryNoFollow(path, owner string) (int, error) {
 		}
 		nextFD, openErr := unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if openErr != nil {
-			_ = unix.Close(currentFD)
-			if errors.Is(openErr, unix.ELOOP) {
+			if errors.Is(openErr, unix.ELOOP) ||
+				(errors.Is(openErr, unix.ENOTDIR) && engineEntryIsSymlinkAt(currentFD, component)) {
+				_ = unix.Close(currentFD)
 				return -1, fmt.Errorf("%s path %q contains symlink component %q", owner, clean, component)
 			}
+			_ = unix.Close(currentFD)
 			if errors.Is(openErr, unix.ENOTDIR) {
 				return -1, fmt.Errorf("%s path %q component %q is not a directory", owner, clean, component)
 			}
@@ -1388,6 +1393,14 @@ func openEngineDirectoryNoFollow(path, owner string) (int, error) {
 		currentFD = nextFD
 	}
 	return currentFD, nil
+}
+
+func engineEntryIsSymlinkAt(directoryFD int, name string) bool {
+	var stat unix.Stat_t
+	if err := unix.Fstatat(directoryFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return false
+	}
+	return stat.Mode&unix.S_IFMT == unix.S_IFLNK
 }
 
 func requireFilesystemType(path string, want int64, name string) error {

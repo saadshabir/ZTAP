@@ -199,7 +199,8 @@ func openPinnedFlowReader(bpffsRoot string) (result flow.FlowReader, resultErr e
 	pinDirectory := filepath.Join(rootPath, "ztap")
 	pinDirectoryFD, err := unix.Openat(rootFD, "ztap", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		if errors.Is(err, unix.ELOOP) {
+		if errors.Is(err, unix.ELOOP) ||
+			(errors.Is(err, unix.ENOTDIR) && isSymlinkEntryAt(rootFD, "ztap")) {
 			return nil, fmt.Errorf("pinned flow path %q is a symlink", pinDirectory)
 		}
 		if errors.Is(err, unix.ENOTDIR) {

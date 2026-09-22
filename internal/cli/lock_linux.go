@@ -107,10 +107,12 @@ func openDirectoryNoFollow(path, owner string, createMissing bool) (int, error) 
 			nextFD, openErr = unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		}
 		if openErr != nil {
-			_ = unix.Close(currentFD)
-			if errors.Is(openErr, unix.ELOOP) {
+			if errors.Is(openErr, unix.ELOOP) ||
+				(errors.Is(openErr, unix.ENOTDIR) && isSymlinkEntryAt(currentFD, component)) {
+				_ = unix.Close(currentFD)
 				return -1, fmt.Errorf("%s directory %q contains symlink component %q", owner, path, component)
 			}
+			_ = unix.Close(currentFD)
 			if errors.Is(openErr, unix.ENOTDIR) {
 				return -1, fmt.Errorf("%s directory %q component %q is not a directory", owner, path, component)
 			}
@@ -120,4 +122,12 @@ func openDirectoryNoFollow(path, owner string, createMissing bool) (int, error) 
 		currentFD = nextFD
 	}
 	return currentFD, nil
+}
+
+func isSymlinkEntryAt(directoryFD int, name string) bool {
+	var stat unix.Stat_t
+	if err := unix.Fstatat(directoryFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return false
+	}
+	return stat.Mode&unix.S_IFMT == unix.S_IFLNK
 }
