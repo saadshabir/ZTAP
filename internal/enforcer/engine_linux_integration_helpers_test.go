@@ -106,6 +106,14 @@ func TestCgroupRawIPv4SendHelper(t *testing.T) {
 	if err := unix.SetsockoptInt(fd, unix.IPPROTO_IP, unix.IP_HDRINCL, 1); err != nil {
 		t.Fatalf("enable IPv4 header inclusion: %v", err)
 	}
+	if kind == "fragment" {
+		// Keep the intentionally incomplete first fragment intact through local
+		// output so conntrack defragmentation does not queue it before cgroup
+		// egress enforcement sees it.
+		if err := unix.SetsockoptInt(fd, unix.IPPROTO_IP, unix.IP_NODEFRAG, 1); err != nil {
+			t.Fatalf("preserve IPv4 fragment for cgroup egress: %v", err)
+		}
+	}
 
 	packet, err := buildRawIPv4TestPacket(kind, 40001)
 	if err != nil {

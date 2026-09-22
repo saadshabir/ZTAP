@@ -2759,6 +2759,31 @@ acceptance remains 12/39 complete with 27/39 items open (69.2% remaining).
 Section 14.5 measurements and release publication and provenance archive remain
 hosted gates.
 
+Continuation audit (2026-09-22): exact-head Migration CI run `35789712632`
+for `c42965676faa3aef2766fb1fbba4d2ab953bb90b` passed the standard lint,
+Actionlint, workflow-security, dependency-review, generated-code, Linux Go,
+Linux integration compile/vet, asset, and Docker jobs. The one-node kind setup
+verified pod capacity 300, a `/23` Pod CIDR, and the unchanged `200000 100000`
+two-CPU quota; the capability smoke passed, and all 250 fixture Pods and 25
+NetworkPolicies reached the required live shape. Resource sampling then timed
+out before taking samples: the agent had converged to 251 subjects and 2,500
+rules, while the gate incorrectly expected only 250 enforced cgroups. The
+retained `smoke-client` is an additional selected cgroup beside the 250-Pod
+fixture. The hosted eBPF suite still failed the fragment probe; `Sendto`
+completed, the blocked-fragment counter was zero, and event-drop counters were
+both zero, while the malformed-packet control was denied. Linux local-output
+conntrack defragmentation can queue this deliberately incomplete first fragment
+before cgroup egress; the raw test socket now requests `IP_NODEFRAG` so the
+fragment reaches the enforcement hook. The resource predicate now includes the
+one retained smoke-client cgroup. Both harness changes pass local compilation
+and lint, but need an exact-head hosted rerun. Rolling-update and live-flow
+steps were skipped after the resource-gate failure, and Section 14.5 resource,
+latency, throughput, and flow-loss acceptance remains open. Since both
+privileged jobs failed, no final-acceptance item is credited from this run.
+The implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete with 27/39 items open (69.2% remaining).
+Release publication and provenance archive remain hosted gates.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.
