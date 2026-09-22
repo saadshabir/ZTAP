@@ -2867,6 +2867,29 @@ acceptance remains 12/39 complete, with 27/39 items open (69.2% remaining).
 Section 14.5 measurements and release publication/provenance archive remain
 hosted gates.
 
+Continuation audit (2026-09-22): exact-head push run `35798098437` for
+`6e71260a4e175134a6f911e35c94191f418d0ef6` passed all standard jobs,
+`Required CI`, and both privileged jobs. The kindnet policy-controller disable
+step, post-disable shipped-agent smoke, 250-Pod/25-policy/2,500-rule fixture,
+resource budget, and live-flow step all passed. The hosted rolling probe
+measured `fail_open_interval_ms=1925`; its raw capability artifact also records
+the selected-client blocked baseline, different old/replacement Pod UIDs on the
+same node, and a Ready replacement. However, the uploaded rolling transcript
+omits `fail_open_start_ns`, so the checked-in standalone/release evidence
+verifier rejects it. It also records the replacement's first observation only
+when Ready, 22 seconds after the measured interval ended, rather than the first
+Running observation; the replacement creation timestamp is second-precision
+and falls in the same second as the nanosecond rollout timestamp. Therefore
+this successful CI run does not yet provide verifier-acceptable rolling
+evidence, and no final-acceptance item is credited. The harness must retain
+both interval endpoints, timestamp the replacement's first Running observation
+while separately requiring it to become Ready, and compare the API's
+second-precision creation time without inventing sub-second precision. The
+Phase 5 implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete, with 27/39 items open (69.2% remaining).
+Section 14.5 measurements and release publication/provenance archive remain
+hosted gates.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.

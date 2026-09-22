@@ -1236,7 +1236,6 @@ jobs:
                 | select(.metadata.name != $old_pod)
                 | select(.spec.nodeName == $old_node)
                 | select(.status.phase == "Running")
-                | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))
                 | [
                     .metadata.name,
                     .metadata.uid,
@@ -1254,6 +1253,18 @@ jobs:
                 replacement_node="$current_node"
                 replacement_observed_ns="$(date +%s%N)"
                 replacement_ready="$current_ready"
+              fi
+            fi
+
+            if [ -n "$replacement_pod" ] && [ "$replacement_ready" != true ] && [ "$((attempt % 10))" -eq 0 ]; then
+              replacement_record="$(kubectl -n ztap-system get pod "$replacement_pod" -o json 2>/dev/null || true)"
+              if [ -n "$replacement_record" ]; then
+                current_uid="$(jq -r '.metadata.uid' <<< "$replacement_record")"
+                if [ "$current_uid" != "$replacement_uid" ]; then
+                  printf '%s\n' 'rolling probe failed: replacement Pod identity changed before Ready' >&2
+                  exit 1
+                fi
+                replacement_ready="$(jq -r 'any(.status.conditions[]?; .type == "Ready" and .status == "True") | tostring' <<< "$replacement_record")"
               fi
             fi
 
@@ -1277,7 +1288,8 @@ jobs:
             if [ "$probe_end_count" -eq 1 ]; then
               fail_open_end_ns="$(awk -F= '$1 == "fail_open_end_ns" { print $2 }' "$probe_output")"
             fi
-            if [ -n "$replacement_pod" ] && [ -n "$fail_open_start_ns" ] && [ -n "$fail_open_end_ns" ]; then
+            if [ -n "$replacement_pod" ] && [ "$replacement_ready" = true ] &&
+              [ -n "$fail_open_start_ns" ] && [ -n "$fail_open_end_ns" ]; then
               if [ "$probe_finished" -ne 1 ]; then
                 wait "$probe_pid"
                 probe_finished=1
@@ -1332,8 +1344,8 @@ jobs:
           test -n "$fail_open_start_ns"
           test -n "$fail_open_end_ns"
           fail_open_ms=$(( (fail_open_end_ns - fail_open_start_ns) / 1000000 ))
-          printf 'replacement_namespace=ztap-system\nreplacement_pod=%s\nreplacement_uid=%s\nreplacement_created_at=%s\nreplacement_node=%s\nreplacement_ready=%s\nreplacement_observed_ns=%s\nfail_open_end_ns=%s\nfail_open_interval_ms=%s\n' \
-            "$replacement_pod" "$replacement_uid" "$replacement_created_at" "$replacement_node" "$replacement_ready" "$replacement_observed_ns" "$fail_open_end_ns" "$fail_open_ms"
+          printf 'replacement_namespace=ztap-system\nreplacement_pod=%s\nreplacement_uid=%s\nreplacement_created_at=%s\nreplacement_node=%s\nreplacement_ready=%s\nreplacement_observed_ns=%s\nfail_open_start_ns=%s\nfail_open_end_ns=%s\nfail_open_interval_ms=%s\n' \
+            "$replacement_pod" "$replacement_uid" "$replacement_created_at" "$replacement_node" "$replacement_ready" "$replacement_observed_ns" "$fail_open_start_ns" "$fail_open_end_ns" "$fail_open_ms"
           ) 2>&1 | tee rolling-fail-open-evidence.txt
 
       - name: Exercise live flow reader

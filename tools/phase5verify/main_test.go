@@ -2101,6 +2101,36 @@ func TestValidateHostedRollingEvidenceRejectsReplacementCreatedBeforeRollout(t *
 	}
 }
 
+func TestValidateHostedRollingEvidenceAcceptsSecondPrecisionCreationTimestamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rolling-fail-open-evidence.txt")
+	payload := strings.Join([]string{
+		"baseline_selected_smoke_client=blocked",
+		"smoke_client_node=kind-control-plane",
+		"old_namespace=ztap-system",
+		"old_pod=ztap-agent-old",
+		"old_uid=old-uid",
+		"old_node=kind-control-plane",
+		"old_ready=true",
+		"rollout_started_ns=2500000000",
+		"replacement_namespace=ztap-system",
+		"replacement_pod=ztap-agent-new",
+		"replacement_uid=new-uid",
+		"replacement_created_at=1970-01-01T00:00:02Z",
+		"replacement_node=kind-control-plane",
+		"replacement_ready=true",
+		"replacement_observed_ns=2700000000",
+		"fail_open_start_ns=2600000000",
+		"fail_open_end_ns=3500000000",
+		"fail_open_interval_ms=900",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write second-precision rolling evidence: %v", err)
+	}
+	if err := validateHostedRollingEvidence(path); err != nil {
+		t.Fatalf("valid second-precision creation timestamp rejected: %v", err)
+	}
+}
+
 func TestValidateHostedRollingEvidenceRejectsObservationBeforeCreation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rolling-fail-open-evidence.txt")
 	payload := strings.Join([]string{

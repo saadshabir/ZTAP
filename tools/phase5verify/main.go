@@ -2331,6 +2331,30 @@ func validHostedAgentPodName(value string) bool {
 	return true
 }
 
+func hostedTimestampResolutionNS(value string) uint64 {
+	parts := strings.SplitN(value, "T", 2)
+	if len(parts) != 2 || len(parts[1]) <= 8 || parts[1][8] != '.' {
+		return uint64(time.Second)
+	}
+	fraction := parts[1][9:]
+	if zoneStart := strings.IndexAny(fraction, "Z+-"); zoneStart >= 0 {
+		fraction = fraction[:zoneStart]
+	}
+	if len(fraction) == 0 || len(fraction) > 9 {
+		return 0
+	}
+	for _, digit := range fraction {
+		if digit < '0' || digit > '9' {
+			return 0
+		}
+	}
+	resolution := uint64(1)
+	for index := len(fraction); index < 9; index++ {
+		resolution *= 10
+	}
+	return resolution
+}
+
 func validateHostedRollingEvidence(path string) error {
 	values, err := hostedKeyValues(path)
 	if err != nil {
@@ -2446,8 +2470,10 @@ func validateHostedRollingEvidence(path string) error {
 	if replacementObserved < createdAtNS {
 		return fmt.Errorf("%s records replacement observation at %d before its creation at %d", path, replacementObserved, createdAtNS)
 	}
-	if createdAtNS < rolloutStarted || createdAtNS > end {
-		return fmt.Errorf("%s records replacement creation at %d outside rollout-to-fail-open interval [%d,%d]", path, createdAtNS, rolloutStarted, end)
+	creationResolution := hostedTimestampResolutionNS(replacementCreatedAt)
+	if creationResolution == 0 || createdAtNS > ^uint64(0)-creationResolution ||
+		createdAtNS > end || createdAtNS+creationResolution <= rolloutStarted {
+		return fmt.Errorf("%s records replacement creation at %d with %d-ns precision outside rollout-to-fail-open interval [%d,%d]", path, createdAtNS, creationResolution, rolloutStarted, end)
 	}
 	if replacementObserved < rolloutStarted || replacementObserved > end {
 		return fmt.Errorf("%s records replacement observation at %d outside rollout-to-fail-open interval [%d,%d]", path, replacementObserved, rolloutStarted, end)

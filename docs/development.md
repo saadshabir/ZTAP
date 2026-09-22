@@ -383,18 +383,19 @@ requires exactly one Running/Ready `ztap-agent` Pod in
 the shipped `ztap-system` namespace for its
 smoke, resource, and flow probes, captures each retained transcript through an
 explicit `set -euo pipefail` pipeline, and asserts that the selected smoke client is
-denied, then
-separately restarts the shipped DaemonSet,
-probes the selected smoke client until it first succeeds and then until two
-successive probes are blocked again, and uploads
+denied, then separately restarts the shipped DaemonSet, probes the selected
+smoke client until it first succeeds and then until two successive probes are
+blocked again, and uploads
 `rolling-fail-open-evidence.txt` with the smoke-client node, the exact
 `ztap-system` agent namespace, old and replacement Pod node, a uniquely
-selected Running/Ready baseline old Pod, a Running/Ready replacement
-(`old_ready=true` and `replacement_ready=true`), distinct old/replacement Pod
-UIDs, and replacement creation and first-observation
-timestamps bounded to the rollout interval. The verifier also requires the
-first observation to follow replacement creation, so the transcript cannot
-invert the Pod lifecycle. This hosted measurement is not reproduced by
+selected Running/Ready baseline old Pod, a replacement first observed Running
+within the measured interval and separately confirmed Ready before the step
+ends (`old_ready=true` and `replacement_ready=true`), distinct old/replacement
+Pod UIDs, and replacement creation and first-observation timestamps bounded to
+the rollout interval. The verifier uses the precision represented by the API's
+creation timestamp and requires the high-resolution Running observation to
+follow it, so the transcript cannot invert the Pod lifecycle. This hosted
+measurement is not reproduced by
 the local `make performance` target. It also samples the shipped agent
 container's cgroup CPU and `memory.current` counters for three quiet
 five-second intervals after creating and classifying the real
