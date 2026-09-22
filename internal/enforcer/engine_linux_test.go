@@ -125,7 +125,11 @@ func TestOpenValidatedCgroupReturnsDescriptorForValidatedDirectory(t *testing.T)
 	if err != nil {
 		t.Fatalf("openValidatedCgroup: %v", err)
 	}
-	defer cgroup.Close()
+	t.Cleanup(func() {
+		if err := cgroup.Close(); err != nil {
+			t.Errorf("close cgroup descriptor: %v", err)
+		}
+	})
 	if resolved != target {
 		t.Fatalf("resolved cgroup path = %q, want %q", resolved, target)
 	}
@@ -308,7 +312,11 @@ func TestOpenEnginePinDirectoryRetainsValidatedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openOrCreateEnginePinDirectory: %v", err)
 	}
-	defer pinDirectory.Close()
+	t.Cleanup(func() {
+		if err := pinDirectory.Close(); err != nil {
+			t.Errorf("close pin directory: %v", err)
+		}
+	})
 
 	original := filepath.Join(root, "ztap-original")
 	if err := os.Rename(filepath.Join(root, "ztap"), original); err != nil {
@@ -344,7 +352,11 @@ func TestEnginePinPathAtRejectsInvalidName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openOrCreateEnginePinDirectory: %v", err)
 	}
-	defer pinDirectory.Close()
+	t.Cleanup(func() {
+		if err := pinDirectory.Close(); err != nil {
+			t.Errorf("close pin directory: %v", err)
+		}
+	})
 
 	for _, name := range []string{".", "..", "nested/pin"} {
 		if _, err := enginePinPathAt(pinDirectory, name); err == nil {

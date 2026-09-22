@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 
 	"golang.org/x/sys/unix"
-	"testing"
 )
 
 func TestZTAPLocksRejectSymlinkedRunDirectories(t *testing.T) {

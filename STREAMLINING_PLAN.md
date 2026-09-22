@@ -850,16 +850,6 @@ Progress: **complete and merged**. The local baseline, artifact cleanup, Makefil
 
 The follow-up review retained the `v0.1.0` self-traffic contract and added an explicit `(cgroup, PodIP)` bypass, a hard hosted self assertion, per-direction quarantine, failed-candidate preservation, partial link-update rollback, and multi-subject ingress-identity coverage in `bc636f5`. Test injection was corrected in `3b198a4`, and the hosted DaemonSet observer-selection race was fixed in `091310f`. Final hosted run `34665388860` from `091310f` passed all three jobs, and its raw artifacts were reviewed. Final Migration CI push run `34665381636` is also green. The attachment target is now one link pair per subject cgroup, sharing programs/maps, because cgroup local storage identifies the attachment cgroup. The Phase 0 architecture gate is closed; Phase 1 may resume.
 
-Continuation audit (2026-09-22): `make check-generated` and the full `make
-check` passed again on the current Phase 5 working tree. The first aggregate
-check attempt stopped only because DNS could not resolve `vuln.go.dev`; the
-pinned `govulncheck@v1.1.4` scan then passed with network access and reported no
-vulnerabilities, and the aggregate check passed on retry. This confirms local
-gates only; Docker, privileged Linux/Kubernetes, Section 14.5 measurements,
-and release publication/provenance remain hosted. The Phase 5 implementation
-checklist remains 90/90 complete (0% remaining); final acceptance remains
-12/39 complete with 27/39 items open (69.2% remaining).
-
 Work:
 
 - [x] Record the baseline commit, its command list, the already-dirty working-tree boundary, and local host limitations.
@@ -2667,6 +2657,27 @@ deployment guides distinguish cluster-wide selector peers from node-local
 subjects, require a CNI without another NetworkPolicy enforcer rather than a
 CNI-free cluster, and record that exact Phase 5 CI and manual kernel releases
 remain pending hosted validation.
+
+Continuation audit (2026-09-22): `make check-generated` and the full `make
+check` passed again on the current Phase 5 working tree. The first aggregate
+check attempt stopped only because DNS could not resolve `vuln.go.dev`; the
+pinned `govulncheck@v1.1.4` scan then passed with network access and reported no
+vulnerabilities, and the aggregate check passed on retry. This confirms local
+gates only; Docker, privileged Linux/Kubernetes, Section 14.5 measurements,
+and release publication/provenance remain hosted. The Phase 5 implementation
+checklist remains 90/90 complete (0% remaining); final acceptance remains
+12/39 complete with 27/39 items open (69.2% remaining).
+
+Continuation audit (2026-09-22): the first hosted Migration CI push run for
+PR #193 (`35770397484`, commit `f67d917`) failed in lint and actionlint before
+Linux, Docker, eBPF, and Kubernetes jobs could run. Its logs identified six
+unchecked descriptor closes, one Go import-order issue, and two ShellCheck
+findings. Those findings are corrected locally, and the branch is synced with
+current `main`; the Phase 5-required narrowed monthly Dependabot configuration
+is retained despite its deletion on `main`. The generated-code and aggregate
+local gates pass after these fixes, but exact-diff hosted validation is still
+pending. Final acceptance remains 12/39 complete, with 27/39 items open
+(69.2% remaining); no skipped hosted result is counted as a pass.
 
 Work:
 

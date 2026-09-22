@@ -86,7 +86,7 @@ jobs:
             "eBPF Verification (Linux)"
             "Capability-only Agent (Kubernetes)"
           )
-          for attempt in {1..60}; do
+          for ((attempt = 1; attempt <= 60; attempt++)); do
             missing=()
             migration_run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/migration-ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=20" \
               --jq '[.workflow_runs[] | select(.conclusion == "success" and .event == "push" and .head_branch == "main")] | sort_by(.created_at) | last | .id')"
@@ -852,7 +852,10 @@ jobs:
             deployments/kubernetes/ztap-agent.yaml > "$manifest_path"
           image_lines="$(grep -Ec '^[[:space:]]+image: ' "$manifest_path" || true)"
           test "$image_lines" -eq 1
-          ! grep -Eq '(^|[[:space:]])image:.*:latest([[:space:]]|$)' "$manifest_path"
+          if grep -Eq '(^|[[:space:]])image:.*:latest([[:space:]]|$)' "$manifest_path"; then
+            printf 'release manifest must not use a mutable :latest image tag\n' >&2
+            exit 1
+          fi
           grep -Fqx "          image: ${IMAGE}@${DIGEST}" "$manifest_path"
 
       - name: Attach the immutable install manifest to the release

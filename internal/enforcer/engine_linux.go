@@ -146,7 +146,7 @@ type bpfAgentStatus struct {
 // RemoveStalePins removes only the two stable maps owned by the agent. It
 // never walks the directory or deletes unrelated bpffs entries. The caller
 // must hold the node-level agent lock before calling this at startup.
-func RemoveStalePins(bpffsRoot string) error {
+func RemoveStalePins(bpffsRoot string) (resultErr error) {
 	root, err := absoluteDirectoryPath(bpffsRoot, "/sys/fs/bpf")
 	if err != nil {
 		return err
@@ -156,7 +156,11 @@ func RemoveStalePins(bpffsRoot string) error {
 	if err != nil {
 		return fmt.Errorf("open ZTAP bpffs root: %w", err)
 	}
-	defer unix.Close(rootFD)
+	defer func() {
+		if err := unix.Close(rootFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close ZTAP bpffs root: %w", err))
+		}
+	}()
 
 	pinDirectoryFD, err := unix.Openat(rootFD, "ztap", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if errors.Is(err, unix.ENOENT) {
@@ -171,7 +175,11 @@ func RemoveStalePins(bpffsRoot string) error {
 		}
 		return fmt.Errorf("open ZTAP bpffs directory: %w", err)
 	}
-	defer unix.Close(pinDirectoryFD)
+	defer func() {
+		if err := unix.Close(pinDirectoryFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close ZTAP bpffs directory: %w", err))
+		}
+	}()
 
 	for _, name := range []string{engineFlowEventsPinName, engineAgentStatusPinName} {
 		if err := removeOwnedEnginePinAt(pinDirectoryFD, name); err != nil {
@@ -185,7 +193,7 @@ func RemoveStalePins(bpffsRoot string) error {
 // directory at that name as an owned eBPF pin. The parent directory is
 // traversed without following any component, and the entry is inspected and
 // unlinked relative to that descriptor.
-func removeOwnedEnginePin(path string) error {
+func removeOwnedEnginePin(path string) (resultErr error) {
 	parent := filepath.Dir(path)
 	name := filepath.Base(path)
 	directoryFD, err := openEngineDirectoryNoFollow(parent, "pin directory")
@@ -195,7 +203,11 @@ func removeOwnedEnginePin(path string) error {
 		}
 		return fmt.Errorf("open pin directory: %w", err)
 	}
-	defer unix.Close(directoryFD)
+	defer func() {
+		if err := unix.Close(directoryFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close pin directory: %w", err))
+		}
+	}()
 	return removeOwnedEnginePinAt(directoryFD, name)
 }
 
