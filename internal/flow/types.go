@@ -162,6 +162,7 @@ type FlowMonitor interface {
 	Stop() error
 	// Subscribe returns a channel that receives flow events.
 	// The channel is closed when the context is cancelled or Stop is called.
+	// A nil context returns an already-closed channel.
 	Subscribe(ctx context.Context) <-chan FlowEvent
 	// GetStats returns current flow statistics.
 	GetStats() FlowStats

@@ -732,7 +732,10 @@ static __always_inline int enforce_packet(struct __sk_buff *skb, __u8 direction,
         return result;
     }
 
-    if (packet_status == PACKET_VALID || packet_status == PACKET_UNSUPPORTED) {
+    // Node/self exceptions apply only after the packet has passed the
+    // supported TCP/UDP parser. Unsupported protocols must remain denied for
+    // isolated directions even when their IPv4 address matches a bypass.
+    if (packet_status == PACKET_VALID) {
         if (packet.family == 4) {
             __u32 peer = direction == DIR_EGRESS ? packet.destination_ip[0] : packet.source_ip[0];
             if (is_node_address(slot, peer)) {

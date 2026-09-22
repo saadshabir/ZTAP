@@ -54,6 +54,26 @@ func TestParseFlowEventRejectsUnknownSizeAndSchema(t *testing.T) {
 	}
 }
 
+func FuzzParseRawEventNeverPanics(f *testing.F) {
+	valid := make([]byte, engineRawEventSize)
+	valid[65] = engineEventSchema
+	f.Add(valid)
+	f.Add([]byte{})
+	f.Add(make([]byte, engineRawEventSize-1))
+	f.Add(make([]byte, engineRawEventSize+1))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		event, err := parseRawEvent(data)
+		if err != nil {
+			return
+		}
+		if event.SchemaVersion != engineEventSchema {
+			t.Fatalf("parsed schema = %d, want %d", event.SchemaVersion, engineEventSchema)
+		}
+		_ = event.ToFlowEvent(time.Unix(0, 0))
+	})
+}
+
 func TestRawFlowEventV1LayoutIs72Bytes(t *testing.T) {
 	if got := unsafe.Sizeof(RawFlowEvent{}); got != engineRawEventSize {
 		t.Fatalf("RawFlowEvent size = %d, want %d", got, engineRawEventSize)

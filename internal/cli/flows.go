@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -42,6 +43,7 @@ Examples:
 	c.Flags().String("direction", "", "Filter by direction (egress, ingress)")
 	c.Flags().String("output", "table", "Output format (table, json)")
 	c.Flags().String("run-dir", "/run/ztap", "Directory containing the flow-reader lock")
+	c.Flags().String("bpffs-root", "/sys/fs/bpf", "Mounted bpffs root containing the agent's pinned maps")
 	return c
 }
 
@@ -54,6 +56,7 @@ func runFlows(cmd *cobra.Command, _ []string) error {
 	direction, _ := cmd.Flags().GetString("direction")
 	output, _ := cmd.Flags().GetString("output")
 	runDir, _ := cmd.Flags().GetString("run-dir")
+	bpffsRoot, _ := cmd.Flags().GetString("bpffs-root")
 
 	action = strings.ToLower(strings.TrimSpace(action))
 	protocol = strings.ToUpper(strings.TrimSpace(protocol))
@@ -77,15 +80,18 @@ func runFlows(cmd *cobra.Command, _ []string) error {
 		Direction: direction,
 		Protocol:  protocol,
 	}
-	return streamFlows(cmd.Context(), filter, output, runDir)
+	return streamFlows(cmd.Context(), filter, output, runDir, bpffsRoot)
 }
 
-func streamFlows(parent context.Context, filter flow.FlowFilter, output, runDir string) (returnErr error) {
+func streamFlows(parent context.Context, filter flow.FlowFilter, output, runDir, bpffsRoot string) (returnErr error) {
 	if parent == nil {
 		return errors.New("flow stream context is nil")
 	}
 	if runtime.GOOS != "linux" {
 		return errors.New("real flow streaming is supported only on Linux")
+	}
+	if err := parent.Err(); err != nil {
+		return err
 	}
 	unlock, err := acquireFlowReaderLock(runDir)
 	if err != nil {
@@ -99,15 +105,16 @@ func streamFlows(parent context.Context, filter flow.FlowFilter, output, runDir 
 
 	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	reader, err := openStreamingFlowReader()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	reader, err := openStreamingFlowReader(bpffsRoot)
 	if err != nil {
 		return fmt.Errorf("open live flow stream: %w", err)
 	}
-	monitor := flow.NewMonitor(reader)
-	events := monitor.SubscribeBeforeStart(ctx)
-	if err := monitor.Start(ctx); err != nil {
-		_ = monitor.Stop()
-		return fmt.Errorf("start live flow stream: %w", err)
+	monitor, events, err := startStreamingFlowMonitor(ctx, reader)
+	if err != nil {
+		return err
 	}
 	defer func() {
 		if stopErr := monitor.Stop(); stopErr != nil && returnErr == nil {
@@ -142,6 +149,29 @@ func streamFlows(parent context.Context, filter flow.FlowFilter, output, runDir 
 	}
 }
 
+// startStreamingFlowMonitor transfers the opened reader into the monitor only
+// after startup succeeds. A cancellation or availability failure during the
+// monitor handoff must still release the reader-owned pinned map handles.
+func startStreamingFlowMonitor(ctx context.Context, reader flow.FlowReader) (*flow.Monitor, <-chan flow.FlowEvent, error) {
+	if reader == nil {
+		return nil, nil, errors.New("live flow reader is nil")
+	}
+	monitor := flow.NewMonitor(reader)
+	events := monitor.SubscribeBeforeStart(ctx)
+	if err := monitor.Start(ctx); err != nil {
+		startErr := fmt.Errorf("start live flow stream: %w", err)
+		// Start can fail before the monitor owns a running reader. Close the
+		// monitor's pre-start subscriber and release the already-opened reader
+		// explicitly so a canceled startup cannot leak pinned map handles.
+		cleanupErr := errors.Join(monitor.Stop(), reader.Stop())
+		if cleanupErr != nil {
+			return nil, nil, errors.Join(startErr, fmt.Errorf("close live flow reader: %w", cleanupErr))
+		}
+		return nil, nil, startErr
+	}
+	return monitor, events, nil
+}
+
 func printFlowHeader() {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "TIMESTAMP\tDIRECTION\tPROTOCOL\tSOURCE\tDESTINATION\tACTION")
@@ -172,17 +202,39 @@ func printFlowJSON(event flow.FlowEvent) {
 }
 
 func formatFlowJSON(event flow.FlowEvent) string {
-	return fmt.Sprintf(`{"timestamp":"%s","policy_epoch":%d,"cgroup_id":%d,"direction":"%s","protocol":"%s","src_ip":"%s","src_port":%d,"dst_ip":"%s","dst_port":%d,"action":"%s","reason":"%s","schema_version":%d}`,
-		event.Timestamp.Format(time.RFC3339Nano),
-		event.PolicyEpoch,
-		event.CgroupID,
-		event.Direction,
-		event.Protocol,
-		event.SourceIP,
-		event.SourcePort,
-		event.DestIP,
-		event.DestPort,
-		event.Action,
-		event.Reason,
-		event.SchemaVersion)
+	payload := struct {
+		Timestamp     string `json:"timestamp"`
+		PolicyEpoch   uint64 `json:"policy_epoch"`
+		CgroupID      uint64 `json:"cgroup_id"`
+		Direction     string `json:"direction"`
+		Protocol      string `json:"protocol"`
+		SourceIP      string `json:"src_ip"`
+		SourcePort    uint16 `json:"src_port"`
+		DestIP        string `json:"dst_ip"`
+		DestPort      uint16 `json:"dst_port"`
+		Action        string `json:"action"`
+		Reason        string `json:"reason"`
+		SchemaVersion uint8  `json:"schema_version"`
+	}{
+		Timestamp:     event.Timestamp.Format(time.RFC3339Nano),
+		PolicyEpoch:   event.PolicyEpoch,
+		CgroupID:      event.CgroupID,
+		Direction:     event.Direction,
+		Protocol:      event.Protocol,
+		SourceIP:      event.SourceIP.String(),
+		SourcePort:    event.SourcePort,
+		DestIP:        event.DestIP.String(),
+		DestPort:      event.DestPort,
+		Action:        event.Action,
+		Reason:        event.Reason,
+		SchemaVersion: event.SchemaVersion,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		// The payload contains only JSON-supported scalar values. Keep the
+		// existing no-error formatter contract while making any future schema
+		// change fail loudly instead of emitting an invalid transcript.
+		panic(fmt.Sprintf("encode flow event JSON: %v", err))
+	}
+	return string(encoded)
 }

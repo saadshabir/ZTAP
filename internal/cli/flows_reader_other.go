@@ -8,6 +8,6 @@ import (
 	"github.com/saadshabir/ZTAP/internal/flow"
 )
 
-func openStreamingFlowReader() (flow.FlowReader, error) {
+func openStreamingFlowReader(_ string) (flow.FlowReader, error) {
 	return nil, errors.New("real flow streaming is supported only on Linux")
 }

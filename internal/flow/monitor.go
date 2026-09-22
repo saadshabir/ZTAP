@@ -30,6 +30,7 @@ type Monitor struct {
 	readerInvoked bool
 	readerStopped bool
 	readerDone    chan struct{}
+	readerCancel  context.CancelFunc
 	runGeneration uint64
 }
 
@@ -57,11 +58,21 @@ func (m *Monitor) Start(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("flow monitor context is nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if m.reader == nil {
 		return errors.New("flow monitor reader is nil")
 	}
+	if !m.reader.Available() {
+		return errors.New("flow monitor reader is unavailable")
+	}
 	for {
 		m.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			m.mu.Unlock()
+			return err
+		}
 		if m.running {
 			m.mu.Unlock()
 			return nil
@@ -88,6 +99,8 @@ func (m *Monitor) Start(ctx context.Context) error {
 	runGeneration := m.runGeneration
 	readerDone := make(chan struct{})
 	m.readerDone = readerDone
+	readerCtx, readerCancel := context.WithCancel(ctx)
+	m.readerCancel = readerCancel
 	m.stats.MonitorStarted = time.Now()
 	// Capture stopCh under lock to avoid race with Stop()
 	stopCh := m.stopCh
@@ -102,10 +115,11 @@ func (m *Monitor) Start(ctx context.Context) error {
 	// Start the platform-specific reader
 	go func() {
 		defer close(readerDone)
+		defer readerCancel()
 		m.mu.Lock()
 		// Stop may win the race after Start returned but before this goroutine
 		// entered the reader. Do not invoke a reader after ownership ended.
-		if !m.running || m.readerStopped || m.stopCh != stopCh || m.runGeneration != runGeneration {
+		if readerCtx.Err() != nil || !m.running || m.readerStopped || m.stopCh != stopCh || m.runGeneration != runGeneration {
 			m.mu.Unlock()
 			close(rawEvents)
 			return
@@ -113,9 +127,12 @@ func (m *Monitor) Start(ctx context.Context) error {
 		m.readerInvoked = true
 		m.mu.Unlock()
 
-		err := m.reader.Start(ctx, rawEvents)
+		err := m.reader.Start(readerCtx, rawEvents)
 		m.mu.Lock()
-		if err != nil && ctx.Err() == nil && m.stopCh == stopCh && m.runGeneration == runGeneration {
+		if m.readerDone == readerDone {
+			m.readerCancel = nil
+		}
+		if err != nil && readerCtx.Err() == nil && m.stopCh == stopCh && m.runGeneration == runGeneration {
 			m.readerErr = err
 		}
 		m.mu.Unlock()
@@ -137,9 +154,14 @@ func (m *Monitor) Stop() error {
 		m.closeSubscribersLocked()
 		shouldStopReader := m.started && !m.readerStopped && m.readerInvoked
 		readerDone := m.readerDone
+		readerCancel := m.readerCancel
+		m.readerCancel = nil
 		m.readerStopped = true
 		m.mu.Unlock()
 		var stopErr error
+		if readerCancel != nil {
+			readerCancel()
+		}
 		if shouldStopReader {
 			stopErr = m.reader.Stop()
 		}
@@ -166,10 +188,15 @@ func (m *Monitor) Stop() error {
 	m.stopCh = make(chan struct{})
 	shouldStopReader := m.readerInvoked
 	readerDone := m.readerDone
+	readerCancel := m.readerCancel
+	m.readerCancel = nil
 	m.readerStopped = true
 	m.mu.Unlock()
 
 	var stopErr error
+	if readerCancel != nil {
+		readerCancel()
+	}
 	if shouldStopReader {
 		stopErr = m.reader.Stop()
 	}
@@ -210,6 +237,13 @@ func (m *Monitor) SubscribeBeforeStart(ctx context.Context) <-chan FlowEvent {
 
 func (m *Monitor) subscribe(ctx context.Context, allowBeforeStart bool) <-chan FlowEvent {
 	ch := make(chan FlowEvent, 100)
+	if ctx == nil {
+		// A nil context cannot express cancellation. Do not create an
+		// uncancellable subscriber or start a goroutine that would panic on
+		// ctx.Done(); an invalid subscription is represented by a closed channel.
+		close(ch)
+		return ch
+	}
 
 	m.mu.Lock()
 	if !m.running && (!allowBeforeStart || m.started || m.stopped) {
@@ -222,9 +256,17 @@ func (m *Monitor) subscribe(ctx context.Context, allowBeforeStart bool) <-chan F
 	m.subscribers[sub.id] = sub
 	m.mu.Unlock()
 
+	// A context without a Done channel is intentionally non-cancellable. The
+	// monitor lifecycle still closes this subscription on Stop, so no watcher
+	// goroutine is needed for the common context.Background() case.
+	done := ctx.Done()
+	if done == nil {
+		return ch
+	}
+
 	// Handle context cancellation.
 	go func() {
-		<-ctx.Done()
+		<-done
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
@@ -270,6 +312,13 @@ func (m *Monitor) processEvents(ctx context.Context, rawEvents <-chan RawFlowEve
 		case <-stopCh:
 			return
 		case <-ctx.Done():
+			// Context cancellation is an external shutdown request, not a
+			// terminal reader error. Route it through the same lifecycle path
+			// as an explicit Stop so subscribers are closed and a later Start
+			// cannot inherit a run that only exists in the monitor's state.
+			if err := m.Stop(); err != nil {
+				slog.Default().Warn("flow monitor stopped with reader error", "error", err)
+			}
 			return
 		case raw, ok := <-rawEvents:
 			if !ok {

@@ -3,7 +3,36 @@
 ZTAP is a Linux node agent that compiles the supported subset of Kubernetes
 `NetworkPolicy` and enforces it with per-container eBPF programs. The product
 is intentionally small: one binary, one DaemonSet, and explicit command-line
-flags.
+flags. It is experimental `v0.1.0` software; the documented Linux and
+Kubernetes acceptance gates are part of the release contract.
+
+## Architecture
+
+```text
+Kubernetes API -> informer snapshot -> validate/resolve -> compile
+                                                        |
+                                                        v
+                                             per-container eBPF engine
+                                              |                  |
+                                              v                  v
+                                      ingress/egress cgroups   flow map -> ztap flows
+                                              |
+                                              v
+                                  health/readiness/metrics on :9090
+```
+
+## Prerequisites
+
+- Go `1.26.6` for local builds.
+- Linux with cgroup v2, bpffs, and a containerd systemd-cgroup runtime for
+  enforcement.
+- `kubectl` access to a Kubernetes 1.36.x cluster and a registry for the
+  published image.
+- clang/LLVM and the required kernel capabilities for privileged eBPF tests.
+
+Non-Linux hosts can run the portable unit tests and offline validation, but
+cannot establish the kernel, cgroup, container-runtime, or Kubernetes agent
+claims.
 
 ## Product surface
 
@@ -28,13 +57,19 @@ make build
 make docker
 ```
 
-Install the node agent on a Linux Kubernetes cluster after publishing the
-image as `ztap:v0.1.0` (or changing the image in the manifest):
+For a Linux Kubernetes cluster, publish the image with an immutable release
+tag or digest, update the manifest's `image` field, and install the node agent:
 
 ```sh
 kubectl apply -f deployments/kubernetes/ztap-agent.yaml
 kubectl -n ztap-system rollout status daemonset/ztap-agent
 ```
+
+The release manifest uses the image digest rather than a mutable tag. A
+planned DaemonSet update, orderly restart, or agent crash temporarily fails
+open on the affected node while the replacement attaches and completes its
+first reconciliation; these intervals are measured separately from policy
+latency and are not zero-gap availability guarantees.
 
 The DaemonSet mounts the host cgroup v2 hierarchy and bpffs, requests only the
 capabilities needed by the eBPF engine, and exposes health, readiness, and
@@ -48,6 +83,17 @@ ztap validate --file examples/native/web-to-db.yaml
 ztap validate --file - < examples/native/default-deny.yaml
 ```
 
+On Linux with an active agent, stream live flow events with:
+
+```sh
+ztap flows --output json
+ztap flows --action blocked --direction egress
+```
+
+The command reads `/sys/fs/bpf` by default. When run inside the shipped
+DaemonSet container, use `--bpffs-root=/host/sys/fs/bpf` because the manifest
+mounts the host bpffs hierarchy at that path.
+
 ## Supported policy model
 
 The compiler accepts native `networking.k8s.io/v1` `NetworkPolicy` documents.
@@ -60,12 +106,18 @@ agent and do not silently become allow rules.
 The examples in [`examples/native`](examples/native) are valid input for the
 offline validator and are useful fixtures for development.
 
+See the [supported-policy matrix](docs/policies.md#supported-policy-matrix) for
+the exact accepted and rejected native API behavior. See
+[`docs/deployment.md`](docs/deployment.md) for the runtime requirements,
+upgrade procedure, and safe migration warning for the removed custom CRD.
+
 ## Development
 
 ```sh
 make test
 make vet
 make lint
+make vulncheck
 make check-generated
 ```
 

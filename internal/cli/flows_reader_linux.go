@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -45,7 +47,17 @@ func (r *mapOwningReader) Start(ctx context.Context, eventCh chan<- flow.RawFlow
 	if ctx == nil {
 		return errors.New("pinned flow reader context is nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
+	// The caller may cancel while another lifecycle operation holds the map
+	// owner lock. Recheck before marking the reader running so cancellation
+	// cannot launch the inner reader or status poll after ownership wait.
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return err
+	}
 	if r.closed {
 		r.mu.Unlock()
 		return errors.New("pinned flow reader is closed")
@@ -91,21 +103,33 @@ func (r *mapOwningReader) Start(ctx context.Context, eventCh chan<- flow.RawFlow
 	}()
 
 	select {
-	case err := <-readerDone:
+	case readerErr := <-readerDone:
 		cancel()
-		<-statusDone
-		return err
+		statusErr := <-statusDone
+		return joinPinnedFlowReaderErrors(ctx, readerErr, statusErr, nil)
 	case statusErr := <-statusDone:
 		cancel()
 		// LinuxReader blocks in ringbuf.Reader.Read, so close the reader to
 		// wake it when the agent status becomes invalid or stale.
 		stopErr := inner.Stop()
 		readerErr := <-readerDone
-		if errors.Is(statusErr, context.Canceled) && ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return errors.Join(statusErr, stopErr, readerErr)
+		return joinPinnedFlowReaderErrors(ctx, readerErr, statusErr, stopErr)
 	}
+}
+
+func joinPinnedFlowReaderErrors(ctx context.Context, readerErr, statusErr, stopErr error) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	var errs []error
+	for _, err := range []error{readerErr, statusErr, stopErr} {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (r *mapOwningReader) Stop() error {
@@ -140,18 +164,53 @@ func (r *mapOwningReader) Stop() error {
 }
 
 func (r *mapOwningReader) Available() bool {
-	return r.inner.Available()
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	inner := r.inner
+	closed := r.closed
+	r.mu.Unlock()
+	return !closed && inner != nil && inner.Available()
 }
 
-func openPinnedFlowReader() (flow.FlowReader, error) {
-	m, err := ebpf.LoadPinnedMap(enforcer.DefaultFlowEventsPinPath, nil)
-	if err != nil {
-		return nil, fmt.Errorf("loading pinned flow map %s: %w", enforcer.DefaultFlowEventsPinPath, err)
+func openPinnedFlowReader(bpffsRoot string) (flow.FlowReader, error) {
+	if bpffsRoot == "" {
+		bpffsRoot = "/sys/fs/bpf"
 	}
-	statusMap, err := ebpf.LoadPinnedMap(enforcer.DefaultAgentStatusPinPath, nil)
+	if !filepath.IsAbs(bpffsRoot) {
+		return nil, fmt.Errorf("bpffs root %q is not absolute", bpffsRoot)
+	}
+	rootPath := filepath.Clean(bpffsRoot)
+	rootFD, err := openExistingDirectory(rootPath, "pinned flow bpffs root")
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(rootFD)
+
+	pinDirectory := filepath.Join(rootPath, "ztap")
+	pinDirectoryFD, err := unix.Openat(rootFD, "ztap", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return nil, fmt.Errorf("pinned flow path %q is a symlink", pinDirectory)
+		}
+		if errors.Is(err, unix.ENOTDIR) {
+			return nil, fmt.Errorf("pinned flow path %q is not a directory", pinDirectory)
+		}
+		return nil, fmt.Errorf("open pinned flow directory %q: %w", pinDirectory, err)
+	}
+	defer unix.Close(pinDirectoryFD)
+
+	flowEventsPath := filepath.Join(pinDirectory, "flow_events")
+	m, err := loadPinnedFlowMapAt(pinDirectoryFD, "flow_events", flowEventsPath)
+	if err != nil {
+		return nil, err
+	}
+	agentStatusPath := filepath.Join(pinDirectory, "agent_status")
+	statusMap, err := loadPinnedFlowMapAt(pinDirectoryFD, "agent_status", agentStatusPath)
 	if err != nil {
 		_ = m.Close()
-		return nil, fmt.Errorf("loading pinned agent status map %s: %w", enforcer.DefaultAgentStatusPinPath, err)
+		return nil, err
 	}
 
 	reader, err := flow.CreateFlowReader(m)
@@ -166,9 +225,48 @@ func openPinnedFlowReader() (flow.FlowReader, error) {
 	return &mapOwningReader{inner: reader, flowMap: m, statusMap: statusMap}, nil
 }
 
+// loadPinnedFlowMapAt opens one stable pin through a descriptor-relative
+// no-follow handle, then asks the BPF loader to resolve the already-opened
+// object through procfs. Keeping the O_PATH descriptor open across BPF_OBJ_GET
+// closes the check-then-open race that a path-only symlink check would leave.
+func loadPinnedFlowMapAt(directoryFD int, name, displayPath string) (*ebpf.Map, error) {
+	if filepath.Base(name) != name || name == "." || name == ".." {
+		return nil, fmt.Errorf("invalid pinned flow map name %q", name)
+	}
+	fd, err := unix.Openat(directoryFD, name, unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return nil, fmt.Errorf("pinned flow path %q is a symlink", displayPath)
+		}
+		return nil, fmt.Errorf("open pinned flow map %q: %w", displayPath, err)
+	}
+	closeFD := func() error { return unix.Close(fd) }
+	var info unix.Stat_t
+	if err := unix.Fstat(fd, &info); err != nil {
+		return nil, errors.Join(fmt.Errorf("inspect pinned flow map %q: %w", displayPath, err), closeFD())
+	}
+	if info.Mode&unix.S_IFMT == unix.S_IFLNK {
+		return nil, errors.Join(fmt.Errorf("pinned flow path %q is a symlink", displayPath), closeFD())
+	}
+
+	procPath := "/proc/self/fd/" + strconv.Itoa(fd)
+	m, err := ebpf.LoadPinnedMap(procPath, nil)
+	closeErr := closeFD()
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("loading pinned flow map %s: %w", displayPath, err), closeErr)
+	}
+	if closeErr != nil {
+		return nil, errors.Join(fmt.Errorf("close pinned flow map handle %q: %w", displayPath, closeErr), m.Close())
+	}
+	return m, nil
+}
+
 func monitorPinnedAgentStatus(ctx context.Context, statusMap *ebpf.Map) error {
 	if ctx == nil {
 		return errors.New("flow status context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if statusMap == nil {
 		return errors.New("flow status map is nil")
@@ -178,6 +276,9 @@ func monitorPinnedAgentStatus(ctx context.Context, statusMap *ebpf.Map) error {
 	ticker := time.NewTicker(flowAgentStatusPollPeriod)
 	defer ticker.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		status, err := readPinnedAgentStatus(statusMap)
 		if err != nil {
 			return err
@@ -249,6 +350,6 @@ func monotonicNowNS() (uint64, error) {
 // openStreamingFlowReader is the only reader used by the live `flows`
 // command. The pinned maps are intentionally opened eagerly so missing maps,
 // permissions, and an inactive agent are reported to the caller.
-func openStreamingFlowReader() (flow.FlowReader, error) {
-	return openPinnedFlowReader()
+func openStreamingFlowReader(bpffsRoot string) (flow.FlowReader, error) {
+	return openPinnedFlowReader(bpffsRoot)
 }

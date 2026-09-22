@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -267,6 +268,46 @@ func (*terminalReader) Available() bool {
 	return true
 }
 
+type unavailableReader struct{}
+
+func (*unavailableReader) Start(context.Context, chan<- RawFlowEvent) error {
+	return errors.New("unavailable reader must not start")
+}
+
+func (*unavailableReader) Stop() error { return nil }
+
+func (*unavailableReader) Available() bool { return false }
+
+func TestMonitorRejectsUnavailableReaderBeforeStarting(t *testing.T) {
+	monitor := NewMonitor(&unavailableReader{})
+	if err := monitor.Start(context.Background()); err == nil {
+		t.Fatal("monitor.Start accepted an unavailable flow reader")
+	} else if !strings.Contains(err.Error(), "reader is unavailable") {
+		t.Fatalf("unavailable reader error = %v, want availability failure", err)
+	}
+	if monitor.IsRunning() {
+		t.Fatal("monitor became running with an unavailable reader")
+	}
+}
+
+func TestMonitorRejectsCanceledContextBeforeStarting(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	monitor := NewMonitor(&testReader{})
+
+	if err := monitor.Start(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("monitor.Start error = %v, want context.Canceled", err)
+	}
+	if monitor.IsRunning() {
+		t.Fatal("monitor became running with an already-canceled context")
+	}
+	monitor.mu.RLock()
+	defer monitor.mu.RUnlock()
+	if monitor.readerInvoked || monitor.readerDone != nil {
+		t.Fatalf("canceled monitor start created reader state: invoked=%t done=%v", monitor.readerInvoked, monitor.readerDone)
+	}
+}
+
 type gatedStartReader struct {
 	startGate chan struct{}
 	stopOnce  sync.Once
@@ -330,19 +371,11 @@ func newSlowStopReader() *slowStopReader {
 	}
 }
 
-func (r *slowStopReader) Start(ctx context.Context, _ chan<- RawFlowEvent) error {
+func (r *slowStopReader) Start(_ context.Context, _ chan<- RawFlowEvent) error {
 	r.startOnce.Do(func() { close(r.started) })
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-r.stopped:
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-r.release:
-		return nil
-	}
+	<-r.stopped
+	<-r.release
+	return nil
 }
 
 func (r *slowStopReader) Stop() error {
@@ -351,6 +384,21 @@ func (r *slowStopReader) Stop() error {
 }
 
 func (*slowStopReader) Available() bool { return true }
+
+type contextBlockingReader struct {
+	started   chan struct{}
+	startOnce sync.Once
+}
+
+func (r *contextBlockingReader) Start(ctx context.Context, _ chan<- RawFlowEvent) error {
+	r.startOnce.Do(func() { close(r.started) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (*contextBlockingReader) Stop() error { return nil }
+
+func (*contextBlockingReader) Available() bool { return true }
 
 func TestMonitorStopCannotStartReaderAfterOwnershipEnds(t *testing.T) {
 	reader := newGatedStartReader()
@@ -411,6 +459,39 @@ func TestMonitorStopWaitsForReaderGoroutine(t *testing.T) {
 	}
 }
 
+func TestMonitorStopCancelsReaderContext(t *testing.T) {
+	reader := &contextBlockingReader{started: make(chan struct{})}
+	monitor := NewMonitor(reader)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := monitor.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	select {
+	case <-reader.started:
+	case <-time.After(time.Second):
+		t.Fatal("reader did not start")
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- monitor.Stop() }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		// Keep the test goroutine from leaking if the regression is present:
+		// canceling the caller context releases a reader that ignores Stop.
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("Stop() did not cancel the reader context")
+	}
+}
+
 func TestMonitorReportsTerminalReaderErrorAndClosesSubscribers(t *testing.T) {
 	wantErr := errors.New("pinned agent stopped enforcing")
 	monitor := NewMonitor(&terminalReader{err: wantErr})
@@ -437,6 +518,57 @@ func TestMonitorReportsTerminalReaderErrorAndClosesSubscribers(t *testing.T) {
 	}
 	if err := monitor.Stop(); err != nil {
 		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestMonitorNilSubscriptionContextReturnsClosedChannel(t *testing.T) {
+	monitor := NewMonitor(&testReader{})
+
+	for name, subscribe := range map[string]func(context.Context) <-chan FlowEvent{
+		"running subscription":      monitor.Subscribe,
+		"before-start subscription": monitor.SubscribeBeforeStart,
+	} {
+		t.Run(name, func(t *testing.T) {
+			events := subscribe(nil)
+			select {
+			case _, ok := <-events:
+				if ok {
+					t.Fatal("nil-context subscription returned an event")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("nil-context subscription was not closed")
+			}
+		})
+	}
+
+	monitor.mu.RLock()
+	defer monitor.mu.RUnlock()
+	if len(monitor.subscribers) != 0 {
+		t.Fatalf("nil-context subscriptions were registered: %d", len(monitor.subscribers))
+	}
+}
+
+func TestMonitorNonCancellableSubscriptionClosesWithMonitor(t *testing.T) {
+	monitor := NewMonitor(&testReader{})
+	events := monitor.SubscribeBeforeStart(context.Background())
+
+	monitor.mu.RLock()
+	if got := len(monitor.subscribers); got != 1 {
+		monitor.mu.RUnlock()
+		t.Fatalf("non-cancellable subscription count = %d, want 1", got)
+	}
+	monitor.mu.RUnlock()
+
+	if err := monitor.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("non-cancellable subscription remained open after monitor Stop")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("non-cancellable subscription was not closed by monitor Stop")
 	}
 }
 
@@ -490,6 +622,53 @@ func TestMonitorIsRunning(t *testing.T) {
 	}
 	if monitor.IsRunning() {
 		t.Fatal("stopped monitor should not be running")
+	}
+}
+
+func TestMonitorContextCancellationStopsRunAndAllowsRestart(t *testing.T) {
+	reader := &testReader{}
+	monitor := NewMonitor(reader)
+	ctx, cancel := context.WithCancel(t.Context())
+	events := monitor.SubscribeBeforeStart(ctx)
+	if err := monitor.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	cancel()
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("subscriber remained open after monitor context cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscriber was not closed after monitor context cancellation")
+	}
+	deadline := time.Now().Add(time.Second)
+	for monitor.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if monitor.IsRunning() {
+		t.Fatal("monitor remained running after context cancellation")
+	}
+
+	restartCtx, restartCancel := context.WithCancel(t.Context())
+	defer func() {
+		restartCancel()
+		_ = monitor.Stop()
+	}()
+	if err := monitor.Start(restartCtx); err != nil {
+		t.Fatalf("restart Start() error = %v", err)
+	}
+	if !monitor.IsRunning() {
+		t.Fatal("monitor did not restart after context cancellation")
+	}
+	restartCancel()
+	deadline = time.Now().Add(time.Second)
+	for monitor.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if monitor.IsRunning() {
+		t.Fatal("restarted monitor remained running after context cancellation")
 	}
 }
 

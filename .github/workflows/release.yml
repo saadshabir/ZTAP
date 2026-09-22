@@ -1,0 +1,870 @@
+name: Release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-gates:
+    name: Verify release gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      migration_run_id: ${{ steps.wait-final-gates.outputs.migration_run_id }}
+    permissions:
+      contents: read
+      actions: read # Resolve the trusted Migration CI run and its hosted artifacts.
+      checks: read # Inspect the tagged commit's final required checks.
+
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify semantic tag and protected-branch ancestry
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "release tags must use vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "tagged commit is not present on origin/main" >&2
+            exit 1
+          fi
+
+      - name: Verify Required CI branch protection
+        env:
+          # This token must be a fine-grained PAT or GitHub App token with
+          # repository Administration: read permission. GITHUB_TOKEN cannot
+          # grant that permission through the workflow permissions block.
+          GH_TOKEN: ${{ secrets.BRANCH_PROTECTION_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${GH_TOKEN:-}" || {
+            echo 'BRANCH_PROTECTION_TOKEN must be configured with Administration: read permission' >&2
+            exit 1
+          }
+          required_status_checks="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection/required_status_checks")"
+          strict="$(jq -r '.strict' <<< "$required_status_checks")"
+          contexts="$(jq -c '[.contexts[]?] | sort' <<< "$required_status_checks")"
+          checks="$(jq -c '[.checks[]? | .context] | sort' <<< "$required_status_checks")"
+          test "$strict" = true || {
+            echo "main branch protection must use strict required-status checks" >&2
+            exit 1
+          }
+          printf 'required branch-protection contexts: %s\n' "$contexts"
+          printf 'required branch-protection checks: %s\n' "$checks"
+          if [ "$contexts" != '["Required CI"]' ]; then
+            echo "main branch protection must require only the exact Required CI context" >&2
+            exit 1
+          fi
+          if [ "$checks" != '["Required CI"]' ]; then
+            echo "main branch protection must require only the exact Required CI check" >&2
+            exit 1
+          fi
+
+      - name: Wait for final CI and trusted Linux evidence
+        id: wait-final-gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "Required CI"
+            "eBPF Verification (Linux)"
+            "Capability-only Agent (Kubernetes)"
+          )
+          for attempt in {1..60}; do
+            missing=()
+            migration_run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/migration-ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=20" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success" and .event == "push" and .head_branch == "main")] | sort_by(.created_at) | last | .id')"
+            if [ -z "$migration_run_id" ] || [ "$migration_run_id" = null ]; then
+              missing+=("Migration CI push run")
+            else
+              jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${migration_run_id}/jobs?per_page=100" \
+                --jq '.jobs[] | [.name, .status, .conclusion] | @tsv')"
+              for name in "${expected[@]}"; do
+                if ! printf '%s\n' "$jobs" | awk -F '\t' -v want="$name" '$1 == want && $2 == "completed" && $3 == "success" { found = 1 } END { exit !found }'; then
+                  missing+=("$name")
+                fi
+              done
+              printf 'trusted_migration_ci_run_id=%s\n' "$migration_run_id"
+            fi
+            if [ "${#missing[@]}" -eq 0 ]; then
+              echo "final CI, privileged eBPF, and capability-only agent gates passed in trusted Migration CI run ${migration_run_id} for ${GITHUB_SHA}"
+              printf 'migration_run_id=%s\n' "$migration_run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            printf 'waiting for: %s\n' "${missing[*]}"
+            sleep 30
+          done
+          echo "release gates did not complete successfully for ${GITHUB_SHA}" >&2
+          exit 1
+
+  container-build-gate:
+    name: Validate multi-architecture image build
+    needs: verify-gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Validate the release image for both target architectures
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/ztap-release-gate.tar
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=release-gate
+
+  performance-gate:
+    name: Reference Performance and Agent Activation (Linux)
+    needs: verify-gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read # Download the trusted eBPF and capability-agent evidence.
+    env:
+      PHASE5_RUN_ID: ${{ github.run_id }}-${{ github.sha }}
+      MIGRATION_RUN_ID: ${{ needs.verify-gates.outputs.migration_run_id }}
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Release jobs must not restore mutable dependency caches into the
+          # publication path; download dependencies into the isolated runner
+          # workspace instead.
+          cache: false
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Download trusted CI evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for path in \
+            dist \
+            dist/hosted-capability-agent-evidence \
+            dist/hosted-ebpf-engine-evidence; do
+            if [ -L "$path" ]; then
+              printf 'release evidence path must not be a symlink: %s\n' "$path" >&2
+              exit 1
+            fi
+            if [ -e "$path" ] && [ ! -d "$path" ]; then
+              printf 'release evidence path must be a directory: %s\n' "$path" >&2
+              exit 1
+            fi
+          done
+          mkdir -p dist/hosted-capability-agent-evidence dist/hosted-ebpf-engine-evidence
+          test -d dist/hosted-capability-agent-evidence
+          test -d dist/hosted-ebpf-engine-evidence
+          case "${MIGRATION_RUN_ID:-}" in
+            ''|null|*[!0-9]*)
+              echo "invalid trusted Migration CI run ID: ${MIGRATION_RUN_ID:-<empty>}" >&2
+              exit 1
+              ;;
+          esac
+          printf 'migration_ci_run_id=%s\n' "$MIGRATION_RUN_ID"
+          gh run download "$MIGRATION_RUN_ID" --name capability-agent-evidence --dir dist/hosted-capability-agent-evidence
+          gh run download "$MIGRATION_RUN_ID" --name ebpf-engine-evidence --dir dist/hosted-ebpf-engine-evidence
+
+      - name: Prepare host bpffs
+        run: |
+          sudo mkdir -p /sys/fs/bpf
+          if ! mountpoint -q /sys/fs/bpf; then
+            sudo mount -t bpf bpffs /sys/fs/bpf
+          fi
+
+      - name: Validate performance output paths
+        run: |
+          set -euo pipefail
+          for path in phase5-environment.txt phase5-performance.txt; do
+            if [ -L "$path" ]; then
+              printf 'performance output must not be a symlink: %s\n' "$path" >&2
+              exit 1
+            fi
+            if [ -e "$path" ]; then
+              printf 'performance output path must not already exist: %s\n' "$path" >&2
+              exit 1
+            fi
+          done
+
+      - name: Record performance reference environment
+        run: |
+          set -euo pipefail
+          {
+            printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'phase5_run_id=%s\n' "$PHASE5_RUN_ID"
+            printf 'migration_ci_run_id=%s\n' "$MIGRATION_RUN_ID"
+            printf 'release_commit=%s\n' "$GITHUB_SHA"
+            printf 'release_ref=%s\n' "$GITHUB_REF_NAME"
+            printf 'release_workflow=release.yml\n'
+            printf 'release_event=push\n'
+            printf 'migration_ci_workflow=migration-ci.yml\n'
+            printf 'migration_ci_event=push\n'
+            printf 'migration_ci_branch=main\n'
+            printf 'go_version='; go version
+            printf 'goos=%s\n' "$(go env GOOS)"
+            printf 'goarch=%s\n' "$(go env GOARCH)"
+            printf 'nproc=%s\n' "$(nproc)"
+            printf 'reference_cpu_set=0,1\n'
+            printf 'reference_nproc='; taskset --cpu-list 0,1 nproc
+            printf 'reference_gomaxprocs=2\n'
+            printf 'getconf_clk_tck='; getconf CLK_TCK
+            printf 'uname='; uname -a
+            printf 'cgroup2='; stat -fc '%T' /sys/fs/cgroup
+            printf 'bpffs='; stat -fc '%T' /sys/fs/bpf
+            printf 'cpu_max='; cat /sys/fs/cgroup/cpu.max
+          } | tee phase5-environment.txt
+
+      - name: Run the real-cgroup performance gates
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=PATH,HOME,GOFLAGS,GOMODCACHE,GOCACHE,PHASE5_RUN_ID taskset --cpu-list 0,1 \
+            env GOMAXPROCS=2 make performance 2>&1 | tee phase5-performance.txt
+
+      - name: Restore workspace ownership after privileged measurements
+        if: always()
+        run: |
+          set -euo pipefail
+          for path in .cache dist; do
+            if [ -e "$path" ]; then
+              sudo chown -R "$(id -u):$(id -g)" "$path"
+            fi
+          done
+
+      - name: Validate Phase 5 JSON and environment evidence
+        run: >-
+          make verify-performance
+          PHASE5_EVIDENCE_DIR=dist
+          PHASE5_EXPECTED_RUN_ID="$PHASE5_RUN_ID"
+          PHASE5_ENVIRONMENT_FILE=phase5-environment.txt
+          PHASE5_EXPECTED_MIGRATION_RUN_ID="$MIGRATION_RUN_ID"
+          PHASE5_EXPECTED_COMMIT="$GITHUB_SHA"
+          PHASE5_EXPECTED_RELEASE_REF="$GITHUB_REF_NAME"
+          PHASE5_EXPECTED_ENVIRONMENT_ARCH=amd64
+          PHASE5_HOSTED_EBPF_DIR=dist/hosted-ebpf-engine-evidence
+          PHASE5_HOSTED_CAPABILITY_DIR=dist/hosted-capability-agent-evidence
+
+      - name: Require complete raw Phase 5 evidence before publication
+        run: |
+          set -euo pipefail
+          phase5_json=(
+            dist/phase5-performance.json
+            dist/phase5-flow.json
+            dist/phase5-packet.json
+            dist/phase5-agent.json
+            dist/phase5-agent-reconcile.json
+            dist/phase5-agent-event.json
+            dist/phase5-agent-pod-start.json
+            dist/phase5-agent-restart.json
+            dist/phase5-agent-crash.json
+            dist/phase5-agent-resource.json
+          )
+          test "${#phase5_json[@]}" -eq 10
+          for left in "${!phase5_json[@]}"; do
+            for right in "${!phase5_json[@]}"; do
+              if [ "$left" -lt "$right" ] && [ "${phase5_json[$left]}" = "${phase5_json[$right]}" ]; then
+                printf 'duplicate local Phase 5 JSON evidence path: %s\n' "${phase5_json[$left]}" >&2
+                exit 1
+              fi
+            done
+          done
+          required_local=(
+            phase5-environment.txt
+            phase5-performance.txt
+            "${phase5_json[@]}"
+          )
+          for path in "${required_local[@]}"; do
+            test ! -L "$path"
+            test -f "$path"
+            test -s "$path"
+            printf 'retained_local_evidence=%s\n' "$path"
+          done
+          for root in dist/hosted-capability-agent-evidence dist/hosted-ebpf-engine-evidence; do
+            test -d "$root"
+            symlink_path="$(find "$root" -type l -print -quit)"
+            test -z "$symlink_path" || {
+              printf 'hosted Phase 5 evidence contains symlink: %s\n' "$symlink_path" >&2
+              exit 1
+            }
+            nonregular_path="$(find "$root" ! -type d ! -type f -print -quit)"
+            test -z "$nonregular_path" || {
+              printf 'hosted Phase 5 evidence contains non-regular entry: %s\n' "$nonregular_path" >&2
+              exit 1
+            }
+          done
+          required_phase5_tests=(
+            TestPhase5ReferenceFixtureApply
+            TestPhase5FlowAccounting
+            TestPhase5PacketAndTCPPerformance
+            TestPhase5AgentReconciliation
+            TestPhase5AgentActivation
+            TestPhase5AgentEventActivation
+            TestPhase5AgentPodStartClassification
+            TestPhase5AgentRestartGap
+            TestPhase5AgentCrashGap
+            TestPhase5AgentResourceUsage
+          )
+          require_phase5_pass() {
+            local test_name="$1"
+            local count
+            count="$(awk -v want="$test_name" '$1 == "---" && $2 == "PASS:" && $3 == want { count++ } END { print count + 0 }' phase5-performance.txt)"
+            test "$count" -eq 1 || {
+              printf 'expected exactly one pass marker for %s, found %s\n' "$test_name" "$count" >&2
+              exit 1
+            }
+          }
+          for test_name in "${required_phase5_tests[@]}"; do
+            require_phase5_pass "$test_name"
+            printf 'passed_phase5_harness=%s\n' "$test_name"
+          done
+          required_hosted=(
+            ebpf-engine-tests.txt
+            capability-agent-smoke.txt
+            capability-agent-reference-fixture.txt
+            phase5-reference-fixture.yaml
+            capability-agent-resource.txt
+            rolling-fail-open-evidence.txt
+          )
+          for name in "${required_hosted[@]}"; do
+            mapfile -t matches < <(find dist/hosted-capability-agent-evidence dist/hosted-ebpf-engine-evidence -type f -iname "$name" -print)
+            test "${#matches[@]}" -eq 1 || {
+              printf 'hosted Phase 5 evidence file %s occurs %s times\n' "$name" "${#matches[@]}" >&2
+              exit 1
+            }
+            path="${matches[0]}"
+            test "$(basename "$path")" = "$name" || {
+              printf 'hosted Phase 5 evidence file has a case-variant name: %s\n' "$path" >&2
+              exit 1
+            }
+            test -s "$path"
+            printf 'retained_hosted_evidence=%s\n' "$path"
+          done
+          ebpf_tests="$(find dist/hosted-ebpf-engine-evidence -type f -name ebpf-engine-tests.txt -print -quit)"
+          capability_smoke="$(find dist/hosted-capability-agent-evidence -type f -name capability-agent-smoke.txt -print -quit)"
+          capability_fixture="$(find dist/hosted-capability-agent-evidence -type f -name capability-agent-reference-fixture.txt -print -quit)"
+          capability_resource="$(find dist/hosted-capability-agent-evidence -type f -name capability-agent-resource.txt -print -quit)"
+          rolling_evidence="$(find dist/hosted-capability-agent-evidence -type f -name rolling-fail-open-evidence.txt -print -quit)"
+          require_exact_line() {
+            local path="$1"
+            local expected="$2"
+            local result
+            if [[ "$expected" == *=* ]]; then
+              result="$(awk -v expected="$expected" -v key="${expected%%=*}" '
+                $0 == expected { exact++ }
+                index($0, key "=") == 1 && $0 != expected { conflict=1 }
+                END { print (!conflict && exact == 1) ? 1 : 0 }
+              ' "$path")"
+            else
+              result="$(awk -v expected="$expected" '$0 == expected { exact++ } END { print exact + 0 }' "$path")"
+            fi
+            test "$result" -eq 1 || {
+              printf 'hosted evidence must contain exactly one non-conflicting line %s: %s\n' "$expected" "$path" >&2
+              exit 1
+            }
+          }
+          require_single_matching_line() {
+            local path="$1"
+            local prefix="$2"
+            local pattern="$3"
+            local result
+            result="$(awk -v prefix="$prefix" -v pattern="$pattern" '
+              index($0, prefix) == 1 {
+                matches++
+                if ($0 !~ pattern) {
+                  invalid=1
+                }
+              }
+              END { print (!invalid && matches == 1) ? 1 : 0 }
+            ' "$path")"
+            test "$result" -eq 1 || {
+              printf 'hosted evidence must contain exactly one valid line with prefix %s: %s\n' "$prefix" "$path" >&2
+              exit 1
+            }
+          }
+          require_exact_line "$ebpf_tests" 'ebpf_engine_runtime_gate=passed'
+          require_exact_line "$capability_smoke" 'capability-only DaemonSet attached and enforced the smoke policy'
+          require_exact_line "$capability_smoke" 'status_endpoints=passed'
+          packet_decision_markers="$(awk -F= '
+            $1 == "packet_decisions_blocked_default_deny" {
+              matches++
+              if (NF != 2 || $2 !~ /^[1-9][0-9]*$/) {
+                invalid=1
+              }
+            }
+            END {
+              print (!invalid && matches == 1) ? 1 : 0
+            }
+          ' "$capability_smoke")"
+          test "$packet_decision_markers" -eq 1
+          require_exact_line "$capability_smoke" 'flow_streaming=passed'
+          require_exact_line "$capability_fixture" 'offline_fixture_shape=pods=250 policies=25 compiled_rules=2500'
+          require_exact_line "$capability_fixture" 'fixture_live_shape=verified'
+          require_exact_line "$capability_fixture" 'fixture_shape=pods=250 policies=25 pods_per_policy=10 peers_per_policy=10 compiled_rules=2500'
+          require_exact_line "$capability_resource" 'memory_metric=memory.current (conservative cgroup memory upper bound; includes non-RSS charges)'
+          require_exact_line "$capability_resource" 'memory_peak_sample_interval_ms=100'
+          require_exact_line "$capability_resource" 'reference_fixture_agent_enforcing=1'
+          require_single_matching_line "$capability_resource" 'reference_fixture_active_policy_epoch=' '^reference_fixture_active_policy_epoch=[1-9][0-9]*$'
+          for sample in 1 2 3; do
+            require_single_matching_line "$capability_resource" "sample=${sample}" "^sample=${sample} .*peak_memory_current_bytes=[0-9]+ .*"
+          done
+          require_exact_line "$capability_resource" 'agent_namespace=ztap-system'
+          require_single_matching_line "$capability_resource" 'agent_pod=' '^agent_pod=ztap-agent-[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+          require_exact_line "$capability_resource" 'budget_result=passed'
+          require_exact_line "$rolling_evidence" 'baseline_selected_smoke_client=blocked'
+          require_single_matching_line "$rolling_evidence" 'smoke_client_node=' '^smoke_client_node=.+$'
+          require_exact_line "$rolling_evidence" 'old_namespace=ztap-system'
+          require_single_matching_line "$rolling_evidence" 'old_pod=' '^old_pod=ztap-agent-[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+          require_exact_line "$rolling_evidence" 'old_ready=true'
+          require_single_matching_line "$rolling_evidence" 'rollout_started_ns=' '^rollout_started_ns=[0-9]+$'
+          require_single_matching_line "$rolling_evidence" 'replacement_created_at=' '^replacement_created_at=.+$'
+          require_single_matching_line "$rolling_evidence" 'replacement_node=' '^replacement_node=.+$'
+          require_exact_line "$rolling_evidence" 'replacement_namespace=ztap-system'
+          require_single_matching_line "$rolling_evidence" 'replacement_pod=' '^replacement_pod=ztap-agent-[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+          require_exact_line "$rolling_evidence" 'replacement_ready=true'
+          require_single_matching_line "$rolling_evidence" 'replacement_observed_ns=' '^replacement_observed_ns=[0-9]+$'
+          require_single_matching_line "$rolling_evidence" 'fail_open_interval_ms=' '^fail_open_interval_ms=[0-9]+$'
+          printf '%s\n' 'trusted hosted evidence content markers validated'
+
+      - name: Upload raw performance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: phase5-performance-evidence
+          path: |
+            phase5-environment.txt
+            phase5-performance.txt
+            dist/phase5-performance.json
+            dist/phase5-flow.json
+            dist/phase5-packet.json
+            dist/phase5-agent.json
+            dist/phase5-agent-reconcile.json
+            dist/phase5-agent-event.json
+            dist/phase5-agent-pod-start.json
+            dist/phase5-agent-restart.json
+            dist/phase5-agent-crash.json
+            dist/phase5-agent-resource.json
+            dist/hosted-capability-agent-evidence
+            dist/hosted-ebpf-engine-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+  goreleaser:
+    name: GoReleaser
+    needs: [verify-gates, container-build-gate, performance-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write # Create the GitHub release and attach release artifacts.
+      actions: read # Download and re-verify retained Phase 5 evidence.
+      id-token: write # Publish the GoReleaser provenance attestation.
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Download checked-in Go module dependencies
+        run: go mod download
+
+      - name: Verify downloaded Go module dependencies
+        run: go mod verify
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+
+      - name: Install Syft for GoReleaser SBOMs
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/anchore/syft/cmd/syft@v1.50.0
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Validate raw Phase 5 evidence before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for path in dist dist/phase5-performance-evidence; do
+            if [ -L "$path" ]; then
+              printf 'downloaded evidence path must not be a symlink: %s\n' "$path" >&2
+              exit 1
+            fi
+            if [ -e "$path" ] && [ ! -d "$path" ]; then
+              printf 'downloaded evidence path must be a directory: %s\n' "$path" >&2
+              exit 1
+            fi
+          done
+          gh run download "$GITHUB_RUN_ID" --name phase5-performance-evidence \
+            --dir dist/phase5-performance-evidence
+          test -d dist/phase5-performance-evidence
+          symlink_path="$(find dist/phase5-performance-evidence -type l -print -quit)"
+          test -z "$symlink_path" || {
+            printf 'raw Phase 5 evidence contains symlink: %s\n' "$symlink_path" >&2
+            exit 1
+          }
+          nonregular_path="$(find dist/phase5-performance-evidence ! -type d ! -type f -print -quit)"
+          test -z "$nonregular_path" || {
+            printf 'raw Phase 5 evidence contains non-regular entry: %s\n' "$nonregular_path" >&2
+            exit 1
+          }
+          phase5_json=(
+            phase5-performance.json
+            phase5-flow.json
+            phase5-packet.json
+            phase5-agent.json
+            phase5-agent-reconcile.json
+            phase5-agent-event.json
+            phase5-agent-pod-start.json
+            phase5-agent-restart.json
+            phase5-agent-crash.json
+            phase5-agent-resource.json
+          )
+          unexpected_phase5_json_entry="$(find dist/phase5-performance-evidence -iname 'phase5-*.json' ! -type f -print -quit)"
+          test -z "$unexpected_phase5_json_entry" || {
+            printf 'raw Phase 5 JSON entry is not a regular file: %s\n' "$unexpected_phase5_json_entry" >&2
+            exit 1
+          }
+          mapfile -t all_phase5_json < <(find dist/phase5-performance-evidence -type f -iname 'phase5-*.json' -print)
+          test "${#all_phase5_json[@]}" -eq "${#phase5_json[@]}"
+          for name in "${phase5_json[@]}"; do
+            mapfile -t matches < <(find dist/phase5-performance-evidence -type f -name "$name" -print)
+            test "${#matches[@]}" -eq 1 || {
+              printf 'raw Phase 5 JSON artifact %s occurs %s times\n' "$name" "${#matches[@]}" >&2
+              exit 1
+            }
+          done
+          printf '%s\n' 'raw Phase 5 JSON artifact set is exact'
+          required_evidence=(
+            phase5-environment.txt
+            phase5-performance.txt
+            "${phase5_json[@]}"
+            ebpf-engine-tests.txt
+            capability-agent-smoke.txt
+            capability-agent-reference-fixture.txt
+            phase5-reference-fixture.yaml
+            capability-agent-resource.txt
+            rolling-fail-open-evidence.txt
+          )
+          for name in "${required_evidence[@]}"; do
+            mapfile -t matches < <(find dist/phase5-performance-evidence -type f -iname "$name" -print)
+            test "${#matches[@]}" -eq 1 || {
+              printf 'downloaded Phase 5 evidence file %s occurs %s times\n' "$name" "${#matches[@]}" >&2
+              exit 1
+            }
+            path="${matches[0]}"
+            test "$(basename "$path")" = "$name" || {
+              printf 'downloaded Phase 5 evidence file has a case-variant name: %s\n' "$path" >&2
+              exit 1
+            }
+            test -n "$path"
+            test -s "$path"
+            printf 'retained_evidence=%s\n' "$path"
+          done
+          evidence_archive="$RUNNER_TEMP/ztap-${GITHUB_REF_NAME}-phase5-evidence.tar.gz"
+          tar -czf "$evidence_archive" \
+            -C dist/phase5-performance-evidence .
+
+      - name: Re-verify retained Phase 5 evidence before GoReleaser
+        env:
+          MIGRATION_RUN_ID: ${{ needs.verify-gates.outputs.migration_run_id }}
+        run: |
+          set -euo pipefail
+          source_dir=dist/phase5-performance-evidence
+          verify_dir="$RUNNER_TEMP/phase5-evidence-verify"
+          mkdir -p "$verify_dir/hosted-ebpf-engine-evidence" "$verify_dir/hosted-capability-agent-evidence"
+
+          symlink_path="$(find "$source_dir" -type l -print -quit)"
+          test -z "$symlink_path" || {
+            printf 'downloaded Phase 5 evidence contains symlink: %s\n' "$symlink_path" >&2
+            exit 1
+          }
+          nonregular_path="$(find "$source_dir" ! -type d ! -type f -print -quit)"
+          test -z "$nonregular_path" || {
+            printf 'downloaded Phase 5 evidence contains non-regular entry: %s\n' "$nonregular_path" >&2
+            exit 1
+          }
+
+          copy_one() {
+            local name="$1"
+            local destination="$2"
+            local matches=()
+            mapfile -t matches < <(find "$source_dir" -type f -iname "$name" -print)
+            test "${#matches[@]}" -eq 1
+            test "$(basename "${matches[0]}")" = "$name"
+            cp "${matches[0]}" "$verify_dir/$destination/$name"
+          }
+
+          for name in \
+            phase5-performance.txt \
+            phase5-environment.txt \
+            phase5-performance.json \
+            phase5-flow.json \
+            phase5-packet.json \
+            phase5-agent.json \
+            phase5-agent-reconcile.json \
+            phase5-agent-event.json \
+            phase5-agent-pod-start.json \
+            phase5-agent-restart.json \
+            phase5-agent-crash.json \
+            phase5-agent-resource.json; do
+            copy_one "$name" .
+          done
+          required_phase5_tests=(
+            TestPhase5ReferenceFixtureApply
+            TestPhase5FlowAccounting
+            TestPhase5PacketAndTCPPerformance
+            TestPhase5AgentReconciliation
+            TestPhase5AgentActivation
+            TestPhase5AgentEventActivation
+            TestPhase5AgentPodStartClassification
+            TestPhase5AgentRestartGap
+            TestPhase5AgentCrashGap
+            TestPhase5AgentResourceUsage
+          )
+          require_phase5_pass() {
+            local test_name="$1"
+            local count
+            count="$(awk -v want="$test_name" '$1 == "---" && $2 == "PASS:" && $3 == want { count++ } END { print count + 0 }' "$verify_dir/phase5-performance.txt")"
+            test "$count" -eq 1 || {
+              printf 'expected exactly one pass marker for %s, found %s\n' "$test_name" "$count" >&2
+              exit 1
+            }
+          }
+          for test_name in "${required_phase5_tests[@]}"; do
+            require_phase5_pass "$test_name"
+          done
+          copy_one ebpf-engine-tests.txt hosted-ebpf-engine-evidence
+          copy_one capability-agent-smoke.txt hosted-capability-agent-evidence
+          copy_one capability-agent-reference-fixture.txt hosted-capability-agent-evidence
+          copy_one phase5-reference-fixture.yaml hosted-capability-agent-evidence
+          copy_one capability-agent-resource.txt hosted-capability-agent-evidence
+          copy_one rolling-fail-open-evidence.txt hosted-capability-agent-evidence
+
+          make verify-performance \
+            PHASE5_EVIDENCE_DIR="$verify_dir" \
+            PHASE5_EXPECTED_RUN_ID="${GITHUB_RUN_ID}-${GITHUB_SHA}" \
+            PHASE5_ENVIRONMENT_FILE="$verify_dir/phase5-environment.txt" \
+            PHASE5_EXPECTED_MIGRATION_RUN_ID="$MIGRATION_RUN_ID" \
+            PHASE5_EXPECTED_COMMIT="$GITHUB_SHA" \
+            PHASE5_EXPECTED_RELEASE_REF="$GITHUB_REF_NAME" \
+            PHASE5_EXPECTED_ENVIRONMENT_ARCH=amd64 \
+            PHASE5_HOSTED_EBPF_DIR="$verify_dir/hosted-ebpf-engine-evidence" \
+            PHASE5_HOSTED_CAPABILITY_DIR="$verify_dir/hosted-capability-agent-evidence"
+
+      - name: Prepare release notes
+        run: |
+          set -euo pipefail
+          if [ -L release-notes.md ] || [ -e release-notes.md ]; then
+            printf 'release notes output path must not already exist: release-notes.md\n' >&2
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          awk -v version="$version" '
+            $0 ~ "^## \\[" version "\\]" { found = 1; print; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            {
+              printf '## %s\n\n' "$GITHUB_REF_NAME"
+              printf 'See the commit history for release details.\n'
+            } > release-notes.md
+          fi
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.9.0
+          args: release --clean --config=.goreleaser.yaml --release-notes=release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attach raw Phase 5 performance evidence to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$GITHUB_REF_NAME" \
+            "$RUNNER_TEMP/ztap-${GITHUB_REF_NAME}-phase5-evidence.tar.gz" --clobber
+
+  docker-release:
+    name: Publish multi-architecture image
+    needs: [verify-gates, container-build-gate, performance-gate, goreleaser]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write # Attach the immutable install manifest to the release.
+      packages: write # Publish the versioned multi-architecture image.
+      id-token: write # Publish the container provenance attestation.
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve release metadata
+        id: version
+        run: |
+          set -euo pipefail
+          {
+            printf 'version=%s\n' "$GITHUB_REF_NAME"
+            printf 'short=%s\n' "${GITHUB_REF_NAME#v}"
+            printf 'build_date=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push the ZTAP image
+        id: image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          sbom: true
+          provenance: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/ztap:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/ztap:${{ steps.version.outputs.short }}
+
+      - name: Verify published multi-architecture manifest
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/ztap:${{ steps.version.outputs.version }}
+          SHORT_IMAGE: ghcr.io/${{ github.repository_owner }}/ztap:${{ steps.version.outputs.short }}
+          PUBLISHED_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISHED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          manifest="$(docker buildx imagetools inspect "$IMAGE")"
+          printf '%s\n' "$manifest"
+          inspect_digest="$(awk '$1 == "Digest:" { value = $2; count++ } END { if (count != 1) exit 1; print value }' <<< "$manifest")"
+          test "$inspect_digest" = "$PUBLISHED_DIGEST"
+          short_manifest="$(docker buildx imagetools inspect "$SHORT_IMAGE")"
+          printf '%s\n' "$short_manifest"
+          short_digest="$(awk '$1 == "Digest:" { value = $2; count++ } END { if (count != 1) exit 1; print value }' <<< "$short_manifest")"
+          test "$short_digest" = "$PUBLISHED_DIGEST"
+
+          raw_manifest="$(docker buildx imagetools inspect "$IMAGE" --raw)"
+          jq -e '
+            (.manifests | type == "array") and
+            ([.manifests[] | select((.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest")] | length == 2) and
+            (all(.manifests[] | select((.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest"); .platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64"))) and
+            ([.manifests[] | select(.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64"))] | length == 2) and
+            ([.manifests[] | select(.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64")) | "\(.platform.os)/\(.platform.architecture)"] | sort == ["linux/amd64", "linux/arm64"]) and
+            (all(.manifests[]; (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))) and
+            (any(.manifests[]; (.annotations["vnd.docker.reference.type"] // "") == "attestation-manifest"))
+          ' <<< "$raw_manifest" >/dev/null
+          printf '%s\n' 'published image index contains exactly one Linux amd64 and one Linux arm64 manifest plus an attestation descriptor'
+
+      - name: Render the immutable install manifest
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/ztap
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            printf 'unexpected published image digest: %s\n' "$DIGEST" >&2
+            exit 1
+          fi
+          if [ -L dist ]; then
+            printf 'release manifest directory must not be a symlink\n' >&2
+            exit 1
+          fi
+          if [ -e dist ] && [ ! -d dist ]; then
+            printf 'release manifest path must be a directory\n' >&2
+            exit 1
+          fi
+          mkdir -p dist
+          manifest_path="dist/ztap-agent-${GITHUB_REF_NAME}.yaml"
+          if [ -L "$manifest_path" ]; then
+            printf 'release manifest output must not be a symlink: %s\n' "$manifest_path" >&2
+            exit 1
+          fi
+          if [ -e "$manifest_path" ]; then
+            printf 'release manifest output must not already exist: %s\n' "$manifest_path" >&2
+            exit 1
+          fi
+          sed "s|image: ztap:v0.1.0|image: ${IMAGE}@${DIGEST}|" \
+            deployments/kubernetes/ztap-agent.yaml > "$manifest_path"
+          image_lines="$(grep -Ec '^[[:space:]]+image: ' "$manifest_path" || true)"
+          test "$image_lines" -eq 1
+          ! grep -Eq '(^|[[:space:]])image:.*:latest([[:space:]]|$)' "$manifest_path"
+          grep -Fqx "          image: ${IMAGE}@${DIGEST}" "$manifest_path"
+
+      - name: Attach the immutable install manifest to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "dist/ztap-agent-${GITHUB_REF_NAME}.yaml" --clobber
+
+      - name: Publish the completed GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+          test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = false

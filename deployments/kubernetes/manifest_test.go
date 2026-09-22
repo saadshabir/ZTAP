@@ -27,9 +27,7 @@ func TestNativeAgentManifestsUseTheCapabilityOnlyProfile(t *testing.T) {
 				t.Fatal("agent pod spec is missing")
 			}
 			assertPrometheusAnnotations(t, daemonset)
-			if value, exists := spec["hostNetwork"]; exists && value == true {
-				t.Fatal("native agent must not use hostNetwork")
-			}
+			assertHostNamespaceIsolation(t, spec)
 			assertRollingUpdateStrategy(t, daemonset)
 
 			volumes, ok := spec["volumes"].([]interface{})
@@ -87,7 +85,27 @@ func TestNativeAgentManifestsUseTheCapabilityOnlyProfile(t *testing.T) {
 				t.Fatal("native agent must use a read-only root filesystem")
 			}
 			assertCapabilities(t, security)
+
+			mounts, ok := container["volumeMounts"].([]interface{})
+			if !ok {
+				t.Fatal("agent volume mounts are missing")
+			}
+			assertReadOnlyVolumeMount(t, mounts, "cgroup", "/host/sys/fs/cgroup")
 		})
+	}
+}
+
+func assertHostNamespaceIsolation(t *testing.T, spec map[string]interface{}) {
+	t.Helper()
+	for _, field := range []string{"hostNetwork", "hostPID", "hostIPC"} {
+		value, exists := spec[field]
+		if !exists {
+			t.Fatalf("agent pod spec %s is omitted, want an explicit false value", field)
+		}
+		shared, ok := value.(bool)
+		if !ok || shared {
+			t.Fatalf("agent pod spec %s = %#v, want explicit false", field, value)
+		}
 	}
 }
 
@@ -177,6 +195,21 @@ func assertHostPathVolume(t *testing.T, volumes []interface{}, name, path, volum
 	t.Fatalf("volume %q is missing", name)
 }
 
+func assertReadOnlyVolumeMount(t *testing.T, mounts []interface{}, name, path string) {
+	t.Helper()
+	for _, raw := range mounts {
+		mount, ok := raw.(map[string]interface{})
+		if !ok || mount["name"] != name {
+			continue
+		}
+		if mount["mountPath"] != path || mount["readOnly"] != true {
+			t.Fatalf("volume mount %q = %#v, want read-only mount at %s", name, mount, path)
+		}
+		return
+	}
+	t.Fatalf("volume mount %q is missing", name)
+}
+
 func hasNodeNameDownwardAPI(env []interface{}) bool {
 	for _, raw := range env {
 		entry, ok := raw.(map[string]interface{})
@@ -199,8 +232,10 @@ func assertCapabilities(t *testing.T, security map[string]interface{}) {
 	if !ok {
 		t.Fatal("native agent capabilities are missing")
 	}
-	if !contains(stringSlice(capabilities["drop"]), "ALL") {
-		t.Fatalf("capability drop list = %#v, want ALL", capabilities["drop"])
+	drop := stringSlice(capabilities["drop"])
+	sort.Strings(drop)
+	if strings.Join(drop, ",") != "ALL" {
+		t.Fatalf("capability drop list = %#v, want exactly [ALL]", capabilities["drop"])
 	}
 	got := stringSlice(capabilities["add"])
 	sort.Strings(got)

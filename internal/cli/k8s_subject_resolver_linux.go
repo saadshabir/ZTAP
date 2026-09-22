@@ -129,6 +129,9 @@ func cgroupFilesystemIdentityForPath(path string) (cgroupFilesystemIdentity, err
 	if err != nil {
 		return cgroupFilesystemIdentity{}, err
 	}
+	if !fi.IsDir() {
+		return cgroupFilesystemIdentity{}, fmt.Errorf("cgroup path %q is not a directory", path)
+	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return cgroupFilesystemIdentity{}, fmt.Errorf("unexpected stat type for %s", path)

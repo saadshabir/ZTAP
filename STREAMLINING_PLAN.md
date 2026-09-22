@@ -1,8 +1,8 @@
 # ZTAP Streamlining Plan
 
-- **Status:** Phase 4 complete — hosted acceptance evidence recorded
+- **Status:** Phase 5 implementation complete locally — hosted acceptance and release gates pending
 - **Prepared:** 2026-09-10
-- **Last reviewed:** 2026-09-19
+- **Last reviewed:** 2026-09-22
 - **Change type:** Intentional clean break
 - **Target:** Linux/Kubernetes eBPF network-policy enforcer
 
@@ -161,6 +161,7 @@ ztap flows [--action allowed|blocked] \
            [--protocol TCP|UDP] \
            [--direction ingress|egress] \
            [--run-dir /run/ztap] \
+           [--bpffs-root /sys/fs/bpf] \
            [--output table|json]
 ```
 
@@ -168,6 +169,8 @@ Behavior:
 
 - Streaming begins immediately and continues until interrupted.
 - The command reads the stable pinned flow map created by the agent.
+- `--bpffs-root` defaults to `/sys/fs/bpf`; the shipped DaemonSet uses
+  `/host/sys/fs/bpf` because its host bpffs mount is exposed at that path.
 - There is no `--follow` switch because streaming is the only mode.
 - There is no recent-history mode because ZTAP will not bundle a flow store.
 - Synthetic/demo events are removed.
@@ -652,7 +655,9 @@ make test              run unit tests with race detection
 make lint              run configured static analysis and formatting checks
 make generate          regenerate eBPF bindings
 make check-generated   regenerate and fail on a Git diff
-make integration       run privileged Linux eBPF integration tests
+make integration       run privileged Linux enforcer and agent integration tests
+make performance       run Linux reference performance gates and write raw evidence
+make verify-performance validate the retained Phase 5 JSON evidence
 make docker            build the single runtime image
 make clean             remove repository-local generated outputs only
 make check             run the non-privileged merge gate
@@ -822,9 +827,14 @@ Remove macOS/Windows matrices, Python jobs, proto/buf jobs, operator/anomaly ima
 - Release one `ztap` binary for Linux amd64 and arm64.
 - Publish one multi-architecture container image.
 - Produce checksums and an SBOM.
-- Keep GoReleaser as the single release driver and reduce `.goreleaser.yml` to one Linux binary for amd64/arm64, checksums, and SBOM generation. The workflow must call that configuration rather than duplicate its build matrix in shell steps.
+- Keep GoReleaser as the single release driver and reduce `.goreleaser.yaml` to one Linux binary for amd64/arm64, checksums, and SBOM generation. The workflow must call that configuration rather than duplicate its build matrix in shell steps.
 - Update or render the install manifest with the immutable released image digest.
 - Require the trusted Linux eBPF integration job and all final acceptance gates before a release job can start.
+- Run the real-cgroup engine-apply, sustained-flow-accounting, and initial
+  native-agent activation harnesses and retain their raw output before
+publication; synchronized-informer event, Pod-start, packet, resource, and
+fail-open measurements stay explicit release blockers until their evidence
+exists.
 - Do not publish macOS, Windows, operator, or anomaly artifacts.
 - Treat the first streamlined release as `v0.1.0` because the supported surface is intentionally experimental and incompatible with the previous repository state.
 
@@ -839,6 +849,16 @@ Before each phase, confirm the prior phase's exit criteria on the branch. A phas
 Progress: **complete and merged**. The local baseline, artifact cleanup, Makefile, deterministic dispatcher test, and temporary workflow definition were committed in `7703a99`. Focused Linux characterization, the capability-only Kubernetes probe, pinned toolchains, parser/address fixes, attached-cgroup identity, reload map reuse, and pinned generated bindings followed through `d25c70e`. `main` strictly requires `Required CI`, and the transitional release workflow is removed. Hosted run `34653218849` completed the original evidence collection and exposed the self-reply contract failure during raw artifact review. Phase 0 was merged through reviewed PR #179 in `84c5512`.
 
 The follow-up review retained the `v0.1.0` self-traffic contract and added an explicit `(cgroup, PodIP)` bypass, a hard hosted self assertion, per-direction quarantine, failed-candidate preservation, partial link-update rollback, and multi-subject ingress-identity coverage in `bc636f5`. Test injection was corrected in `3b198a4`, and the hosted DaemonSet observer-selection race was fixed in `091310f`. Final hosted run `34665388860` from `091310f` passed all three jobs, and its raw artifacts were reviewed. Final Migration CI push run `34665381636` is also green. The attachment target is now one link pair per subject cgroup, sharing programs/maps, because cgroup local storage identifies the attachment cgroup. The Phase 0 architecture gate is closed; Phase 1 may resume.
+
+Continuation audit (2026-09-22): `make check-generated` and the full `make
+check` passed again on the current Phase 5 working tree. The first aggregate
+check attempt stopped only because DNS could not resolve `vuln.go.dev`; the
+pinned `govulncheck@v1.1.4` scan then passed with network access and reported no
+vulnerabilities, and the aggregate check passed on retry. This confirms local
+gates only; Docker, privileged Linux/Kubernetes, Section 14.5 measurements,
+and release publication/provenance remain hosted. The Phase 5 implementation
+checklist remains 90/90 complete (0% remaining); final acceptance remains
+12/39 complete with 27/39 items open (69.2% remaining).
 
 Work:
 
@@ -1289,18 +1309,1582 @@ checks cannot establish the kernel and container-runtime claims.
 
 ### Phase 5: Documentation, tooling, and release gate
 
+Progress (2026-09-19): Phase 5 implementation has started. The maintained
+README and guides now state the experimental Linux/Kubernetes contract,
+architecture, runtime limitations, digest-based deployment, migration warning,
+and contribution workflow. The final `Migration CI` shape now includes
+`govulncheck`, pinned generated-code checks, retained-example and manifest
+validation including the documented stdin validator path, containerized offline
+validation, built-image scanning, and an explicit `Required CI` status
+aggregation that treats unexpected skips as failures. The duplicate security
+workflows were removed, Dependabot was narrowed to monthly Go, Docker, and
+GitHub Actions updates, and a tag-only release workflow now verifies protected
+`main` ancestry plus the final CI, privileged eBPF, and capability-only agent
+checks before publishing GoReleaser artifacts, one multi-architecture image,
+and an immutable install manifest. The release workflow now validates the
+multi-architecture image and the exact `Required CI` branch-protection
+context in both GitHub required-status representations as the only required
+branch-protection check before GoReleaser can publish binaries, binds the final
+check results to the successful `Migration CI` push run for the exact tagged
+commit, and invokes the checked-in
+`.goreleaser.yaml` explicitly. The resolved trusted workflow run ID is passed
+through the release job dependency and retained in the performance environment
+record, so hosted evidence downloads cannot silently re-resolve a different
+successful run for the same SHA. Local syntax,
+race, build, vet, CLI smoke, validator-example, manifest, and cleanup
+verification now pass, and the aggregate non-privileged `make check` target
+passes with zero golangci-lint issues and clean actionlint output. The
+unprivileged Linux job compiles the enforcer and
+native-agent integration-tag suites; the Linux build-assets job also exercises
+the documented `make docker` target in addition to the separately scanned
+Buildx image gate; local Linux amd64/arm64 integration-tag binaries also cross-compile
+successfully, while the dedicated eBPF job remains the only runtime executor.
+Linux-targeted `go vet -tags=integration` also passes for both tagged packages.
+Pinned `golangci-lint`, `actionlint`, and `make check-generated` pass locally;
+CI continues to use the pinned `clang-18` spelling.
+The new `make performance` target correctly refuses to run on this macOS host;
+its Linux integration-tag binary compiles successfully, but no real-cgroup
+performance result exists locally.
+`make check-generated` now resolves the installed Homebrew LLVM 18 compiler at
+`/opt/homebrew/opt/llvm@18/bin/clang` automatically when `clang-18` is not on
+the macOS `PATH`, matching the pinned CI toolchain; the CI spelling remains
+`clang-18`. Docker, kind, and privileged Linux execution remain hosted or
+tool-install gates because this macOS checkout has neither those runtime
+prerequisites nor the hosted Linux environment. The pinned
+`govulncheck@v1.1.4` dependency scan passes locally with no reported
+vulnerabilities; the image/Trivy scan remains hosted.
+The supporting compiler benchmark now protects and measures the
+250-Pod/25-policy/2,500-rule shape; the 2026-09-19 local Apple M4 run completed
+three samples at roughly 1.04--1.08 ms, 1.70 MiB, and 11,250 allocations per
+compile. Those macOS samples are not release evidence because Section 14.5
+requires real Linux cgroups, packets, and resource measurements. A manual
+Linux `make performance` harness now runs in
+the documented 2-vCPU reference profile (release processes are pinned to CPUs
+0 and 1 with `GOMAXPROCS=2`), creates the same subject/rule shape in real
+cgroups, measures three warm engine-apply samples, emits raw JSON, and
+enforces only the direct engine-apply budget. The same harness applies that
+full 250-subject/25-policy/2,500-rule policy set before selecting one subject
+for flow measurement, then drives one alternating real-cgroup UDP decision per
+millisecond at the documented
+1,000-decisions/second target and reconciles delivered events with the
+rate-limited and ring-full counters after an unrecorded warm-up interval,
+checking every decision and drop counter identity for monotonicity before
+summing deltas. The identity-keyed counter-delta helpers and their reset,
+shape-drift, and overflow regressions also run in the ordinary package unit
+suite, so the accounting guard is exercised on the development host as well
+as compiled into the Linux harness;
+delivered records are filtered to the post-warm-up policy epoch so late warm-up
+events cannot inflate the accounting. A Linux-only native-agent harness now
+starts the actual Kubernetes reconciliation loop against the same fixture,
+resolves exact containerd/systemd cgroups, applies the first native policy, and
+retains three initial-activation samples in `dist/phase5-agent.json`. It also
+reads the actual compile-and-apply reconciliation duration after cache
+synchronization, retains three samples in `dist/phase5-agent-reconcile.json`,
+and enforces the Section 14.5 2-second p95 budget. It then updates a policy
+through the synchronized fake informer cache three times and
+retains the active-epoch samples in `dist/phase5-agent-event.json`. It also
+measures three newly running Pods entering the next active policy and retains
+`dist/phase5-agent-pod-start.json`; this excludes API-server and
+container-runtime startup latency. It also records orderly process-owned stop/replacement gaps in
+`dist/phase5-agent-restart.json`; this does not claim SIGKILL or DaemonSet
+rolling-update evidence. A separate crash harness applies the full
+250-Pod/25-policy/2,500-rule fixture, SIGKILLs a child process owning the
+engine links, and records the first allowed UDP packet after link detachment
+in `dist/phase5-agent-crash.json`; Kubernetes restart scheduling and DaemonSet
+rollout remain excluded. The kind capability-agent job first
+constrains its control-plane reference node to a 2-vCPU cgroup quota. It
+asserts that the selected smoke client is denied, then restarts the shipped
+DaemonSet and records the first successful selected-smoke
+client probe plus the recovery point after two successive blocked probes in
+`rolling-fail-open-evidence.txt`. It creates and classifies the real
+250-Pod/25-policy/2,500-rule fixture, samples the shipped agent container's
+cgroup CPU and `memory.current` counters for three quiet five-second intervals,
+polls `memory.current` every 100 milliseconds, retains each interval's peak,
+enforces the 0.10-core/200-MiB budgets, and retains
+`phase5-reference-fixture.yaml`,
+`capability-agent-reference-fixture.txt`, and
+`capability-agent-resource.txt`; these are real kind-cluster measurements
+from the full reference fixture, while hosted execution is still required for
+the result; the kind job now deletes its disposable cluster after evidence
+upload even when a gate fails. The fixture generator derives 250 Pods, 25 policies, 10 selected
+Pods per policy, and 10 peers per policy, and the resource gate now requires
+the resulting 2,500 compiled rules exactly; the generated NetworkPolicy
+documents now pass the shipped scratch image's offline validator, and a
+client-side dry-run plus offline object/peer-entry count check confirms that
+shape before cluster application. The tag-only release workflow runs all performance
+harnesses and retains their raw evidence before publication, including
+calculated bounded-map capacity bytes, explicit unbounded cgroup-storage
+metadata, and kernel-reported map memlock where available;
+the reference engine gate establishes map count, types, and configured
+capacities after warm-up, retains each warm-up/apply map snapshot, and verifies
+that those capacities and available memlock do not grow across repeated
+applies;
+it also runs a Linux-only helper that samples the active agent's CPU and RSS
+for three quiet five-second intervals, enforces the 0.10-core/200-MiB bound
+for the test fixture, derives CPU from the measured process tick delta rather
+than a fabricated zero value, and retains `dist/phase5-agent-resource.json`.
+That helper excludes kernel-map memory and a real API server, so it remains
+supporting evidence separate from the fail-closed kind resource gate; the
+DaemonSet rolling-update gate remains open, and hosted execution is required
+before the resource, rolling-update, and crash evidence is accepted.
+Hosted release-gate evidence and execution of the remaining Section 14.5
+measurements remain open. A packet-path harness now
+compares three real-loopback UDP/TCP samples from one selected subject while
+the full 250-subject/2,500-rule engine state is resident, with the cgroup
+programs detached and attached. It retains `dist/phase5-packet.json` and
+enforces the documented 10-microsecond UDP p99 delta and 10-percent TCP
+throughput budgets; rolling-update evidence remains open, while the resource
+and crash results still require hosted execution.
+The packet-path run performs one unrecorded detached/attached warm-up pass
+before retaining its three UDP/TCP samples. The release performance artifact
+also retains `phase5-environment.txt` with
+the runner's Go, architecture, CPU, kernel, cgroup, and bpffs metadata; the
+release gate verifies its recorded Linux/amd64, cgroup-v2, bpffs, `0,1` CPU
+affinity, `GOMAXPROCS=2`, positive clock-tick rate, host CPU/kernel metadata,
+and two-CPU profile before
+publication. The published image uses only explicit release-version aliases,
+never `:latest`, and the release gate compares the pushed manifest digest with
+the digest rendered into the immutable install manifest. It also parses the raw
+registry index to require exactly two runnable descriptors consisting of one
+Linux amd64 and one Linux arm64 manifest, requires an attestation descriptor
+from the enabled SBOM/provenance build, and verifies that both explicit release
+aliases resolve to that same digest. It bundles the
+trusted same-commit eBPF and capability-agent artifacts from
+`Migration CI`, and attaches the complete raw bundle as
+`ztap-<tag>-phase5-evidence.tar.gz` to the GitHub release; the archive is staged
+in the runner's temporary directory outside GoReleaser's cleanable `dist/`
+directory so publication cannot delete it before upload or leave checkout
+debris. Before attachment, the release job also checks content markers for the
+privileged eBPF pass, capability-only smoke enforcement, exact fixture shape,
+`memory.current` resource sampling and budget success, and the rolling
+fail-open interval. The GoReleaser job
+fails closed if the hosted eBPF, capability-agent fixture/resource, or
+rolling-update evidence files are missing from that bundle.
+The capability smoke now exercises the user-facing `ztap flows` reader against
+the pinned flow map, and the checked-in verifier performs those hosted checks
+as well, including the flow-streaming and offline-validator results, exact
+250-Pod/25-policy/2,500-rule fixture, resource-budget values, and rolling
+fail-open timestamp arithmetic.
+Each required hosted pass marker must occur exactly once, so a duplicated or
+contradictory transcript cannot satisfy the release gate by presence alone.
+The raw performance log applies the same exact-once rule to each structured
+`go test -v` harness pass marker, rejecting prefixed or duplicated test names
+both before upload and during the GoReleaser recheck.
+The GoReleaser job independently stages and reruns that verifier against the
+downloaded bundle, rejects symlink/non-regular entries and duplicate evidence
+filenames while staging it, and
+binds verification to the tagged commit, release run ID, and trusted Migration
+CI run ID before publication; the performance job's required local evidence
+list enumerates the ten JSON artifacts exactly once before upload and requires
+an exact `go test -v` pass marker for every one of the ten retained Phase 5
+harnesses. The GoReleaser recheck repeats those raw-log marker checks before
+publication. The release action now installs the exact
+GoReleaser `v2.9.0` tool version rather than resolving a floating v2 release.
+The fixture transcript check also requires the expected API versions,
+`ztap-performance` namespace entries, Pod and NetworkPolicy name prefixes,
+and the complete zero-padded Pod and NetworkPolicy name sets plus per-object
+bucket markers. The kind fixture generator emits those markers on both the
+Pod and NetworkPolicy objects, so a transcript with only matching totals is
+rejected; the verifier checks each document's kind-specific API version and
+namespace, counts the object-label indentation rather than the repeated
+policy-selector fields, validates each policy's selector bucket and exactly
+ten peer CIDRs, and regression tests cover omitted markers and per-policy
+bucket/peer-shape corruption.
+Every fixture document is also parsed as strict, depth-bounded YAML before the
+textual shape checks, so duplicate mapping keys, non-string mapping keys,
+anchors, aliases, merge keys, malformed or excessively nested documents cannot
+hide behind otherwise matching line counts.
+The verifier reads names and namespaces from `metadata`, bucket markers from
+the object metadata and policy selector mappings, policy types and the TCP port
+from their structured `spec` paths, and peers from the structured
+`spec.egress[].to[].ipBlock.cidr` sequence rather than accepting those values
+from arbitrary matching lines.
+Hosted evidence discovery and the direct JSON, environment, and hosted-evidence
+readers reject symlink roots/files and non-regular paths before reading their
+content; bounded readers reject hosted evidence over the 4 MiB limit without
+loading the entire artifact first.
+The hosted resource verifier also requires the exact reference-fixture scope,
+the quiet-interval transition marker, the shipped `ztap-system` namespace and
+`ztap-agent-` Pod identity, and a cgroup path under `/sys/fs/cgroup/`, in
+addition to the three ordered
+sample records with at least the documented five-second elapsed intervals, raw
+CPU-usec and `memory.current` byte counters, a 100-ms memory-peak polling
+interval, and parseable derived CPU and memory values. Each sample records its
+observed peak memory counter, and the verifier requires that peak to cover both
+endpoint readings before recomputing the derived value and the reported
+`memory.current` maximum. Resource and rolling transcripts use closed key/value
+schemas: malformed lines, unknown keys, and duplicate non-sample keys fail
+closed instead of being silently ignored. The verifier rejects CPU counter
+resets, recomputes each derived sample, and recomputes the reported CPU and
+`memory.current` maxima from those records before applying the budgets.
+Rolling evidence must also identify distinct old and replacement Pods and
+Kubernetes UIDs, plus a positive, millisecond-resolvable fail-open interval.
+The release performance job also validates all ten local JSON artifacts for
+Linux/two-CPU environment metadata, fixture shape, sample counts, budgets, and
+flow-accounting invariants before the GoReleaser job can publish. The verifier
+also recomputes reported maxima and packet aggregates, requires the documented
+budget constants, and checks that elapsed and packet measurements are positive,
+that the flow decision rate is bounded by the recorded one-packet-per-millisecond
+duration, that the recorded duration stays within a fixed five-second tolerance
+of the documented 60-second run, and that the native-agent resource artifact has
+the exact fixture shape; the privileged
+performance step restores workspace ownership before validation.
+The verifier now decodes the producer schema strictly, rejects unknown or
+case-variant fields, duplicate JSON object keys, multiple JSON values, and
+excessive nesting, and
+requires RFC3339 evidence timestamps so a malformed or schema-drifting artifact
+cannot pass the release gate silently. It also recomputes map shape and
+adjacent-snapshot memlock stability from the
+retained, ordered `before_warmup`, `after_warmup`, and three `after_apply_*`
+snapshots instead of trusting only the producer's summary flag, and binds the
+final summary's memlock readings exactly to its retained final snapshot; an
+available kernel-memlock reading must also be positive, while an unavailable
+reading must carry zero observed bytes. It independently recomputes each
+reported map-capacity byte count from the map type, configured entry/key/value
+sizes, and recorded CPU profile, and requires every artifact's producer
+provenance fields (kernel-path/traffic scope, kernel release, and absolute
+agent roots where emitted) to be present. Bounded map entries must use a
+recognized type and unique sorted name; the reference artifact must also carry
+the exact generated engine map inventory, dimensions, and configured
+capacities; the cgroup-storage map is represented as an explicit unbounded
+zero-capacity entry rather than being fabricated into a bounded capacity.
+The ten retained JSON artifacts now also require the exact checked-in producer
+scope literal for their kernel path or measurement path; a merely non-empty or
+caller-reworded scope cannot detach a budget from the real harness that
+produced it. Focused verifier regressions mutate every retained scope and
+confirm the complete bundle is rejected, while the privileged Linux evidence
+itself remains a hosted gate.
+The verifier also cross-checks all ten JSON artifacts for one run ID, Go
+version, Linux architecture, and the exact two-CPU profile, and cross-checks the native-agent
+artifacts for one kernel release so measurements cannot be mixed from different
+environments or same-host runs. `make performance` enforces `GOMAXPROCS=2` and
+creates the shared run ID; it removes only its ten named JSON outputs before
+starting, so a failed rerun cannot leave stale measurements available to the
+verifier;
+the release workflow binds it to the GitHub run, semantic release ref, release
+workflow/event, and tagged commit in the retained environment record and
+records the exact trusted `Migration CI` run ID used for hosted evidence,
+together with the migration workflow, event, and branch provenance used to
+resolve it. Individual artifact validation also rejects a
+missing run ID before the set-level comparison, and release validation passes
+the expected run IDs and commit into `phase5verify`, which now parses and
+validates the retained environment record, including its allowed key schema,
+and cross-checks its Phase 5 run ID, Go version, Linux target, and reference
+CPU count against `phase5-performance.json`, so the JSON set is bound to the
+release provenance rather than merely internally consistent.
+The retained host metadata is also checked for a Linux Go target, Linux
+`uname` record, positive host CPU count, and a valid two-field cgroup CPU quota
+before it can satisfy the release gate; the recorded host CPU count must also
+be at least the two CPUs used by the pinned reference process.
+The native-agent event loop also gives caller cancellation priority over a
+simultaneous status-listener error, keeping deliberate shutdown from being
+reported as an agent failure.
+The merge gate now reruns `go mod tidy` and fails on any `go.mod` or `go.sum`
+diff, keeping the dependency cleanup reproducible after future edits.
+The fixed-size binary flow-event decoder now has a fuzz target with malformed-size
+and schema seeds plus valid-event conversion coverage; the decoder rejects unknown
+inputs before touching fixed offsets and the conversion path remains bounded by the
+72-byte event shape.
+The live branch-protection record was verified with the configured GitHub CLI
+token and reports the exact strict `Required CI` context in both the legacy
+`contexts` and modern `checks` arrays; the release workflow still requires the
+repository secret `BRANCH_PROTECTION_TOKEN` with
+Administration-read permission, rejects stale required contexts, restores
+workspace ownership even after a failed privileged measurement, and remains
+fail-closed until that external verification succeeds.
+
+Hosted CI audit (2026-09-19): Migration CI push run `35420910387` for
+committed revision `5eda8d7d2124f25acc1c1c997305550a542e0f66` completed
+successfully with lint, actionlint, zizmor, Linux unit/race, integration,
+Docker, eBPF, capability-only kind, cross-architecture build, and `Required CI`
+jobs successful. This supports the committed baseline only; the working tree
+still contains newer uncommitted Phase 5 workflow and verifier edits, and the
+real performance/release publication gates remain open.
+
+The final acceptance audit now marks only the product-surface and tracked-binary
+items directly supported by the current source review and local tests. Kernel,
+container-runtime, hosted branch-protection, and release-evidence items remain
+unchecked until their scoped gates execute.
+
+Local contract audit (2026-09-19): the native validator and compiler accept
+only IPv4 policy peers with numeric TCP/UDP ports, reject named ports,
+`endPort`, SCTP, IPv6, dual-stack policy data, and broad peerless/portless
+rules, and the retained flow/parser paths report unsupported traffic as an
+explicit deny rather than providing an alternate enforcement backend. The
+focused policy tests, CLI smoke validation, and maintained-document review
+support the first-release surface; privileged packet execution remains covered
+by the hosted gate below.
+
+Repository cleanup audit (2026-09-19): `make clean` completed successfully and
+the subsequent `git status --ignored --short` showed no ignored build/test/
+coverage debris. The working-tree path audit also found no removed internal
+feature directories or obsolete operator/anomaly/proto/buf/compose/cloud/
+audit/compliance assets, and the dependency graph contains none of the removed
+cloud, etcd, gRPC, SQLite, or controller-runtime families.
+Maintained-document searches found no stale claims of the removed REST, gRPC,
+cloud, etcd, anomaly, audit, compliance, macOS, Windows, or iptables support;
+the remaining CRD/operator references are explicit migration warnings.
+
+Branch-protection verification (2026-09-19): the live GitHub protection record
+for `main` reports strict required-status checks with the exact `Required CI`
+context in both `contexts` and `checks` (check app id `15368`).
+
+Continuation audit (2026-09-20): release verification now passes the current
+semantic tag from `GITHUB_REF_NAME` into both the performance-job verifier and
+the GoReleaser re-verification, and rejects retained environment evidence whose
+`release_ref` differs from that tag. Focused provenance tests, the full unit and
+race suites, `go vet`, formatting, diff, module-tidy, generated-code, workflow
+YAML, pinned `golangci-lint`/`actionlint`, pinned `govulncheck@v1.1.4`, and
+Linux amd64/arm64 cross-compilation checks pass locally; `make check` also
+passes end to end. The image vulnerability scan, Docker, privileged
+eBPF, kind, real-cgroup performance, and release-publication gates remain
+hosted or tool-gated; no local result is being used to close those acceptance
+items.
+
+The pinned `zizmor` 1.16.3 audit also passed after the release performance job
+stopped restoring `setup-go` dependency caches into the tag-publication path;
+the cache-poisoning finding was fixed rather than suppressed. The release image
+publication job also performs a cache-free BuildKit build, so neither Go nor
+Docker publication artifacts restore mutable caches. Its pedantic audit also
+passes after the single-image Docker job removed attacker-controlled matrix
+interpolation and every non-default workflow permission received an inline
+purpose comment. The GoReleaser job explicitly downloads and verifies the
+checked-in Go module graph before re-verifying retained evidence instead of
+relying on a lazy `go run` fetch during publication.
+The performance job now rejects symlink and non-regular local or hosted
+evidence entries before artifact upload as well as during GoReleaser staging.
+The image-publication job also requires a 64-hex SHA-256 digest and exactly
+one non-`:latest` image line in the rendered immutable install manifest. The
+environment verifier also rejects a zero trusted Migration CI run ID and host
+CPU metadata smaller than the exact two-CPU reference profile.
+
+Continuation audit (2026-09-20): the retained environment verifier now
+rejects a zero trusted `Migration CI` run ID and rejects host `nproc` metadata
+below the exact two CPUs used by the pinned reference process. This closes an
+inconsistent-environment path where a transcript could claim a two-CPU
+measurement on a host that recorded fewer available CPUs. Focused verifier
+tests, the full unit suite, race tests, `go vet`, formatting, module-tidy, and
+diff checks pass with the repository-local Go cache. Hosted Linux execution,
+real-cgroup performance, and release publication evidence remain open and are
+not inferred from these local checks.
+
+Continuation audit (2026-09-20): the live `ztap flows --output json` path now
+serializes its machine-readable event record with the standard JSON encoder,
+with regression coverage for quoted, escaped, and newline-containing string
+fields. This keeps the retained flow-streaming transcript valid at the output
+boundary if a future event label changes, while preserving the existing engine
+metadata fields. Focused flow tests, the full unit suite, race tests, `go vet`,
+formatting, module-tidy, and diff checks remain required locally; hosted flow
+streaming and the other Linux/release gates remain open.
+
+Continuation audit (2026-09-20): the live flow reader now rejects symlinked
+bpffs roots, the `ztap` pin directory, and existing stable flow/status pin
+entries before calling `ebpf.LoadPinnedMap`; missing pins still reach the
+kernel loader so its actionable error is preserved. Linux reader regressions
+cover all three indirection points and the Linux-targeted package compiles;
+hosted pinned-map streaming and the remaining real-cgroup/release gates remain
+open.
+
+Continuation audit (2026-09-20): Linux CLI lock coverage now starts a child
+test process for both the native-agent and live-flow-reader locks, kills the
+child with `SIGKILL`, and verifies a replacement owner can acquire and release
+the same lock. This directly exercises the kernel-owned descriptor lifetime
+required for crash release rather than inferring it only from same-process
+cleanup; the child retains the owner closure for the whole wait so the held
+descriptor cannot be collected before the kill. The runtime test still
+requires a Linux host.
+
+Continuation audit (2026-09-20): both Linux node locks now create missing run
+directory components without following symlinks, reject symlinked run
+directories and lock files, require the lock to remain a regular file, and use
+`O_NOFOLLOW` when opening it. Regression coverage exercises both lock names and
+both indirection points; Linux-targeted compilation remains local evidence, so
+the crash and hosted runtime gates still require Linux execution.
+
+Continuation audit (2026-09-20): the eBPF packet path no longer permits an
+unsupported IPv4 protocol to take the Node/self bypass before the isolated
+direction's unsupported-deny decision. A privileged integration regression now
+sends ICMP to an address present in both bypass sets and requires a blocked
+`unsupported` event; generated bindings must be refreshed from the changed
+source before the hosted packet gate can validate it.
+
+Continuation audit (2026-09-20): the privileged packet suite now also injects
+raw IPv4 packets from a test cgroup and requires isolated directions to emit
+`fragment` for an incomplete IPv4 fragment and `malformed` for an invalid IP
+version. These regressions exercise the parser's early-deny branches alongside
+IPv6 and unsupported-protocol coverage; their runtime result still requires the
+hosted Linux eBPF job.
+
+Continuation audit (2026-09-20): external cancellation of the shared flow
+monitor now follows the same lifecycle path as an explicit stop, closing
+subscribers, waiting for the reader generation to unwind, and leaving the
+monitor restartable. A regression covers cancellation followed by a fresh
+start; hosted pinned-ring streaming and the remaining Linux/release gates stay
+open.
+
+Continuation audit (2026-09-20): engine pin cleanup now rejects a real
+directory at either owned stable-pin name instead of allowing generic path
+removal to delete an empty directory, while symlinks are unlinked without
+following their targets. Startup stale-pin removal and shutdown cleanup share
+the guard, with Linux regression coverage for directory preservation and safe
+symlink unlinking; privileged engine execution and hosted release evidence
+remain open.
+
+Continuation audit (2026-09-20): release tags are now required to use
+canonical numeric `vMAJOR.MINOR.PATCH` components without leading zeroes in
+both the tag workflow and the Phase 5 provenance verifier. Focused verifier
+coverage rejects non-canonical tags while retaining `v0.1.0` and ordinary
+multi-digit releases; hosted publication evidence remains open.
+
+Continuation audit (2026-09-20): the privileged packet suite now exercises
+the unsupported-protocol bypass guard on ingress as well as egress. An ICMP
+raw socket owned by the selected cgroup receives a packet sent from outside
+that cgroup, and the test requires an ingress `unsupported` deny even when
+both Node and self bypass addresses match. The Linux integration package now
+compiles for amd64 and arm64, while the real privileged ingress result remains
+hosted evidence.
+
+Continuation audit (2026-09-20): standalone environment verification now
+requires `release_commit` to be a full 40- or 64-character hexadecimal commit
+ID even when no expected commit is supplied by the caller. Regression coverage
+rejects a fabricated textual commit while preserving full SHA-1 and SHA-256
+shapes, keeping release provenance structurally bound before an external
+expected-commit comparison is applied.
+
+Continuation audit (2026-09-20): Linux node-lock acquisition now walks the
+validated run directory through directory file descriptors and opens the lock
+with `openat`, `O_NOFOLLOW`, and `O_CLOEXEC`. This closes the parent-component
+TOCTOU window left by path-only validation while retaining regular-file checks,
+symlink rejection, and kernel-owned crash release; the existing lock
+regressions remain in the Linux test suite and Linux-targeted compilation
+passes, while their runtime and the crash gate remain hosted.
+
+Continuation audit (2026-09-20): engine metrics now use the same checked
+`uint64` counter summation discipline as the Phase 5 flow-accounting harness.
+Per-CPU counter totals fail closed on overflow instead of wrapping into a
+smaller metric value, and host-runnable regression coverage exercises both a
+valid sum and the overflow boundary.
+
+Continuation audit (2026-09-20): engine startup now creates the `ztap` bpffs
+pin directory through a validated root descriptor and `mkdirat`/`openat` with
+no-follow directory semantics. This closes the gap between stale-pin
+validation and directory creation; Linux regression coverage verifies both
+missing-directory creation and symlink rejection, while privileged engine
+startup remains a hosted runtime gate.
+
+Continuation audit (2026-09-20): owned engine-pin cleanup now opens the parent
+directory and removes entries with `fstatat`/`unlinkat` no-follow semantics.
+Shutdown and stale-pin removal therefore reject a replaced parent symlink and
+preserve redirected targets, in addition to rejecting owned-name directories.
+Linux regression coverage exercises the parent-indirection case.
+
+Continuation audit (2026-09-20): graceful engine-pin cleanup now traverses all
+parent components through the same descriptor-relative no-follow helper used by
+startup. Intermediate parent replacement can no longer redirect `unlinkat` to
+another directory; Linux regression coverage exercises that intermediate
+component case while hosted engine shutdown remains open.
+
+Continuation audit (2026-09-20): the Phase 5 environment-evidence reader now
+limits the complete `phase5-environment.txt` input to 1 MiB before scanning
+key/value records. This keeps release provenance bounded like the JSON and
+hosted-evidence readers, with a regression covering oversized environment
+artifacts; the hosted Linux and release-publication gates remain open.
+
+Continuation audit (2026-09-20): startup stale-pin cleanup now opens the
+validated `ztap` bpffs directory once with no-follow descriptor semantics and
+removes both owned entries relative to that descriptor. This closes the
+remaining replacement-directory window between path validation and per-pin
+cleanup; Linux regression coverage rejects a symlinked cleanup directory and
+preserves its target, while privileged startup and release evidence remain
+hosted gates.
+
+Continuation audit (2026-09-20): the hosted resource harness and release
+verifier now reject a CPU-usec counter reset between adjacent five-second
+samples, not only a decrease within one sample. This prevents a recreated or
+reset cgroup from producing a fabricated low-CPU interval; regression coverage
+exercises the inter-sample reset while memory.current remains allowed to vary
+as a gauge.
+
+Continuation audit (2026-09-20): the hosted capability-only resource gate and
+release verifier now require exactly the 250 enforced cgroups represented by
+the fixed reference fixture, rather than accepting a larger reported count.
+This keeps the retained resource transcript bound to the documented
+250-Pod/25-policy/2,500-rule shape; a verifier regression covers the
+over-count case while the normal three-sample budget checks remain unchanged.
+
+Continuation audit (2026-09-20): the native-agent resource sampler now
+rejects overflow when combining `/proc` user/system CPU ticks or converting
+resident pages to bytes. Regression coverage exercises both overflow paths
+and an invalid page size, preventing wrapped process-resource evidence from
+under-reporting the supporting CPU/RSS measurement.
+
+Continuation audit (2026-09-21): the native-agent resource sampler now polls
+RSS every 100 milliseconds during each quiet interval and retains the maximum
+observed value, instead of comparing only the interval endpoints. Focused
+host-runnable coverage protects the aggregation from dropping a peak that
+occurs between the start and end samples; the sampler remains supporting
+evidence separate from the authoritative hosted cgroup resource gate.
+
+Continuation audit (2026-09-20): the real-cgroup engine map-memory sampler now
+uses checked capacity arithmetic for bounded, per-CPU, ring-buffer, and
+unbounded cgroup-storage maps, matching the release verifier's overflow rules.
+Host-runnable tests cover valid map shapes, zero CPU metadata, and byte-total
+overflow before the Linux harness can write wrapped capacity evidence.
+
+Continuation audit (2026-09-20): release provenance now cross-checks the
+native-agent resource artifact's recorded process clock-tick rate against the
+retained environment `getconf CLK_TCK` value. A mismatch regression prevents a
+resource transcript from using a different clock conversion while still
+passing the standalone positive-value checks.
+
+Continuation audit (2026-09-20): the standard-library release verifier now
+opens JSON, environment, and hosted evidence files with Unix no-follow
+semantics and validates the opened descriptor as a regular file. This closes
+the final-file replacement window between the prior path check and read while
+retaining a portable non-Unix build fallback.
+
+Continuation audit (2026-09-20): the Linux release evidence opener now
+traverses every parent component through no-follow directory descriptors
+before opening the final file. This closes the parent-directory replacement
+window left by final-component-only protection; Linux regression coverage
+rejects a symlinked parent as well as a symlinked file and FIFO. The Darwin
+development fallback retains final-component no-follow behavior so standard
+macOS paths such as `/var` remain usable.
+
+Continuation audit (2026-09-20): the ten Linux Phase 5 harness writers now
+create their JSON outputs with exclusive, no-follow file creation instead of
+overwriting an existing path. The Makefile's pre-run deletion remains the
+only supported replacement path, so a stale or redirected output cannot be
+silently accepted as fresh release evidence.
+
+Continuation audit (2026-09-20): the Linux Phase 5 writers now also traverse
+and create parent directories through no-follow descriptors before opening the
+final output. Regression coverage rejects symlinked parents while preserving
+creation of missing nested parents, closing the parent-path redirection path
+left by final-file-only protection.
+
+Continuation audit (2026-09-20): `make performance` now rejects a symlink or
+non-directory at the `dist` evidence root before deleting the ten named JSON
+outputs. This keeps the output-directory guard consistent with the harness
+writers' exclusive file creation and prevents cleanup from being redirected
+outside the checkout.
+
+Continuation audit (2026-09-20): the Linux agent performance harness now
+creates a supplied `ZTAP_PHASE5_AGENT_RUN_DIR` one component at a time with
+the existing no-follow directory opener used by runtime locks, closing the
+remaining run-directory symlink redirection path in the harness.
+
+Continuation audit (2026-09-20): the native-agent Phase 5 cgroup fixture
+lifecycle now validates existing directories through no-follow descriptors,
+creates each fixture directory relative to a validated parent, and removes
+only directory entries inspected through that parent. Integration regressions
+cover symlinked parent/final paths and the normal create/remove lifecycle.
+
+Continuation audit (2026-09-20): crash-harness process placement now opens
+`cgroup.procs` relative to the validated cgroup descriptor with
+`O_NOFOLLOW`; regressions cover both a redirected control file and a normal
+relative write.
+
+Continuation audit (2026-09-20): the tag release workflow now rejects a
+symlinked or non-directory `dist` root and hosted-evidence subdirectory before
+`gh run download`, and validates the immutable manifest output path before
+rendering it, rejecting stale pre-existing output as well. This closes the workflow-side path redirection gap already
+guarded by the local performance target and Linux writers.
+
+The GoReleaser re-verification job applies the same no-symlink/non-directory
+guard before downloading the retained raw performance bundle, so the second
+publication-time evidence read cannot be redirected through a checked-out
+`dist` path.
+
+Continuation audit (2026-09-20): `make check-generated` now snapshots the
+working-tree generated bindings before and after pinned regeneration instead of
+comparing them directly with `HEAD`. It therefore validates reproducibility on
+the intentionally dirty Phase 5 tree without rejecting synchronized generated
+changes that belong to the current source diff.
+
+Continuation audit (2026-09-20): the Phase 5 verifier now walks the complete
+evidence tree, rejects any extra, duplicate, symlinked, or non-regular
+`phase5-*.json` entry, rejects any symlinked evidence-tree entry, and requires
+the exact ten named JSON artifacts. This prevents a producer or staging step
+from silently adding a similarly named transcript that is never parsed by the
+release verifier.
+
+The GoReleaser raw-evidence staging step applies the same exact-set check before
+creating the attached archive, so publication cannot retain a different JSON
+bundle from the one independently re-verified.
+
+Continuation audit (2026-09-20): Linux cgroup identity validation now requires
+the resolved target to be a directory before returning its inode identity or
+querying cgroup links. The linker and native resolver therefore fail closed
+with an actionable target-type error for a regular-file substitution, while
+the existing root-containment and inode-mismatch checks remain in place.
+Ordinary-host regressions cover valid in-root directories, non-directory
+targets, outside-root targets, and identity mismatches; privileged Linux and
+release evidence gates remain open.
+
+Continuation audit (2026-09-20): Linux cgroup attachment now retains the
+descriptor opened during root-containment and inode validation instead of
+reopening the resolved path through `link.AttachCgroup`. Attachment queries,
+bpf-link creation, and the legacy `BPF_PROG_ATTACH` fallback all use that
+validated descriptor; legacy fallback links retain their own duplicated
+descriptor and cloned program for retryable cleanup. Linux-targeted compilation
+and ordinary-host regression coverage pass; privileged attachment and hosted
+release evidence remain open.
+
+Continuation audit (2026-09-20): the DaemonSet rolling-update transcript now
+retains the replacement Pod's Kubernetes creation timestamp and the first
+post-restart observation timestamp. The verifier requires both timestamps to
+fall after rollout start and no later than the measured fail-open interval end,
+so distinct names and UIDs cannot be supplied by a pre-existing second Pod.
+Focused hosted-verifier regressions and workflow syntax checks cover the new
+provenance; the real kind rollout remains a hosted gate.
+
+Continuation audit (2026-09-20): the rolling-update transcript now also binds
+the replacement Pod to the old Pod's Kubernetes node. The verifier rejects a
+cross-node DaemonSet Pod, closing the multi-node evidence substitution where a
+pre-existing agent could otherwise satisfy the distinct-name and UID checks.
+Focused verifier coverage and workflow syntax checks pass; the real kind
+rollout remains a hosted gate.
+
+Continuation audit (2026-09-20): the rolling probe now records the
+`smoke-client` node and requires the selected old agent, replacement agent, and
+measured client to share it. The verifier rejects an otherwise valid DaemonSet
+rollout transcript gathered from an unrelated node; focused regressions, the
+full non-privileged `make check` gate, and workflow syntax checks pass, while
+the real kind rollout remains hosted.
+
+Continuation audit (2026-09-20): the standalone Phase 5 JSON-directory
+verifier now rejects every non-regular evidence-tree entry, not only a
+non-regular file using a `phase5-*.json` name. This matches the release
+workflow's pre-archive and downloaded-bundle checks and closes a direct-use
+path where an unrelated FIFO or socket could remain in the retained evidence
+tree; a Unix regression covers the FIFO case.
+
+Continuation audit (2026-09-20): the privileged engine suite now covers
+deleting the last policy selecting a real cgroup. The empty candidate clears
+both policy slots, detaches the owned cgroup link without leaving an orphan,
+and permits traffic to a port that the deleted policy had denied; Linux amd64
+and arm64 integration-tag binaries compile, while execution remains a hosted
+privileged gate.
+
+Continuation audit (2026-09-20): the Linux amd64 and arm64 integration-tag
+test binaries for both the enforcer and CLI packages compile from the current
+Phase 5 source tree. The local policy, enforcer, flow, and standalone evidence
+verifier suites pass; Docker, kind, privileged eBPF execution, and the
+reference performance evidence remain hosted gates because this workstation
+does not provide those tools.
+
+Continuation audit (2026-09-20): flow-monitor subscriptions now treat a nil
+context as an invalid subscription and return an already-closed channel before
+registering a subscriber. This keeps the Phase 5 shutdown path free of
+uncancellable subscribers and cancellation-goroutine panics; both the normal
+and pre-start subscription APIs have regression coverage.
+
+Continuation audit (2026-09-20): Linux Phase 5 agent performance helpers now
+retain the HTTP status listener through startup and pass its descriptor into
+the resource and crash helper subprocesses. This removes the close-and-reopen
+port race from in-process and child-process reference samples; a Linux unit
+regression covers the supplied-listener path and early-startup ownership
+cleanup.
+
+Continuation audit (2026-09-20): the pinned `govulncheck@v1.1.4` dependency
+scan is now a stable `make vulncheck` target backed by the repository-local
+`bin/tools` directory. The aggregate `make check` gate and Migration CI both
+invoke that target, so the local and hosted vulnerability gates use the same
+tool version and installation boundary instead of maintaining separate
+commands.
+
+Continuation audit (2026-09-20): the live flow reader now traverses the bpffs
+root and `ztap` pin directory through descriptor-relative `O_NOFOLLOW`
+handles, opens each stable pin with an `O_PATH` no-follow descriptor, and
+loads the object through that retained descriptor. This removes the
+check-then-open path-swap window while preserving distinct missing-pin and
+symlink diagnostics, including rejection of symlinked intermediate root
+components and invalid descriptor-relative pin names; Linux-targeted reader
+tests and cross-compilation remain local evidence, while a real pinned-map
+streaming run remains hosted.
+
+Continuation audit (2026-09-20): engine startup and validated cgroup
+attachment now reopen canonical bpffs and cgroup roots through
+descriptor-relative no-follow traversal. Root-component substitution can no
+longer redirect pin creation, stale-pin cleanup, or subject validation between
+path validation and the final directory handle; Linux regression coverage
+exercises the new helper, while privileged engine execution remains hosted.
+
+Continuation audit (2026-09-20): `Migration CI` now runs both the pinned
+`zizmor@1.16.3` default workflow audit and its `--pedantic` audit. Local
+actionlint validation covers the added step; hosted zizmor execution remains
+part of the workflow gate.
+
+Continuation audit (2026-09-20): Phase 5 JSON evidence discovery now treats
+case-variant `phase5-*.json` filenames as artifacts too, so an unexpected
+`Phase5-...json` entry cannot sit beside the exact ten-file set unnoticed. The
+release staging count uses the same case-insensitive pattern, and verifier
+regression coverage rejects the variant locally.
+
+Continuation audit (2026-09-20): the native-agent status server now enforces
+the documented `GET`-only contract for `/healthz`, `/readyz`, and `/metrics`,
+returning `405 Method Not Allowed` with `Allow: GET` for other methods. Direct
+status-server shutdown also marks readiness `stopping` before closing the
+listener, so a graceful teardown cannot continue to report an active agent;
+Linux handler regressions cover both method rejection and the shutdown state.
+
+Continuation audit (2026-09-20): flow-monitor subscriptions backed by a
+non-cancellable context such as `context.Background()` no longer create a
+goroutine that can never observe cancellation. The monitor still closes those
+subscriptions during its normal stop/reader-termination lifecycle, and the
+host-runnable flow tests cover the lifecycle explicitly.
+
+Continuation audit (2026-09-20): standalone hosted-evidence discovery now
+rejects every non-regular entry in each evidence tree, including unrelated
+FIFOs or sockets rather than checking only the six required filenames. This
+matches the release workflow's pre-archive guard and closes the direct verifier
+path where an ignored special file could survive into an evidence bundle;
+Darwin/Linux regression coverage exercises an unmatched FIFO.
+
+Continuation audit (2026-09-20): the release performance job now validates
+the root-level `phase5-environment.txt` and `phase5-performance.txt` output
+paths before either `tee` command runs. Existing files, symlinks, and special
+entries fail closed, so a checked-out or stale path cannot be touched before
+the later evidence verifier rejects it; actionlint covers the workflow change.
+
+Continuation audit (2026-09-20): the release performance job's environment
+recording step now enables `set -euo pipefail` explicitly before collecting
+host metadata and no longer masks failures from the required clock-tick or
+cgroup-quota reads with `|| true`. The retained environment transcript is
+therefore either produced from successful metadata commands or the job fails
+before performance evidence is accepted; actionlint covers the workflow
+change.
+
+Continuation audit (2026-09-20): the hosted `Migration CI` eBPF and
+capability-agent jobs now preflight every root-level evidence output before
+their `tee`, append, copy, and diagnostic redirections run. Existing files,
+symlinks, and special entries fail closed, including the capability-agent
+fixture copy and later smoke-log append; this prevents a checked-out or stale
+path from being touched before artifact validation.
+
+Continuation audit (2026-09-20): the tag workflow now preflights the
+GoReleaser `release-notes.md` output before extracting or synthesizing notes.
+An existing, symlinked, or special path fails closed instead of being
+overwritten by the release job.
+
+Continuation audit (2026-09-20): privileged engine integration coverage now
+also exercises deletion of one contribution from an additive selected policy
+set. The retained rule stays allowed after the epoch flip, the deleted rule
+becomes default-deny, and the cgroup link set remains singular with no orphan
+links; hosted execution remains required for the kernel-path result.
+
+Continuation audit (2026-09-20): the hosted reference-fixture verifier now
+requires the exact Pod workload shape emitted by `Migration CI` (one
+`busybox:1.36.1` container with the pinned pull policy and sleep command) and
+rejects extra Pod runtime fields. The same exact-field-set checking now covers
+the Namespace, Pod metadata, NetworkPolicy metadata/spec, selector, peer, and
+port mappings, so a semantically changed or expanded fixture cannot pass from
+aggregate counts alone; the workflow's real kind fixture remains a hosted
+gate.
+
+Continuation audit (2026-09-20): the Phase 5 robustness suite now includes
+bounded seed-only fuzz targets for hosted YAML document splitting/strict
+decoding and IPv4 `ipBlock` exclusion expansion. The fuzz targets exercise
+malformed input without changing the ordinary CI contract, while successful
+IPBlock expansions are checked for bounded, sorted, non-overlapping prefixes
+inside the base CIDR and outside valid exclusions.
+
+Continuation audit (2026-09-20): every Linux real-cgroup integration helper
+now places its child process through `cgroup.procs` opened relative to the
+descriptor that passed cgroup-root containment and inode validation. The
+packet and ordinary integration measurements therefore receive the same
+no-follow control-file protection already used by the crash harness; Linux
+privileged execution remains a hosted gate.
+
+Continuation audit (2026-09-20): hosted resource and rolling-update
+transcripts now use closed structured key/value contracts. The kind workflow
+records the exact reference-fixture status, agent/container/cgroup identity,
+and redirects expected rollout-probe command output so malformed or unknown
+lines cannot be silently ignored. The verifier rejects malformed records,
+unknown keys, duplicate non-sample keys, non-reference fixture scope, and
+cgroup paths outside `/sys/fs/cgroup/`; focused regressions cover malformed and
+unexpected records while hosted execution remains open.
+
+Continuation audit (2026-09-20): the hosted resource probe now validates the
+container runtime ID as a full 64-hex value and passes the derived cgroup name
+directly to `docker exec find` instead of interpolating it into a nested shell
+command. This keeps runtime metadata from changing the command used to locate
+the measured cgroup; the release verifier now applies the same full 64-hex-ID,
+matching cgroup-basename, and canonical in-root path checks, while the resource
+evidence and hosted kind result remain open.
+
+Continuation audit (2026-09-20): sustained flow delivery is now bound to the
+measured policy epoch, selected cgroup, loopback-to-loopback IPv4 UDP egress
+tuple, and expected allowed/blocked action. Warm-up epochs remain ignored,
+source/destination or action mismatches fail closed, and host-runnable
+regressions cover each event filter; the 1,000/s hosted flow gate remains open.
+
+Continuation audit (2026-09-20): the sustained flow matcher now validates both
+source and destination loopback addresses, not only the selected destination
+port and address. A regression covers a non-loopback source event so unrelated
+IPv4/UDP records cannot inflate delivered-event accounting; the hosted flow
+gate remains required.
+
+Continuation audit (2026-09-20): the capability-only DaemonSet contract now
+rejects host network, PID, or IPC namespace sharing and requires the mounted
+cgroup hierarchy to remain read-only. The manifest test covers these source-
+level invariants, and the kind smoke job now checks the rendered Pod contract
+at runtime with fail-fast shell handling. The hosted eBPF and release
+performance transcript pipelines also fail fast, so a failed test cannot be
+masked by a later evidence-marker write; privileged eBPF behavior remains a
+hosted gate.
+
+Continuation audit (2026-09-21): the kind capability smoke now parses the
+rendered agent Pod once and fails closed unless effective false values disable
+host network, PID, and IPC sharing and the `/host/sys/fs/cgroup` mount is
+read-only. The checked-in manifest regression separately requires those three
+fields to be explicit, because Kubernetes serializes false-valued PodSpec
+booleans with `omitempty`. The
+privileged eBPF transcript and release performance pipelines now use
+`set -euo pipefail`, preventing a failed piped test from being hidden by a
+later evidence-marker write; actionlint and the local workflow checks pass.
+
+Continuation audit (2026-09-21): the hosted `ztap flows` smoke now parses the
+captured output as newline-delimited JSON and requires a blocked-egress record.
+This replaces a raw text match, so malformed or incidental output cannot
+satisfy the retained `flow_streaming=passed` marker; actionlint covers the
+workflow change.
+
+Continuation audit (2026-09-21): the standalone Phase 5 verifier now parses
+the archived live-flow transcript independently of the workflow shell check.
+It requires a complete schema-versioned flow object with valid timestamps,
+addresses, policy epoch, cgroup identity, and a blocked egress decision before
+accepting `flow_streaming=passed`; focused verifier regressions cover a marker
+without JSON and an incomplete JSON record. Required-field presence and a
+non-empty decision reason are checked separately from typed zero-value
+validation, so omitted fields cannot pass accidentally.
+
+Continuation audit (2026-09-21): the Phase 5 JSON verifier now derives
+required-field presence from each evidence struct, including nested map-memory
+objects and snapshot arrays, before typed decoding. Missing fields that would
+otherwise become valid Go zero values are rejected; focused regressions cover
+both top-level and nested omissions. Required fields containing JSON `null` are
+also rejected before typed decoding can turn them into zero values.
+
+Continuation audit (2026-09-21): the archived live-flow JSON parser now uses
+the same required-field and non-null contract as the Phase 5 evidence parser.
+This closes the nullable numeric-field bypass for protocols where zero is a
+valid typed value, while preserving the separate protocol, address, timestamp,
+decision, and schema-version checks; focused coverage rejects a null ICMP
+source port.
+
+Continuation audit (2026-09-21): the kind capability smoke's runtime Pod
+contract now validates effective false values for all three host namespace
+fields, while the source manifest regression requires explicit `false` values
+before Kubernetes defaulting/serialization. Its `jq` assertion also requires
+exactly one container, UID/GID 0, a read-only root filesystem, the documented
+security profile, exactly `ALL` in the drop list, and the exact four added eBPF
+capabilities; actionlint and the local JSON contract check pass. The manifest
+regression now requires the same exact drop list rather than merely checking
+that `ALL` is present.
+
+Continuation audit (2026-09-21): the shared Linux no-follow directory opener
+now rejects relative paths at its own boundary before traversing from `/`,
+instead of relying only on each current caller to normalize input. A focused
+Linux regression covers the rejected relative-path case; the existing lock,
+bpffs, and evidence-writer callers continue to pass absolute paths.
+
+Continuation audit (2026-09-21): the Phase 5 verifier now binds the native
+agent activation artifact to the documented `/sys/fs/cgroup` and `/sys/fs/bpf`
+roots instead of accepting arbitrary absolute paths. Focused regressions cover
+both substituted roots, so an activation transcript cannot quietly move the
+reference measurement to an unreviewed filesystem hierarchy.
+
+Continuation audit (2026-09-21): the native policy compiler now has a focused
+full-snapshot deletion regression. Removing one of two additive policies leaves
+the other rule contribution intact, while removing both produces no subjects or
+rules; this protects the informer-driven replacement path from retaining stale
+policy state. Privileged packet execution remains a hosted acceptance gate.
+
+Continuation audit (2026-09-21): the flow monitor now checks the reader's
+availability contract before entering its running lifecycle and fails closed
+for unavailable readers. The Linux pinned-map wrapper also reports nil or
+closed state as unavailable, with a regression proving an unavailable reader
+cannot start or make the monitor appear active; real pinned-map streaming still
+requires the hosted Linux gate.
+
+Continuation audit (2026-09-21): the Linux ring-buffer reader now fails closed
+for nil or zero-value flow-reader state at both the availability and direct
+startup boundaries. A Linux-only regression prevents an uninitialized reader
+from entering `ringbuf.NewReader`; pinned-map flow streaming still requires the
+hosted Linux gate.
+
+Continuation audit (2026-09-21): the archived flow transcript verifier now
+treats whitespace-only decision reasons as missing provenance. This keeps the
+required reason field semantically non-empty instead of accepting a typed
+string that contains no usable decision explanation; focused verifier coverage
+rejects the whitespace-only record.
+
+Continuation audit (2026-09-21): the hosted resource producer and release
+verifier now require the containerd runtime identity to be exactly 64
+hexadecimal characters and bind the canonical cgroup basename to that same
+identity before sampling counters. Shortened IDs and mismatched cgroup paths
+are rejected; hosted kind execution remains required for the measurement.
+
+Continuation audit (2026-09-21): the reference hosted-evidence regression now
+mutates the recorded cgroup basename to a different valid 64-hex container ID
+and runs the complete bundle verifier, not only the path helper. This protects
+the cross-field identity binding at the release-verification boundary; hosted
+kind execution remains required for the real resource measurement.
+
+Continuation audit (2026-09-21): hosted resource identity validation now also
+requires the cgroup path to remain in one of the two supported containerd
+systemd hierarchies, `kubepods.slice` or
+`kubelet.slice/kubelet-kubepods.slice`, matching the runtime resolver contract.
+The workflow and release verifier reject a valid-looking container scope under
+an unrelated system slice; hosted kind execution remains required.
+
+Continuation audit (2026-09-21): the hosted flow smoke now records the smoke
+client and server Pod IPv4 addresses and requires the blocked TCP/8080 flow
+record to match that exact tuple. The workflow and archived release verifier
+both reject an unrelated blocked egress record, so the success marker cannot be
+satisfied by stale or incidental flow traffic; live pinned-map execution
+remains a hosted gate.
+
+Continuation audit (2026-09-21): rolling-update evidence now requires the
+replacement Pod's first observation timestamp to be at or after its recorded
+creation timestamp, in addition to bounding both inside the rollout interval.
+Focused verifier coverage rejects an inverted Pod lifecycle; the real
+DaemonSet rollout measurement remains hosted.
+
+Continuation audit (2026-09-21): the hosted resource producer now searches
+only the two supported containerd hierarchy roots instead of recursively
+searching the entire cgroup mount and filtering afterward. It rejects an ID
+that appears in both supported roots before sampling counters; the release
+verifier and hosted kind measurement remain required.
+
+Continuation audit (2026-09-21): rolling-update evidence now records a
+replacement Pod on the old agent's node only after Kubernetes reports it
+Running and Ready, retaining the explicit `replacement_ready=true` marker.
+The verifier requires that marker and focused coverage rejects a false
+readiness result; the real DaemonSet rollout measurement remains hosted.
+
+Continuation audit (2026-09-21): rolling-update evidence now selects the
+baseline old Pod uniquely on the smoke-client node only when Kubernetes reports
+it Running and Ready, retaining `old_ready=true`. The verifier requires that
+baseline marker as well as the replacement marker, preventing an absent or
+unready old agent from being presented as the source of the fail-open interval;
+the real DaemonSet rollout remains hosted.
+
+Continuation audit (2026-09-21): the tag workflow's publication preflight now
+also requires exact `old_ready=true` and `replacement_ready=true` rolling
+markers before upload, matching the standalone verifier's closed schema rather
+than deferring those readiness checks until the later re-verification step.
+
+Continuation audit (2026-09-21): the capability smoke, resource sampler, and
+live flow reader now select an agent Pod only when exactly one labeled Pod is
+Running and Kubernetes Ready, instead of relying on DaemonSet list order. This
+prevents a terminating or stale Pod from becoming the source of retained
+metrics, flow, or security-context evidence; the hosted kind run remains
+required.
+
+Continuation audit (2026-09-21): release provenance now explicitly sorts
+successful same-commit `Migration CI` push runs by creation time and selects the
+newest one, rather than relying on the GitHub API response order when resolving
+the trusted hosted-evidence run.
+
+Continuation audit (2026-09-21): the first tag-workflow evidence preflight now
+requires exactly one copy of each hosted evidence filename across the downloaded
+evidence roots, rejecting duplicates before raw evidence upload instead of
+deferring that invariant to the GoReleaser re-verification job.
+
+Continuation audit (2026-09-21): the rolling producer now accepts a replacement
+only when exactly one Running/Ready candidate remains on the old Pod's node;
+transient multi-Pod overlap is allowed to settle without selecting a candidate
+by list order before recording the fail-open evidence.
+
+Continuation audit (2026-09-21): the rolling producer's replacement query now
+filters Kubernetes candidates on the Ready condition before selecting the
+unique same-node Pod and retains the observed readiness value instead of
+unconditionally writing `replacement_ready=true`. This closes the producer-side
+gap that the standalone verifier and release preflight could not detect from a
+forged but structurally valid transcript; hosted rollout execution remains
+required.
+
+Continuation audit (2026-09-21): the image publication gate now parses the raw
+registry index instead of relying on platform-name text matches. It requires
+exactly two runnable descriptors consisting of one Linux amd64 and one Linux
+arm64 manifest, validates each descriptor digest, requires an attestation
+descriptor, and confirms that both the full release tag and its short alias
+resolve to the digest returned by the push action.
+
+Continuation audit (2026-09-21): the Phase 5 JSON verifier now compares every
+retained artifact's kernel-path or measurement scope against the exact literal
+emitted by its checked-in harness. Regression coverage for all ten JSON files
+proves that replacing a real fixture description with a merely non-empty or
+caller-reworded scope fails bundle verification; the focused verifier suite
+passes locally, while the privileged Linux measurements remain open.
+
+Continuation audit (2026-09-21): hosted evidence discovery now rejects a
+case-variant filename for each required transcript, and GoReleaser staging
+uses the same case-insensitive uniqueness check before copying retained files.
+This prevents a contradictory `Evidence.txt`-style sibling from being carried
+through raw publication while the canonical filename is verified.
+
+Continuation audit (2026-09-21): hosted resource and rolling transcript
+validation now requires every recorded resource, old, and replacement Pod name
+to use the shipped `ztap-agent-` DaemonSet prefix. A valid cgroup or rollout
+timeline attached to an unrelated workload name is rejected before release
+verification.
+
+Continuation audit (2026-09-21): hosted resource and rolling producers now
+retain the agent namespace and the verifier requires every recorded agent
+identity to use the shipped `ztap-system` namespace in addition to the
+`ztap-agent-` DaemonSet prefix. A correctly prefixed Pod name from another
+namespace can no longer satisfy the release evidence schema.
+
+Continuation audit (2026-09-21): the release performance preflight and the
+downloaded raw-evidence check now discover required hosted filenames
+case-insensitively, require exactly one match, and require the matched
+basename to be canonical. Case-variant evidence siblings therefore fail
+before raw upload or archive staging instead of waiting for the later
+GoReleaser verifier.
+
+Continuation audit (2026-09-21): the release preflight now also requires the
+exact `ztap-system` namespace and `ztap-agent-` Pod-name markers in the
+resource and rolling transcripts before it reports hosted evidence ready for
+publication, matching the standalone verifier's identity boundary.
+
+Continuation audit (2026-09-21): capability-agent evidence steps now run
+inside explicit `set -euo pipefail` subshells piped to `tee`, including the
+fixture, resource, rolling, and appended flow transcripts. A `tee` failure or
+failed measurement command now reaches the step status instead of relying on
+process substitution whose writer exit could be detached from the gate.
+
+Continuation audit (2026-09-21): standalone hosted identity validation now
+also enforces the shipped Kubernetes Pod-name shape—lowercase alphanumeric
+and hyphen characters, an alphanumeric suffix boundary, and the 253-byte
+maximum—so a prefixed but malformed name cannot pass outside the release
+shell preflight. Regression coverage exercises malformed and overlong names.
+
+Continuation audit (2026-09-21): the real-cgroup reference, flow, packet,
+agent activation/reconciliation/event, and resource harnesses now write their
+raw JSON only after their final fixture, accounting, latency, throughput, or
+CPU/RSS assertions pass. A failed local measurement therefore cannot leave a
+stale success-shaped artifact for a later verifier run; hosted execution and
+the final release attachment remain required.
+
+Continuation audit (2026-09-21): `make integration` now runs both the Linux
+enforcer and CLI package trees, including Phase 5 agent/flow-reader lock,
+cgroup-path, and evidence-writer coverage. The target still refuses to run on
+non-Linux hosts, while hosted privileged execution remains required.
+
+Continuation audit (2026-09-21): the hosted privileged eBPF job now executes
+the complete integration-tagged enforcer and CLI package trees, rather than
+filtering the runtime job to only `TestLinuxEngine`. Phase 5 support tests are
+therefore executed on Linux as well as compiled, while the capability-only
+kind job remains the authoritative Kubernetes acceptance gate.
+
+Continuation audit (2026-09-21): the Linux integration contract now vet-checks
+the integration-tagged enforcer and CLI package trees before execution. This
+catches static issues in the Linux-only Phase 5 harnesses that ordinary
+non-Linux `go vet ./...` cannot see.
+
+Continuation audit (2026-09-21): the native-agent performance producers now
+self-check the normal and SIGKILL fixture object sets before starting a
+measurement. They require exactly one default Namespace, one node, 250 Pods,
+25 NetworkPolicies, the complete zero-padded Pod and policy name sets, unique
+Pod UIDs, Running Pods with one container status, one Pod bucket per policy,
+and a 2,500-rule projected subject-to-peer shape, so duplicate, reduced, or
+reshaped fake-informer objects fail before they can produce budget-shaped
+evidence.
+
+Continuation audit (2026-09-21): native-agent Phase 5 activation predicates
+now require exact `ztap_enforced_cgroups` and `ztap_compiled_rules` gauges for
+the reference fixture and after synchronized policy-event activation, plus
+exact 251 enforced cgroups and 2,510 compiled rules after the Pod-start
+addition. Extra stale or incomplete kernel state can no longer satisfy a
+fixed-shape measurement through an at-least comparison, and duplicate samples
+for any unlabelled gauge are rejected rather than resolved by first-match
+parsing.
+
+Continuation audit (2026-09-21): the authoritative kind resource transcript
+now samples `memory.current` every 100 milliseconds during each five-second
+interval and records `peak_memory_current_bytes` alongside the raw endpoint
+counters. The standalone verifier requires the peak to cover both endpoints
+and recomputes each memory value and aggregate from it; focused regressions
+cover a middle-interval peak and a forged peak below an endpoint. Hosted kind
+execution remains required for the actual resource budget result.
+
+Continuation audit (2026-09-21): the hosted capability smoke now probes
+`/healthz`, `/readyz`, and `/metrics` after active enforcement, verifies the
+ready JSON state, and sends POST requests to all three endpoints to require
+`405 Method Not Allowed`. It retains `status_endpoints=passed`, and both the
+release preflight and standalone hosted verifier require that marker; local
+HTTP tests continue to cover the shutdown and method contracts, while the live
+kind probe remains hosted.
+
+Continuation audit (2026-09-21): the sustained flow-accounting producer now
+fails closed for every measured-epoch event-contract mismatch, including
+schema, cgroup, protocol, direction, family, source, destination, and port
+identity. Warm-up epochs remain ignorable, but an unrelated record in the
+measured epoch can no longer be silently discarded; ordinary-suite regressions
+cover each mismatch class and the hosted real-cgroup gate remains required.
+
+Continuation audit (2026-09-21): native-agent performance polling now accepts
+metrics only from an HTTP `200 OK` response. Non-success responses are closed
+and retried, so a failure page containing a success-shaped metric body cannot
+satisfy an activation, reconciliation, event, Pod-start, restart, crash, or
+resource predicate.
+
+Continuation audit (2026-09-21): the hosted resource producer now parses each
+reference-fixture gauge as one exact unsigned, unlabelled sample, requires
+`ztap_agent_enforcing=1` and a non-zero active policy epoch alongside the exact
+250-cgroup/2,500-rule shape, and retains those active-state markers. The
+standalone verifier and release preflight require the same markers, preventing
+stale or duplicate metric samples from being presented as the resource
+measurement boundary; hosted kind execution remains required.
+
+Continuation audit (2026-09-21): the hosted reference-fixture producer now
+validates the live Kubernetes objects after apply, not only the generated YAML
+and aggregate counts. It requires the exact 250 zero-padded Pod names, Running
+and Ready status, unique Pod UIDs, ten Pods in each bucket, the exact 25 policy
+names, bucket-matched selectors, ten IPv4 peers per policy, and TCP/10000
+egress shape, retaining `fixture_live_shape=verified`. The release preflight and
+standalone verifier require that marker; hosted kind execution remains required.
+
+Continuation audit (2026-09-21): the hosted smoke classification probe now
+rejects duplicate or labeled gauge samples, requires exact
+`ztap_agent_enforcing=1` and `ztap_enforced_cgroups=1`, and requires a
+non-zero active policy epoch. Empty endpoint responses remain retryable, while
+success-shaped but malformed metric bodies fail closed before the packet smoke.
+
+Continuation audit (2026-09-21): the rolling-update producer now probes the
+unselected control client before rollout and during every selected-client
+sample. It aborts instead of classifying an unavailable smoke server or
+dataplane as policy blocking, so the retained fail-open interval is bounded to
+the selected policy path; hosted rollout execution remains required.
+
+Continuation audit (2026-09-21): the release publication preflight now uses
+exact-line matching for the smoke, fixture, resource, and rolling success
+markers that the standalone verifier treats as exact. A transcript with a
+success string embedded in a conflicting or extended line is rejected before
+raw evidence upload; hosted release execution remains required.
+
+Continuation audit (2026-09-21): the hosted packet smoke now parses the
+blocked-default-deny counter as exactly one unsigned metric sample, treats an
+initial zero as retryable until the denied request is observed, rejects
+duplicate or malformed matching samples, and retains the normalized positive
+value as `packet_decisions_blocked_default_deny`. The standalone verifier and
+release preflight require that transcript record as well; hosted execution
+remains required.
+
+Continuation audit (2026-09-21): the release publication preflight now applies
+the standalone verifier's exact-once and conflicting-key semantics to fixed
+hosted success markers. Duplicate `passed` lines or a `failed` line alongside
+the expected keyed result therefore fail before the raw evidence is accepted;
+hosted release execution remains required.
+
+Continuation audit (2026-09-21): variable-valued hosted release markers now
+require exactly one line with the expected key prefix and shape, covering Pod
+names, sample records, timestamps, node identities, and fail-open intervals.
+Malformed or duplicated variable records fail the publication preflight before
+the standalone verifier runs; hosted release execution remains required.
+
+Continuation audit (2026-09-21): the hosted capability smoke now checks both
+the `405 Method Not Allowed` response and the `Allow: GET` header for POSTs to
+`/healthz`, `/readyz`, and `/metrics`, matching the local GET-only handler
+contract; hosted execution remains required.
+
+Continuation audit (2026-09-21): native-agent Phase 5 metric predicates now
+reject NaN and infinite samples in addition to duplicate or malformed lines.
+This prevents a non-finite active policy epoch from satisfying the predicate's
+lower-bound check; regression coverage remains in the Linux integration-tag
+test package, while real agent execution remains hosted.
+
+Continuation audit (2026-09-21): Phase 5 metric predicates now reject a
+labelled series from the same metric family even when an exact unlabelled
+sample is also present. The Linux performance helper and hosted capability
+smoke parser therefore cannot ignore an extra labelled gauge or counter while
+accepting the canonical sample; focused regression coverage and workflow
+syntax checks pass locally, while live agent execution remains hosted.
+
+Continuation audit (2026-09-21): Linux Phase 5 helper status readers now close
+their pipe reader before failing a timeout, allowing the blocked read goroutine
+to observe EOF and finish. Native-agent metric polling also closes any response
+returned alongside a request error before retrying. The Linux integration-tag
+source compiles and the local race suite passes; privileged execution remains
+hosted.
+
+Continuation audit (2026-09-21): the Linux flow reader now watches its caller
+context while the ring-buffer read is blocked and closes the reader on
+cancellation, so direct flow-reader users do not wait for a later event or
+explicit stop to finish shutdown. A blocking-reader cancellation regression
+and the local race suite pass; pinned-map streaming remains a hosted runtime
+gate.
+
+Continuation audit (2026-09-21): the pinned `ztap flows` reader wrapper now
+rejects an already-canceled command context before checking map ownership or
+starting its reader/status goroutines. Linux wrapper regression coverage and
+the local race suite pass; the pinned-map runtime gate remains hosted.
+
+Continuation audit (2026-09-21): pinned flow-reader termination now preserves
+non-cancellation status, reader-stop, and reader-exit errors regardless of
+which monitor finishes first, while suppressing only cancellation generated by
+the wrapper's own coordinated shutdown. Table-driven Linux wrapper coverage
+passes; pinned-map execution remains hosted.
+
+Continuation audit (2026-09-21): pinned-agent status polling now gives caller
+cancellation precedence before its first or next map lookup, preventing an
+already-canceled flow command from being reported as a missing or unreadable
+status map. Linux regression coverage passes; pinned-map execution remains
+hosted.
+
+Continuation audit (2026-09-21): native-agent startup now rejects an empty or
+nil informer cache-sync callback set before invoking client-go. This prevents a
+miswired agent from treating an empty cache as synchronized and avoids a nil
+callback panic; the real informer/cache and privileged runtime gates remain
+hosted.
+
+Continuation audit (2026-09-21): the public `flows` command now rejects an
+already-canceled context before acquiring the node lock or opening pinned maps.
+Linux coverage verifies that cancellation leaves no run-directory side effect;
+privileged pinned-map streaming remains hosted.
+
+Continuation audit (2026-09-21): native-agent startup now treats an
+already-canceled context as a clean exit before acquiring its node lock or
+starting HTTP/informer state, while still closing a transferred status listener.
+Linux lifecycle coverage verifies the no-side-effect path; privileged engine and
+Kubernetes execution remain hosted.
+
+Continuation audit (2026-09-21): native-agent reconciliation now gives caller
+cancellation precedence before publishing a successful snapshot, readiness, or
+success telemetry. A regression cancels from inside the reconcile callback and
+verifies that the starting state remains unpublished; privileged execution
+remains hosted.
+
+Continuation audit (2026-09-21): native-agent cache synchronization now checks
+caller cancellation once more after the informer callbacks report success. This
+closes the startup race where a callback can return true concurrently with
+shutdown and otherwise allow engine or HTTP state creation; the focused
+cache-sync regression passes locally, while real informer and privileged engine
+execution remain hosted.
+
+Continuation audit (2026-09-21): the shared flow monitor now rejects an
+already-canceled context before mutating monitor state, and its reader startup
+handoff checks cancellation again before invoking the platform reader. The
+host-executable cancellation regression passes locally; pinned-map streaming
+and the hosted runtime gate remain required.
+
+Continuation audit (2026-09-21): the hosted live-flow smoke and standalone
+verifier now require the exact `default_deny` reason in addition to the blocked
+TCP tuple, so quarantine, malformed, or other blocked decisions cannot satisfy
+the default-deny flow gate. Focused verifier and workflow syntax checks pass
+locally; real pinned-map flow execution remains hosted.
+
+Continuation audit (2026-09-21): the hosted live-flow `jq` predicate now also
+requires the non-empty timestamp, positive integer policy epoch and cgroup ID,
+numeric source/destination ports, schema version 1, and the exact blocked TCP
+tuple/reason. Migration CI therefore rejects malformed flow metadata before
+retaining `flow_streaming=passed`; real pinned-map execution remains hosted.
+
+Continuation audit (2026-09-21): the Linux native-agent lifecycle regression
+now queries the real status listener during a dry-run reconciliation and
+verifies `/readyz` remains HTTP 503 with reason `dry_run` while
+`ztap_agent_enforcing` remains zero in `/metrics`. This strengthens the local
+dry-run contract check; hosted Kubernetes lifecycle execution remains required.
+
+Continuation audit (2026-09-21): hosted live-flow validation now requires a
+non-zero TCP source port in addition to the exact blocked default-deny tuple.
+The standalone verifier, Migration CI predicate, and focused regression reject
+the malformed zero-port identity before accepting `flow_streaming=passed`;
+real pinned-map execution remains hosted.
+
+Continuation audit (2026-09-21): the shared flow monitor now owns a derived
+reader context and cancels it during `Stop`, including the handoff window
+between marking a reader invoked and entering its `Start` method. This prevents
+shutdown from waiting forever when a reader's own `Stop` is a no-op during that
+window; a context-blocking reader regression and the local race suite pass.
+Pinned-map streaming remains a hosted runtime gate.
+
+Continuation audit (2026-09-21): the `ztap flows` startup path now closes the
+pre-start monitor subscription and the already-opened pinned reader when
+monitor startup fails, including a cancellation race. Cleanup failures remain
+joined with the startup error; focused CLI race coverage passes and live pinned
+map execution remains hosted.
+
+Continuation audit (2026-09-21): the Linux ring-buffer reader now rechecks its
+caller context after waiting for its state lock and before opening a reader.
+This closes the remaining cancellation window between the initial startup
+check and ring-reader creation; a locked-start regression verifies that no
+reader state is created after cancellation, while pinned-map execution remains
+hosted.
+
+Continuation audit (2026-09-21): the pinned flow-reader wrapper now performs
+the same post-lock cancellation check before publishing ownership and starting
+its inner reader/status pollers. A locked-start regression verifies that a
+canceled command creates no running-reader state; pinned-map execution remains
+hosted.
+
+Continuation audit (2026-09-21): native-agent startup now rechecks cancellation
+after acquiring the node lock and before starting its HTTP listener or informer
+factories. A post-lock cancellation regression observes the supplied listener
+and verifies that canceled startup creates no HTTP state; Kubernetes and
+privileged engine execution remain hosted.
+
+Continuation audit (2026-09-21): all locally executable Phase 5 gates now pass
+on the current working tree. The `make check` subcommands pass for build,
+race tests, vet, formatting, golangci-lint, actionlint, and the pinned
+`govulncheck@v1.1.4` scan; `make check-generated` reproduces the generated
+bindings; all three retained validator examples plus the documented stdin path
+validate; and the Kubernetes manifest tests pass with the repository-local Go
+cache. The Linux integration-tag enforcer and CLI test binaries also compile
+for amd64 and arm64, and Linux-targeted vet passes; these are compile-only
+checks on this macOS host and do not claim privileged runtime behavior. Docker,
+kubectl, and kind are unavailable on this macOS host, so the
+Docker/image scan, privileged Linux eBPF and Kubernetes acceptance, Section
+14.5 measurements, and release publication/provenance archive remain hosted
+gates. The Phase 5 implementation checklist is 90/90 complete (100%), while
+the final acceptance checklist is 12/39 complete (30.8%), with 27/39 hosted or
+release items still open (69.2% remaining); no unchecked hosted result is
+inferred from local source or unit evidence.
+
+Continuation audit (2026-09-21): the connected GitHub repository confirms that
+`codex/streamline-ztap` still points to committed SHA
+`5eda8d7d2124f25acc1c1c997305550a542e0f66`. Migration CI run `35420912995`
+and its `ebpf-engine-evidence` and `capability-agent-evidence` artifacts passed
+for that committed SHA, not for the current uncommitted Phase 5 working-tree
+diff. The live `main` branch protection record is strict and contains only the
+exact `Required CI` context in both required-status representations. The
+current Phase 5 implementation count therefore remains 90/90, while final
+acceptance remains 12/39; no remote branch, commit, or pull request was changed
+during this audit.
+
+Continuation audit (2026-09-22): the release path now keeps the GitHub release
+in draft state until the multi-architecture image is published and verified and
+the immutable install manifest is attached. Engine map pinning retains the
+validated bpffs directory descriptor through `BPF_OBJ_PIN` and shutdown
+cleanup, and the legacy cgroup attach path reaches its override fallback when
+the kernel reports an unsupported multi-attach flag. Dependabot's monthly
+schedules no longer use the weekly-only `day` field. The maintained policy and
+deployment guides distinguish cluster-wide selector peers from node-local
+subjects, require a CNI without another NetworkPolicy enforcer rather than a
+CNI-free cluster, and record that exact Phase 5 CI and manual kernel releases
+remain pending hosted validation.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.
 - [x] Convert and validate the three examples through `ztap validate`.
-- Finalize every Makefile target listed in Section 10.2.
-- [x] Replace the temporary `Migration CI` jobs with the Linux CI jobs while preserving the workflow file and `Required CI` check name; hosted acceptance and branch-protection verification remain open.
-- Recreate the simplified release workflow only after the final CI and acceptance gates pass.
-- Restore narrowed monthly Dependabot updates and verify branch protection still requires `Required CI`.
-- Verify `make clean` leaves no tracked or ignored workspace debris; artifact deletion itself was completed in Phase 0.
+- [x] Finalize every Makefile target listed in Section 10.2; build, test, vet, format, pinned `golangci-lint`/`actionlint`, the pinned `govulncheck@v1.1.4` scan, the aggregate `make check`, and the pinned LLVM 18 generated-code checks pass locally, while image vulnerability scanning, Docker, and privileged Linux execution remain environment-gated.
+- [x] Replace the temporary `Migration CI` jobs with the Linux CI jobs while preserving the workflow file and `Required CI` check name; hosted acceptance remains open, while the live branch-protection record has been verified separately.
+- [x] Add the final generated-code, image-scan, manifest/example, documented stdin-validator, reference-fixture offline validator, live `ztap flows` smoke, explicit `make docker`, and required-job aggregation gates to `Migration CI`; hosted execution remains open.
+- [x] Recreate the simplified tag-only release workflow with protected-branch ancestry, final-gate checks bound to the successful `Migration CI` push run for the exact tagged commit, propagation of that trusted run ID into the performance job and retained environment evidence, GoReleaser Linux artifacts, one multi-architecture image, SBOM/provenance, an immutable install manifest, trusted same-commit hosted eBPF/capability-agent evidence, and a persistent raw Phase 5 evidence asset.
+- [x] Add a standard-library verifier for the ten Phase 5 JSON artifacts and the required hosted evidence markers, and run it before release publication; raw hosted evidence remains required separately. The verifier uses strict JSON schemas, rejects unknown or case-variant JSON object fields plus trailing or multiple values, validates RFC3339 timestamps, requires every artifact's run ID, accepts expected release and trusted Migration CI provenance, parses the retained environment record with an allowed-key schema, cross-checks its Phase 5 run ID and Go/OS/architecture/CPU metadata against the producer record, recomputes derived aggregates and map-capacity bytes, explicitly models unbounded cgroup storage, requires the exact generated engine map inventory and dimensions, rejects unknown/duplicate/reordered map entries, cross-checks the shared run ID and exact two-CPU environment plus native-agent kernel provenance, validates the hosted flow-streaming marker against the recorded smoke client/server IPv4 TCP/8080 tuple, validates the offline-validator marker, fixture/resource/rolling evidence and timestamp arithmetic, requires three ordered hosted resource sample records with raw CPU-usec and `memory.current` counters, a 100-ms peak-memory polling marker, and the documented five-second intervals, recomputes each hosted resource sample and its maxima from the recorded peak counter before applying budgets, rejects duplicate required hosted keys, requires producer provenance metadata, requires the flow transcript to record the full reference fixture shape and scope, and enforces the fixed fixture/budget constants.
+- [x] Bind every retained Phase 5 JSON artifact's kernel-path or measurement scope to the exact literal emitted by its checked-in producer harness; mutate-and-reject regression coverage covers all ten artifacts so a non-empty caller-reworded scope cannot detach a budget from the documented real measurement path. The focused verifier suite passes locally; the underlying privileged Linux/eBPF and hosted acceptance gates remain open.
+- [x] Bound strict JSON evidence key scanning to a finite nesting depth, reject case-variant fields that the Go decoder could otherwise match, and cover excessively nested and case-variant retained artifacts with regression tests.
+- [x] Tighten Go provenance parsing so recorded environment and JSON evidence must use a dotted numeric Go release token, rather than merely a non-empty or `go`-prefixed string; cover malformed version tokens and a valid Linux toolchain with regression tests.
+- [x] Harden the hosted fixture transcript verifier so the exact 250-Pod/25-policy shape also carries kind-specific API versions, the exact `ztap-performance` Namespace and object namespaces, complete zero-padded Pod and NetworkPolicy name sets, and per-object bucket markers; validate every policy's matching selector bucket, exact Egress policy type, TCP port 10000, and ten peer CIDRs from their structured YAML paths so aggregate totals and arbitrary matching lines cannot hide per-policy corruption; parse every fixture document as strict, depth-bounded YAML so duplicate keys, non-string mapping keys, anchors, aliases, merge keys, malformed documents, and excessive nesting cannot hide behind line counts; cover omitted markers, misplaced fields, policy semantic drift, per-policy bucket/peer-shape corruption, non-string keys, indirection, and excessive nesting with regression tests.
+- [x] Require the hosted reference fixture's exact kind-specific field sets and Pod workload spec, including the pinned image, pull policy, container name, and command; reject unknown Pod runtime fields and policy/selector/peer/port shape expansion with local semantic-drift regressions.
+- [x] Add bounded seed-only fuzz targets for hosted YAML splitting/strict decoding and IPv4 `ipBlock` exclusion expansion, with regression seeds and output invariants.
+- [x] Make hosted evidence discovery reject symlink roots, symlink entries, and non-regular matched paths before reading release evidence.
+- [x] Keep Linux cgroup attachment on the descriptor validated for root containment and inode identity, including the legacy attach fallback and retryable cleanup; privileged attachment evidence remains hosted.
+- [x] Reopen canonical Linux engine bpffs and cgroup roots through descriptor-relative no-follow traversal before pin creation, stale-pin cleanup, or subject validation; privileged execution remains hosted.
+- [x] Make direct JSON, environment, and hosted-evidence readers reject symlink files and non-regular paths before reading evidence.
+- [x] Bound hosted-evidence reads at the 4 MiB verifier limit and cover oversized artifacts without an unbounded read.
+- [x] Bound the complete Phase 5 environment-evidence read at 1 MiB before key/value parsing and cover oversized environment artifacts with a regression test.
+- [x] Bind the final reference map-memory summary's memlock availability and byte readings exactly to the retained final snapshot; add a regression test for a forged summary reading.
+- [x] Make the hosted kind resource transcript retain raw CPU and memory counters, poll `memory.current` every 100 ms, record each interval's peak counter, reject counter resets or peaks below endpoint readings, and recompute every derived sample before applying the fixed resource budgets.
+- [x] Require the hosted resource transcript's non-empty scope provenance before accepting its samples and budget summary.
+- [x] Correct the native-agent resource harness to calculate CPU from process tick deltas and reject invalid measurement intervals; add focused calculation tests.
+- [x] Make the sustained flow-accounting harness reject per-counter cumulative resets, counter-shape drift, and uint64 summation overflow before writing Phase 5 evidence; bound the recorded duration to the documented 60-second run plus a fixed five-second scheduling tolerance; keep the identity-keyed delta helpers and regression tests in the ordinary package unit suite so those guards execute on the development host as well as in the Linux harness.
+- [x] Add a fuzz target for the fixed-size binary flow-event decoder; malformed sizes and schemas are rejected, while valid 72-byte events convert without panics or unbounded input-derived allocation.
+- [x] Make `make performance` remove its ten explicit JSON outputs before each run so failed reruns cannot reuse stale evidence.
+- [x] Re-run the complete Phase 5 verifier in the GoReleaser job against the downloaded, trusted evidence bundle before publication.
+- [x] Require exactly one exact-name `go test -v` pass marker for each of the ten retained Phase 5 harnesses in the raw performance log before upload and repeat that exact-once check in the GoReleaser publication job.
+- [x] Reject duplicate local or hosted evidence filenames while staging the publication-time Phase 5 verification bundle.
+- [x] Reject case-variant hosted evidence filenames during standalone discovery, release preflight, and GoReleaser staging so canonical transcripts cannot coexist with ignored name variants.
+- [x] Make the release preflight and standalone verifier require the exact hosted agent namespace and valid `ztap-agent-` Pod-name markers before raw evidence upload or release verification.
+- [x] Make every capability-agent evidence-producing step propagate both measurement and transcript-writer failures through an explicit `pipefail` pipeline.
+- [x] Bind hosted resource and rolling transcript Pod identities to the shipped `ztap-agent-` DaemonSet name prefix, with regression coverage for an unrelated workload name.
+- [x] Retain and verify the shipped `ztap-system` namespace for hosted resource and rolling transcript Pod identities, with regression coverage for unrelated namespaces.
+- [x] Reject symlink and non-regular local or hosted entries before uploading Phase 5 evidence, and repeat the same check in the downloaded evidence tree before archiving or re-verifying release evidence.
+- [x] Validate the publication digest shape and require exactly one non-`:latest` image reference in the rendered immutable install manifest before attaching it to the release.
+- [x] Parse the published raw image index and require exactly two runnable descriptors consisting of one Linux amd64 and one Linux arm64 manifest plus an attestation descriptor, with both explicit release aliases resolving to the pushed digest.
+- [x] Record the semantic release ref, compare it with the current release tag during both performance verification and GoReleaser re-verification, and validate the `release.yml`/`push` provenance in `phase5-environment.txt` so retained performance evidence is bound to the publication workflow as well as its commit and trusted Migration CI run.
+- [x] Pin the GoReleaser release binary to an exact checked-in workflow version (`v2.9.0`).
+- [x] Make flow-monitor subscriptions reject nil contexts without registering
+  an uncancellable subscriber, and cover both normal and pre-start APIs.
+- [x] Avoid a permanent cancellation watcher for valid non-cancellable flow
+  subscription contexts; the monitor lifecycle still closes those channels.
+- [x] Keep the Phase 5 agent performance HTTP listener open through startup,
+  including descriptor transfer to the resource and crash helper subprocesses.
+- [x] Route every Linux real-cgroup integration helper's `cgroup.procs` write
+  through a validated no-follow cgroup descriptor, including packet and
+  crash-performance helpers; hosted privileged execution remains required.
+- [x] Make hosted resource and rolling-update transcripts closed structured
+  key/value evidence: require the exact reference-fixture scope and status,
+  retain agent/container/cgroup identity, reject malformed/unknown/duplicate
+  records, keep expected rollout-probe output out of the retained schema, and
+  validate full 64-hex container IDs whose canonical in-root cgroup basename
+  matches the recorded identity and whose path uses a supported containerd
+  systemd hierarchy, without nested-shell metadata interpolation; hosted kind
+  execution remains required.
+- [x] Bind sustained flow-accounting delivery to the measured event contract:
+  selected cgroup, policy epoch, loopback-to-loopback IPv4 UDP egress tuple,
+  and the expected allowed/blocked action; ignore warm-up epochs and fail
+  closed on source/destination or action mismatches, with ordinary-suite
+  coverage for each filter.
+- [x] Lock down the capability-only DaemonSet contract so manifest validation
+  rejects host network, PID, or IPC namespace sharing and requires the mounted
+  cgroup hierarchy to remain read-only; the kind smoke job checks the same
+  rendered Pod contract, while privileged runtime behavior remains a hosted
+  gate.
+- [x] Enforce the documented GET-only status endpoint contract and publish the
+  bounded `stopping` readiness state before direct status-server shutdown;
+  hosted endpoint probes remain part of final acceptance.
+- [x] Make standalone hosted-evidence discovery reject every symlink or
+  non-regular tree entry, including unmatched special files, before reading the
+  required evidence; keep the release workflow's independent pre-archive guard.
+- [x] Preflight the release performance job's root-level environment and raw
+  log output paths before `tee` writes, rejecting existing, symlinked, or
+  special entries instead of relying only on post-write verification.
+- [x] Make the release performance environment transcript fail closed when a
+  metadata command fails instead of allowing the final `tee` to mask that
+  failure.
+- [x] Preflight the hosted `Migration CI` eBPF and capability-agent evidence
+  output paths before `tee`, append, copy, and diagnostic writes, rejecting
+  existing, symlinked, or special entries before privileged evidence runs.
+- [x] Preflight the tag workflow's `release-notes.md` output before the
+  GoReleaser note extraction/fallback writes, rejecting existing, symlinked,
+  or special entries.
+- [x] Make the hosted packet smoke retain and independently verify exactly one
+  positive blocked-default-deny counter observation, rejecting duplicate or
+  malformed metric samples before release publication; hosted execution
+  remains required.
+- [x] Require the hosted live-flow smoke and standalone verifier to match the
+  exact blocked TCP tuple and `default_deny` decision reason, so quarantine or
+  other blocked decisions cannot satisfy the default-deny flow gate; hosted
+  pinned-map execution remains required.
+- [x] Make the hosted live-flow smoke validate the required schema metadata and
+  numeric field shapes before writing its success marker, matching the
+  standalone verifier's malformed-record rejection; hosted pinned-map
+  execution remains required.
+- [x] Reject zero TCP source ports in the hosted live-flow smoke and standalone
+  verifier, with focused regression coverage for the malformed transport
+  identity; hosted pinned-map execution remains required.
+- [x] Align fixed hosted success-marker checks in the release preflight with
+  the standalone verifier's exact-once and conflicting-key semantics so
+  contradictory transcripts fail before publication; hosted execution remains
+  required.
+- [x] Make variable-valued hosted release markers exact-once and shape-checked
+  in the publication preflight, covering Pod names, resource samples,
+  timestamps, node identities, and fail-open intervals; hosted execution
+  remains required.
+- [x] Extend the hosted status smoke to verify the `Allow: GET` header on all
+  non-GET endpoint probes in addition to the 405 status; hosted execution
+  remains required.
+- [x] Add Linux lifecycle coverage that queries the dry-run status listener and
+  verifies `dry_run` readiness stays unavailable with zero enforcement metrics;
+  hosted Kubernetes lifecycle execution remains required.
+- [x] Make native-agent Phase 5 metric predicates reject non-finite Prometheus
+  samples, including active policy epochs, with focused integration-tag
+  regression coverage; hosted execution remains required.
+- [x] Close timed-out Linux Phase 5 helper status readers and response bodies
+  returned with metric request errors so failure-path retries do not retain
+  blocked read goroutines or HTTP resources; hosted execution remains required.
+- [x] Make the Linux flow reader close its ring reader when its caller context
+  is canceled during a blocking read, with a blocking-reader cancellation
+  regression; hosted pinned-map streaming remains required.
+- [x] Give the shared flow monitor ownership of a derived reader context and
+  cancel it during `Stop`, covering the reader-start handoff race with a
+  context-blocking regression; hosted pinned-map streaming remains required.
+- [x] Close the pre-start flow subscription and already-opened pinned reader
+  when monitor startup fails, preserving cleanup errors with the startup
+  failure; focused CLI race coverage passes and hosted streaming remains
+  required.
+- [x] Recheck Linux flow-reader cancellation after acquiring its state lock
+  before opening the ring reader, with regression coverage for cancellation
+  during lock wait; hosted pinned-map streaming remains required.
+- [x] Recheck native-agent cancellation after acquiring the node lock before
+  starting HTTP and informer state, with post-lock listener coverage; hosted
+  Kubernetes and privileged engine execution remain required.
+- [x] Make the pinned `ztap flows` reader reject an already-canceled command
+  context before entering map ownership or status polling; hosted pinned-map
+  streaming remains required.
+- [x] Preserve terminal status, reader, and stop errors when the pinned flow
+  wrapper's goroutines finish in either order, suppressing only internal
+  cancellation; hosted pinned-map streaming remains required.
+- [x] Give pinned-agent status polling caller cancellation precedence before
+  map lookups, with canceled-before-lookup regression coverage; hosted
+  pinned-map streaming remains required.
+- [x] Add a privileged regression for deleting one contribution from an
+  additive selected policy set while preserving the remaining rule and link
+  ownership; hosted execution remains required.
+- [x] Restore narrowed monthly Dependabot updates.
+- [x] Add a shape-checked compiler benchmark for the documented
+  250-Pod/25-policy/2,500-rule fixture; the real-cgroup, packet-path, resource,
+  fail-open-interval, and flow-loss gates remain open.
+- [x] Run the sustained flow-accounting harness over the full
+  250-subject/25-policy/2,500-rule real-cgroup policy set, retain its complete
+  fixture shape and scope in the JSON transcript, and reject reduced-shape flow
+  evidence in the verifier.
+- [x] Run the SIGKILL crash fail-open harness against the full
+  250-subject/25-policy/2,500-rule native-agent fixture, retain its shape in
+  `phase5-agent-crash.json`, and reject reduced-shape crash evidence.
+- [x] Make the parent crash harness own cleanup for all child-created fixture
+  cgroups, the helper run directory, and the two stable engine pins so SIGKILL
+  samples cannot leak hosted-runner state.
+- [x] Carry the complete 250-subject/25-policy/2,500-rule shape through the
+  reference-apply, packet, and Pod-start JSON artifacts, and reject reduced
+  policy projections in the verifier.
+- [x] Harden the DaemonSet rolling-update transcript to select a unique Running
+  and Kubernetes Ready baseline Pod on the smoke-client node, retain
+  `old_ready=true`, enumerate a Running and Ready replacement Pod on that node,
+  retain `replacement_ready=true`, require distinct old/replacement Kubernetes
+  UIDs, and retain creation and first-observation timestamps bounded to the
+  rollout-to-fail-open interval before accepting the measured fail-open
+  interval.
+- [x] Add the Linux-only real-cgroup reference apply harness and raw JSON
+  output, and require it before tag publication; it enforces only the direct
+  engine-apply p95 budget, reports configured map-capacity and available
+  kernel-memlock metadata, retains every warm-up/apply map snapshot, and fails
+  if those capacities or available memlock grow across repeated applies after
+  warm-up. Extend the harness with sustained UDP flow
+  accounting at one packet decision per millisecond, initial native-agent
+  activation, actual native-agent compile-and-apply reconciliation, and
+  synchronized policy-event activation gates over the same fixture, plus an
+  orderly restart-gap measurement. Add a separate Pod-start classification
+  measurement and raw JSON output, a SIGKILL crash fail-open measurement with raw JSON output, a
+  real-packet UDP/TCP comparison gate with raw JSON output, and a supporting
+  native-agent CPU/RSS sampler with raw JSON output. Add a kind
+  250-Pod/25-policy/2,500-rule reference resource gate, a DaemonSet
+  rolling-update fail-open measurement, and upload their raw evidence; hosted
+  acceptance remains required for both gates.
+- [x] Make the local real-cgroup evidence producers write only after their
+  final fixture-shape, accounting, packet-budget, agent-latency, and
+  CPU/RSS assertions pass, so failed measurements cannot leave a stale JSON
+  artifact for later verification; hosted execution remains required.
+- [x] Extend the documented privileged `make integration` gate to execute
+  both Linux enforcer and CLI package trees, covering the Phase 5 agent and
+  flow-reader support tests; non-Linux execution remains an explicit refusal.
+- [x] Make the hosted privileged eBPF job execute the complete integration-tagged
+  enforcer and CLI package trees, so Phase 5 support tests run on Linux rather
+  than being limited to the engine test-name prefix; kind remains the
+  authoritative Kubernetes acceptance job.
+- [x] Add tagged Linux `go vet` coverage for the enforcer and CLI integration
+  packages in both `make integration` and the Linux CI compile job.
+- [x] Make the native-agent activation and SIGKILL performance fixtures assert
+  their complete 250-Pod/25-policy/2,500-rule object shape, exact names,
+  unique UIDs, Running status, and bucket-matched Egress policies before
+  starting a measurement, so producer-side fixture drift cannot emit
+  success-shaped evidence.
+- [x] Require exact native-agent enforcement and compiled-rule gauges in the
+  Phase 5 activation predicates, including the 251-cgroup Pod-start state,
+  so stale or extra kernel state cannot masquerade as the fixed fixture.
+- [x] Add release-time verification that `main` branch protection is strict and contains only the exact `Required CI` context in both GitHub required-status representations; the hosted API result requires the `BRANCH_PROTECTION_TOKEN` repository secret with Administration-read permission.
+- [x] Verify branch protection still requires `Required CI` on the current repository; the live `main` protection record is strict and contains only the exact `Required CI` context in both required-status representations.
+- [x] Run the pinned `zizmor` 1.16.3 workflow-security audit and its pedantic mode; disable release-job `setup-go` and BuildKit dependency caching after the cache-poisoning review, remove unnecessary Docker matrix interpolation, document elevated permissions, explicitly download and verify the checked-in module graph before GoReleaser verification, and require clean zizmor/actionlint results.
+- [x] Verify `make clean` leaves no tracked or ignored workspace debris; artifact deletion itself was completed in Phase 0.
 - [x] Add the `v0.1.0` breaking-change entry and migration notes.
 - Once all checklist items are recorded as complete, delete this temporary plan in the release-preparation commit.
-- Run the full unit, generated-code, Docker, manifest, and Linux integration gates.
+- Run the full unit, generated-code, Docker, manifest, and Linux integration gates; local unit and manifest checks pass, while generated-code, Docker, and hosted Linux checks remain required or tool-gated.
 - Run the Section 14.5 performance/resource gates and retain raw results with the release artifacts.
 
 Exit criteria:
@@ -1413,7 +2997,13 @@ Privileged tests use an explicit `integration` build tag and fail their environm
 
 ### 14.5 Performance and resource gates
 
-Use one documented 2-vCPU Linux reference environment with 250 Pods, 25 NetworkPolicies, and 2,500 compiled local rules. Run each measured gate three times after warm-up and retain the raw command/output with release artifacts. The 1,000-Pod/100-policy/10,000-rule fixture is a post-`v0.1` scale milestone.
+Use one documented 2-vCPU Linux reference environment with 250 Pods, 25
+NetworkPolicies, and 2,500 compiled local rules. The release performance
+process is pinned to two CPUs with `taskset` and `GOMAXPROCS=2`; the kind
+reference node uses a `200000 100000` cgroup CPU quota. Run each measured gate
+three times after warm-up and retain the raw command/output with release
+artifacts. The 1,000-Pod/100-policy/10,000-rule fixture is a post-`v0.1` scale
+milestone.
 
 - Full reconciliation completes within 2 seconds at p95, excluding the fixed debounce and Kubernetes API list latency.
 - A relevant informer event becomes an active policy epoch within 3 seconds at p95 on a synchronized cache.
@@ -1471,12 +3061,12 @@ There is no runtime compatibility layer.
 
 ### Product surface
 
-- [ ] README describes only a Linux/Kubernetes eBPF enforcer.
-- [ ] `ztap --help` contains `validate`, `agent`, `flows`, and `version` as the only primary commands.
-- [ ] Native Kubernetes NetworkPolicy is the only accepted policy resource.
-- [ ] Unsupported semantics are rejected with stable field errors.
-- [ ] The documented first-release surface is IPv4 with numeric TCP/UDP ports; named ports, dual-stack enforcement, and automatic Service translation leave no dormant code paths.
-- [ ] There is one binary, one container image, and one Kubernetes install manifest.
+- [x] README describes only a Linux/Kubernetes eBPF enforcer.
+- [x] `ztap --help` contains `validate`, `agent`, `flows`, and `version` as the only primary commands.
+- [x] Native Kubernetes NetworkPolicy is the only accepted policy resource.
+- [x] Unsupported semantics are rejected with stable field errors.
+- [x] The documented first-release surface is IPv4 with numeric TCP/UDP ports; named ports, dual-stack enforcement, and automatic Service translation leave no dormant code paths. The native validator/compiler rejection tests and the 2026-09-19 local contract audit support this source-level item; privileged packet behavior remains a hosted gate.
+- [x] There is one binary, one container image, and one Kubernetes install manifest.
 
 ### Enforcement correctness
 
@@ -1508,13 +3098,13 @@ There is no runtime compatibility layer.
 
 ### Repository quality
 
-- [ ] No tracked executable binaries remain.
-- [ ] No root build/test/coverage artifacts remain after `make clean`.
-- [ ] Removed feature directories, docs, dependencies, workflows, and configuration are gone together.
-- [ ] Generated eBPF sources reproduce without a diff.
+- [x] No tracked executable binaries remain.
+- [x] No root build/test/coverage artifacts remain after `make clean`.
+- [x] Removed feature directories, docs, dependencies, workflows, and configuration are gone together. The 2026-09-19 working-tree, dependency-graph, and maintained-document cleanup audit supports this source-level item.
+- [x] Generated eBPF sources reproduce without a diff using the pinned LLVM 18 compiler.
 - [ ] `go test ./... -race`, lint, vet, Docker build, manifest validation, and Linux integration tests pass.
-- [ ] Branch protection requires the stable `Required CI` result, and no transitional workflow can publish artifacts.
-- [ ] Searches find no stale claims for REST, gRPC, cloud, etcd, anomaly, audit, compliance, macOS, Windows, or iptables support outside release history.
+- [x] Branch protection requires the stable `Required CI` result, and no transitional workflow can publish artifacts. The live `main` protection record is strict with only `Required CI`, and the workflow audit finds publication only in the tag-gated release workflow.
+- [x] Searches find no stale claims for REST, gRPC, cloud, etcd, anomaly, audit, compliance, macOS, Windows, or iptables support outside release history; the remaining migration references explicitly describe removed CRD/operator behavior.
 
 ### Efficiency evidence
 
@@ -1539,6 +3129,9 @@ There is no runtime compatibility layer.
 - Unsupported policies quarantine only the local subjects and directions they select; unrelated accepted policies continue reconciling.
 - Watcher-based cgroup discovery and process-owned links create measured fail-open intervals at Pod start, agent restart, and planned rolling update.
 - Structured logs, health/readiness, bounded Prometheus metrics, and real flow streaming are retained.
+- Retained Phase 5 JSON artifacts require exact producer scope literals, so a
+  non-empty caller-reworded kernel or measurement description cannot be
+  detached from the harness path that produced the budgeted result.
 - Audit, alerts, dashboards, and anomaly detection are outside the core.
 - Git history will not be rewritten.
 - The first streamlined release is versioned as `v0.1.0` and described as experimental.

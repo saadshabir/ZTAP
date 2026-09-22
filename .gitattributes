@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep generated eBPF bindings visible in reviews without counting them as
+# handwritten source.
+internal/enforcer/engine_bpfeb.go linguist-generated=true
+internal/enforcer/engine_bpfel.go linguist-generated=true

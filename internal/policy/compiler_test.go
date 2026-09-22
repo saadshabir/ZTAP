@@ -84,6 +84,55 @@ func TestCompileNativePoliciesExpandsSelectorsPortsAndAdditiveUnion(t *testing.T
 	assertRulePresent(t, result.PolicySet, Rule{CgroupID: 21, Direction: DirectionIngress, Peer: mustPrefix("10.0.0.4/32"), Protocol: ProtocolTCP, Port: 8443})
 }
 
+func TestCompileNativePoliciesDeletionRemovesOnlyDeletedContribution(t *testing.T) {
+	dbPolicy := nativePolicy("default", "web-db", map[string]string{"app": "web"}, []string{"Egress"}, nil, []NativeEgressRule{{
+		To:    []NativePeer{{PodSelector: &NativeLabelSelector{MatchLabels: map[string]string{"app": "db"}}}},
+		Ports: []NativePort{{Protocol: "TCP", Port: 443}},
+	}})
+	dnsPolicy := nativePolicy("default", "web-dns", map[string]string{"app": "web"}, []string{"Egress"}, nil, []NativeEgressRule{{
+		To:    []NativePeer{{IPBlock: &NativeIPBlock{CIDR: "198.51.100.53/32"}}},
+		Ports: []NativePort{{Protocol: "UDP", Port: 53}},
+	}})
+	input := basicResolutionInput(
+		ResolvedPod{Namespace: "default", Name: "web", Labels: map[string]string{"app": "web"}, PodIPs: []netip.Addr{mustAddr("10.0.0.2")}, CgroupIDs: []uint64{1}, Local: true},
+		ResolvedPod{Namespace: "default", Name: "db", Labels: map[string]string{"app": "db"}, PodIPs: []netip.Addr{mustAddr("10.0.0.3")}},
+	)
+
+	both, err := CompileNativePolicies([]NativeNetworkPolicy{dbPolicy, dnsPolicy}, input)
+	if err != nil {
+		t.Fatalf("compile additive policy set: %v", err)
+	}
+	if len(both.PolicySet.Rules) != 2 {
+		t.Fatalf("combined rules = %#v, want two contributions", both.PolicySet.Rules)
+	}
+
+	remainingDB, err := CompileNativePolicies([]NativeNetworkPolicy{dbPolicy}, input)
+	if err != nil {
+		t.Fatalf("compile after DNS policy deletion: %v", err)
+	}
+	if len(remainingDB.PolicySet.Rules) != 1 {
+		t.Fatalf("rules after DNS deletion = %#v, want only DB contribution", remainingDB.PolicySet.Rules)
+	}
+	assertRulePresent(t, remainingDB.PolicySet, Rule{CgroupID: 1, Direction: DirectionEgress, Peer: mustPrefix("10.0.0.3/32"), Protocol: ProtocolTCP, Port: 443})
+
+	remainingDNS, err := CompileNativePolicies([]NativeNetworkPolicy{dnsPolicy}, input)
+	if err != nil {
+		t.Fatalf("compile after DB policy deletion: %v", err)
+	}
+	if len(remainingDNS.PolicySet.Rules) != 1 {
+		t.Fatalf("rules after DB deletion = %#v, want only DNS contribution", remainingDNS.PolicySet.Rules)
+	}
+	assertRulePresent(t, remainingDNS.PolicySet, Rule{CgroupID: 1, Direction: DirectionEgress, Peer: mustPrefix("198.51.100.53/32"), Protocol: ProtocolUDP, Port: 53})
+
+	cleared, err := CompileNativePolicies(nil, input)
+	if err != nil {
+		t.Fatalf("compile after deleting all policies: %v", err)
+	}
+	if len(cleared.PolicySet.Subjects) != 0 || len(cleared.PolicySet.Rules) != 0 {
+		t.Fatalf("policy deletion left stale state: %#v", cleared.PolicySet)
+	}
+}
+
 func TestCompileNativePoliciesDefaultDenyAndPolicyTypeDefaulting(t *testing.T) {
 	policy := nativePolicy("default", "default-deny", map[string]string{"app": "api"}, nil, nil, nil)
 	result, err := CompileNativePolicies([]NativeNetworkPolicy{policy}, basicResolutionInput(
