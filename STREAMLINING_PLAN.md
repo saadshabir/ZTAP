@@ -2736,6 +2736,29 @@ acceptance remains 12/39 complete with 27/39 items open (69.2% remaining).
 Section 14.5 measurements and release publication and provenance archive remain
 hosted gates.
 
+Continuation audit (2026-09-22): exact-head Migration CI run `35786342497`
+for `b09cf23d3141cff792f83891fa0885388f7c7122` passed actionlint, lint/format/
+vet, workflow security, dependency review, generated-code verification, Linux
+Go tests, Linux integration-test compile/vet, Docker/image scan, and Linux
+asset/example/manifest validation. The corrected policy-deletion test passed.
+The fragment test still timed out; its child helper confirmed `Sendto`
+completed, but no event appeared. The fixture set MF while describing only an
+eight-byte UDP datagram, so it is now a valid incomplete first fragment: 16
+bytes of IP payload are present and the UDP length is 24 bytes. Hosted runtime
+confirmation is pending. The capability-only smoke still failed after the
+first parser adjustment: its metric family deliberately exposes 48 bounded
+action/direction/reason label combinations, and the parser counted all samples
+with the same metric name as duplicates. It now parses each series and counts
+only the exact required label set, while still rejecting duplicate matching
+series and invalid counter values. A local multi-series/reordered-label check
+passes and a duplicate matching series is rejected. Both privileged jobs remain
+open, so their downstream fixture, Section 14.5, rolling-update, and flow-reader
+steps did not run; no acceptance item is credited from this run. The
+implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete with 27/39 items open (69.2% remaining).
+Section 14.5 measurements and release publication and provenance archive remain
+hosted gates.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.

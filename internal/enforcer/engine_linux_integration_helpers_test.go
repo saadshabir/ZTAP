@@ -174,7 +174,14 @@ func buildRawIPv4TestPacket(kind string, destinationPort uint16) ([]byte, error)
 		return nil, fmt.Errorf("unsupported raw IPv4 test kind %q", kind)
 	}
 
-	packet := make([]byte, 28)
+	packetLength := 28
+	if kind == "fragment" {
+		// The first fragment carries the UDP header and eight payload bytes;
+		// its UDP length promises another fragment rather than a complete
+		// eight-byte datagram.
+		packetLength = 36
+	}
+	packet := make([]byte, packetLength)
 	packet[0] = 0x45
 	if kind == "malformed" {
 		// The kernel still routes this packet using the destination address, but
@@ -198,7 +205,11 @@ func buildRawIPv4TestPacket(kind string, destinationPort uint16) ([]byte, error)
 	} else {
 		binary.BigEndian.PutUint16(packet[20:22], 40000)
 		binary.BigEndian.PutUint16(packet[22:24], destinationPort)
-		binary.BigEndian.PutUint16(packet[24:26], 8)
+		udpLength := uint16(8)
+		if kind == "fragment" {
+			udpLength = 24
+		}
+		binary.BigEndian.PutUint16(packet[24:26], udpLength)
 	}
 	binary.BigEndian.PutUint16(packet[10:12], internetChecksum(packet[:20]))
 	return packet, nil

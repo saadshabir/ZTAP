@@ -569,6 +569,44 @@ jobs:
                 sub(/\{.*$/, "", base)
               }
               base == expected_base {
+                actual_label_text=sample
+                sub(/^[^{]*\{/, "", actual_label_text)
+                if (actual_label_text == sample) {
+                  next
+                }
+                sub(/}$/, "", actual_label_text)
+                actual_count=split(actual_label_text, actual_pairs, ",")
+                if (actual_count != expected_count) {
+                  next
+                }
+                for (name in actual_labels) {
+                  delete actual_labels[name]
+                }
+                candidate=1
+                for (i = 1; i <= actual_count; i++) {
+                  separator=index(actual_pairs[i], "=")
+                  if (separator == 0) {
+                    candidate=0
+                    continue
+                  }
+                  actual_name=substr(actual_pairs[i], 1, separator - 1)
+                  actual_value=substr(actual_pairs[i], separator + 1)
+                  if (actual_name == "" || actual_name in actual_labels) {
+                    candidate=0
+                  }
+                  actual_labels[actual_name]=actual_value
+                  if (!(actual_name in expected_labels) || expected_labels[actual_name] != actual_value) {
+                    candidate=0
+                  }
+                }
+                for (i = 1; i <= expected_count; i++) {
+                  if (!(expected_names[i] in actual_labels)) {
+                    candidate=0
+                  }
+                }
+                if (!candidate) {
+                  next
+                }
                 matches++
                 if (matches > 1) {
                   invalid=1
@@ -578,38 +616,6 @@ jobs:
                   invalid=1
                 } else {
                   value=$2
-                }
-                actual_label_text=sample
-                sub(/^[^{]*\{/, "", actual_label_text)
-                if (actual_label_text == sample) {
-                  invalid=1
-                  next
-                }
-                sub(/}$/, "", actual_label_text)
-                actual_count=split(actual_label_text, actual_pairs, ",")
-                if (actual_count != expected_count) {
-                  invalid=1
-                }
-                for (i = 1; i <= actual_count; i++) {
-                  separator=index(actual_pairs[i], "=")
-                  if (separator == 0) {
-                    invalid=1
-                    continue
-                  }
-                  actual_name=substr(actual_pairs[i], 1, separator - 1)
-                  actual_value=substr(actual_pairs[i], separator + 1)
-                  if (actual_name == "" || actual_name in actual_labels) {
-                    invalid=1
-                  }
-                  actual_labels[actual_name]=actual_value
-                  if (!(actual_name in expected_labels) || expected_labels[actual_name] != actual_value) {
-                    invalid=1
-                  }
-                }
-                for (i = 1; i <= expected_count; i++) {
-                  if (!(expected_names[i] in actual_labels)) {
-                    invalid=1
-                  }
                 }
               }
               END {
