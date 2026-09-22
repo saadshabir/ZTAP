@@ -518,6 +518,25 @@ func TestLinuxEngineRejectsIPv4FragmentsForIsolatedSubject(t *testing.T) {
 	t.Cleanup(func() { _ = reader.Close() })
 
 	runRawIPv4SendHelperInCgroup(t, cgroup, "fragment")
+	snapshot, err := engine.MetricsSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("read fragment decision counters: %v", err)
+	}
+	var fragmentDecisionFound bool
+	for _, decision := range snapshot.Decisions {
+		if decision.Action != "blocked" || decision.Direction != "egress" || decision.Reason != "fragment" {
+			continue
+		}
+		fragmentDecisionFound = true
+		t.Logf("fragment decision counter=%d; event drops=%+v", decision.Count, snapshot.EventDrops)
+		if decision.Count == 0 {
+			t.Fatal("fragment packet produced no blocked fragment decision")
+		}
+		break
+	}
+	if !fragmentDecisionFound {
+		t.Fatal("fragment decision counter label is unavailable")
+	}
 	event := readFlowEvent(t, reader, 0, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
 	if event.Family != 4 {
 		t.Fatalf("fragment event family = %d, want 4", event.Family)

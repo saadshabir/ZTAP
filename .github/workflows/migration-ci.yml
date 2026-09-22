@@ -357,6 +357,14 @@ jobs:
                   kind: KubeletConfiguration
                   apiVersion: kubelet.config.k8s.io/v1beta1
                   cgroupDriver: systemd
+                  maxPods: 300
+                - |
+                  kind: ClusterConfiguration
+                  apiVersion: kubeadm.k8s.io/v1beta4
+                  controllerManager:
+                    extraArgs:
+                      - name: node-cidr-mask-size-ipv4
+                        value: "23"
               extraMounts:
                 - hostPath: /sys/fs/bpf
                   containerPath: /sys/fs/bpf
@@ -365,6 +373,17 @@ jobs:
           EOF
           kind create cluster --name ztap --image kindest/node:v1.36.4 \
             --config "$RUNNER_TEMP/kind-config.yaml" --wait 180s
+
+      - name: Verify reference node pod capacity
+        run: |
+          set -euo pipefail
+          node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
+          pod_capacity="$(kubectl get node "$node" -o jsonpath='{.status.capacity.pods}')"
+          pod_cidr="$(kubectl get node "$node" -o jsonpath='{.spec.podCIDR}')"
+          printf 'reference_node_pod_capacity=%s\n' "$pod_capacity"
+          printf 'reference_node_pod_cidr=%s\n' "$pod_cidr"
+          test "$pod_capacity" -ge 300
+          test "${pod_cidr##*/}" -eq 23
 
       - name: Constrain the kind reference node to two CPUs
         run: |
