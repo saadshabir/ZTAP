@@ -1149,6 +1149,8 @@ jobs:
           probe_output="$RUNNER_TEMP/rolling-probe.txt"
           : > "$probe_output"
           probe_pid=""
+          # ShellCheck cannot see the indirect invocation through the EXIT trap.
+          # shellcheck disable=SC2329
           cleanup_rollout_probe() {
             if [ -n "$probe_pid" ]; then
               if timeout 5s kubectl -n ztap-smoke exec smoke-client -c client -- touch /tmp/ztap-rollout-probe.stop >/dev/null 2>&1; then

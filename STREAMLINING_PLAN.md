@@ -2826,6 +2826,21 @@ acceptance remains 12/39 complete with 27/39 open (69.2% remaining).
 Section 14.5 measurements and release publication/provenance archive remain
 hosted gates.
 
+Continuation audit (2026-09-22): exact-head run `35795512565` for
+`f5961e96c25def7a8f942145272532840c0c4d23` passed the hosted lint/format,
+generated-code, workflow-security, and dependency-review jobs, but Actionlint
+failed on ShellCheck `SC2329` for the cleanup function registered through the
+`EXIT` trap. At the time of this audit the Linux unit/integration, asset, and
+Docker jobs were still running, while the eBPF and capability-agent jobs had
+not started; this run provides no new runtime acceptance credit. The workflow
+now has a narrowly scoped `SC2329` suppression documenting that indirect trap
+invocation. The focused probe test, `make lint`, exact-step Bash syntax check,
+and diff check pass locally; an exact-head hosted rerun is pending. The
+implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete with 27/39 items open (69.2% remaining).
+Section 14.5 measurements and release publication/provenance archive remain
+hosted gates.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.
