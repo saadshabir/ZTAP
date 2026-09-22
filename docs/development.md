@@ -375,8 +375,11 @@ cgroup because the crash helper is intentionally terminated before its own
 test cleanup handlers can run; it also supplies the helper's run directory and
 removes only the engine's two stable pins after the child exits.
 The kind capability-agent job constrains its control-plane node to a 2-vCPU
-cgroup quota, validates the generated reference NetworkPolicies through the
-shipped scratch image, requires exactly one Running/Ready `ztap-agent` Pod in
+cgroup quota, removes kindnet's NetworkPolicy controller before creating any
+policies while retaining its installed CNI config, and records that
+single-enforcer profile in `capability-agent-smoke.txt`. It validates the
+generated reference NetworkPolicies through the shipped scratch image,
+requires exactly one Running/Ready `ztap-agent` Pod in
 the shipped `ztap-system` namespace for its
 smoke, resource, and flow probes, captures each retained transcript through an
 explicit `set -euo pipefail` pipeline, and asserts that the selected smoke client is

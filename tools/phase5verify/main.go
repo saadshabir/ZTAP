@@ -1139,6 +1139,9 @@ func verifyHostedEvidence(ebpfDirectory, capabilityDirectory string) error {
 	if err := requireHostedExactLine(capabilitySmoke, "capability-only DaemonSet attached and enforced the smoke policy"); err != nil {
 		return err
 	}
+	if err := requireHostedExactLine(capabilitySmoke, "kindnet_networkpolicy_controller=disabled"); err != nil {
+		return err
+	}
 	if err := requireHostedExactLine(capabilitySmoke, "status_endpoints=passed"); err != nil {
 		return err
 	}

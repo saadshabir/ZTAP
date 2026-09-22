@@ -2841,6 +2841,32 @@ acceptance remains 12/39 complete with 27/39 items open (69.2% remaining).
 Section 14.5 measurements and release publication/provenance archive remain
 hosted gates.
 
+Continuation audit (2026-09-22): exact-head Migration CI run `35795839434`
+for `c8f25fa6619989eb5eb3a1e86bb4a0f2ddbfc4ee` passed all nine standard CI
+jobs and the privileged eBPF job. The hosted isolated-IPv4-fragment test passed
+with one blocked-fragment decision and zero rate-limited/ring-full event drops.
+The capability job verified the 250-Pod/25-policy/2,500-rule fixture and three
+real five-second resource samples under budget (maximum CPU `0.000791456`
+cores; maximum `memory.current` `49.554688` MiB). Its rolling-update probe
+timed out after five minutes without observing a successful selected-client
+response, so no fail-open interval was measured and live-flow verification was
+skipped; this failed privileged run earns no final-acceptance credit.
+Inspection identified the cause: the pinned kindnet implementation also runs
+a Kubernetes NetworkPolicy controller, which continued enforcing the same
+default-deny policy independently while ZTAP restarted. Section 15 requires
+that competing enforcer to be disabled for this profile. The hosted harness now
+checks that no NetworkPolicy exists before removing only the kindnet DaemonSet,
+verifies that the CNI config remains installed and the node stays Ready, and
+records `kindnet_networkpolicy_controller=disabled` in the smoke artifact;
+the release verifier now requires that marker. Focused evidence-verifier tests,
+`make lint` (including Actionlint), and `git diff --check` pass locally. The
+exact-head hosted rerun must still prove CNI connectivity, the rolling-update
+interval, and live flow streaming with ZTAP as the sole policy enforcer. The
+Phase 5 implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete, with 27/39 items open (69.2% remaining).
+Section 14.5 measurements and release publication/provenance archive remain
+hosted gates.
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.

@@ -1036,7 +1036,7 @@ func TestVerifyHostedEvidenceAcceptsReferenceBundle(t *testing.T) {
 		return path
 	}
 	write(ebpfDirectory, "ebpf-engine-tests.txt", "ebpf_engine_runtime_gate=passed\n")
-	smokeEvidence := "capability-only DaemonSet attached and enforced the smoke policy\nstatus_endpoints=passed\npacket_decisions_blocked_default_deny=1\nflow_expected_src_ip=10.244.0.2\nflow_expected_dst_ip=10.244.0.3\nflow_expected_dst_port=8080\n{\"timestamp\":\"2026-09-19T00:00:00Z\",\"policy_epoch\":1,\"cgroup_id\":123,\"direction\":\"egress\",\"protocol\":\"TCP\",\"src_ip\":\"10.244.0.2\",\"src_port\":40000,\"dst_ip\":\"10.244.0.3\",\"dst_port\":8080,\"action\":\"blocked\",\"reason\":\"default_deny\",\"schema_version\":1}\nflow_streaming=passed\n"
+	smokeEvidence := "capability-only DaemonSet attached and enforced the smoke policy\nkindnet_networkpolicy_controller=disabled\nstatus_endpoints=passed\npacket_decisions_blocked_default_deny=1\nflow_expected_src_ip=10.244.0.2\nflow_expected_dst_ip=10.244.0.3\nflow_expected_dst_port=8080\n{\"timestamp\":\"2026-09-19T00:00:00Z\",\"policy_epoch\":1,\"cgroup_id\":123,\"direction\":\"egress\",\"protocol\":\"TCP\",\"src_ip\":\"10.244.0.2\",\"src_port\":40000,\"dst_ip\":\"10.244.0.3\",\"dst_port\":8080,\"action\":\"blocked\",\"reason\":\"default_deny\",\"schema_version\":1}\nflow_streaming=passed\n"
 	smokePath := write(capabilityDirectory, "capability-agent-smoke.txt", smokeEvidence)
 	fixtureEvidence := "offline_fixture_shape=pods=250 policies=25 compiled_rules=2500\nfixture_live_shape=verified\nfixture_shape=pods=250 policies=25 pods_per_policy=10 peers_per_policy=10 compiled_rules=2500\n"
 	fixturePath := write(capabilityDirectory, "capability-agent-reference-fixture.txt", fixtureEvidence)
@@ -1094,6 +1094,16 @@ func TestVerifyHostedEvidenceAcceptsReferenceBundle(t *testing.T) {
 
 	if err := verifyHostedEvidence(ebpfDirectory, capabilityDirectory); err != nil {
 		t.Fatalf("valid hosted evidence rejected: %v", err)
+	}
+	missingCNIProfile := strings.Replace(smokeEvidence, "kindnet_networkpolicy_controller=disabled\n", "", 1)
+	if err := os.WriteFile(smokePath, []byte(missingCNIProfile), 0o600); err != nil {
+		t.Fatalf("write smoke evidence without CNI profile marker: %v", err)
+	}
+	if err := verifyHostedEvidence(ebpfDirectory, capabilityDirectory); err == nil {
+		t.Fatal("hosted verifier accepted smoke evidence without the single-enforcer profile marker")
+	}
+	if err := os.WriteFile(smokePath, []byte(smokeEvidence), 0o600); err != nil {
+		t.Fatalf("restore valid smoke evidence after CNI-profile check: %v", err)
 	}
 	missingPacketCounter := strings.Replace(smokeEvidence, "packet_decisions_blocked_default_deny=1\n", "", 1)
 	if err := os.WriteFile(smokePath, []byte(missingPacketCounter), 0o600); err != nil {
