@@ -1154,6 +1154,9 @@ func verifyHostedEvidence(ebpfDirectory, capabilityDirectory string) error {
 	if err := validateHostedFlowEvidence(capabilitySmoke); err != nil {
 		return err
 	}
+	if err := validateHostedClusterIPEvidence(capabilitySmoke); err != nil {
+		return err
+	}
 	if err := requireHostedExactLine(capabilityFixture, "fixture_shape=pods=250 policies=25 pods_per_policy=10 peers_per_policy=10 compiled_rules=2500"); err != nil {
 		return err
 	}
@@ -1256,6 +1259,77 @@ func validateHostedFlowEvidence(path string) error {
 		}
 	}
 	return fmt.Errorf("%s is missing a blocked default-deny TCP egress flow for %s -> %s:%d", path, sourceIP, destIP, destPort)
+}
+
+func validateHostedClusterIPEvidence(path string) error {
+	for _, marker := range []string{
+		"selector_peer_direct_podip=allowed",
+		"selector_peer_service_clusterip=blocked",
+		"explicit_clusterip_ipblock_service=allowed",
+		"explicit_clusterip_ipblock_podip=blocked",
+	} {
+		if err := requireHostedExactLine(path, marker); err != nil {
+			return err
+		}
+	}
+	serviceIPText, err := hostedSingleLineValue(path, "service_cluster_ip")
+	if err != nil {
+		return err
+	}
+	serviceIP := net.ParseIP(serviceIPText)
+	if serviceIP == nil || serviceIP.To4() == nil || serviceIP.String() != serviceIPText {
+		return fmt.Errorf("%s has invalid service_cluster_ip=%q", path, serviceIPText)
+	}
+	backendIPText, err := hostedSingleLineValue(path, "service_backend_pod_ip")
+	if err != nil {
+		return err
+	}
+	backendIP := net.ParseIP(backendIPText)
+	if backendIP == nil || backendIP.To4() == nil || backendIP.String() != backendIPText {
+		return fmt.Errorf("%s has invalid service_backend_pod_ip=%q", path, backendIPText)
+	}
+	if serviceIP.Equal(backendIP) {
+		return fmt.Errorf("%s records the Service ClusterIP and backend PodIP as the same address", path)
+	}
+	cidr, err := hostedSingleLineValue(path, "explicit_clusterip_ipblock_cidr")
+	if err != nil {
+		return err
+	}
+	if cidr != serviceIPText+"/32" {
+		return fmt.Errorf("%s has explicit_clusterip_ipblock_cidr=%q, want %s/32", path, cidr, serviceIPText)
+	}
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return fmt.Errorf("%s has invalid explicit_clusterip_ipblock_cidr=%q", path, cidr)
+	}
+	ones, bits := network.Mask.Size()
+	if bits != 32 || ones != 32 || !network.IP.Equal(serviceIP) {
+		return fmt.Errorf("%s has explicit_clusterip_ipblock_cidr=%q, want the exact IPv4 Service address", path, cidr)
+	}
+	flowDestinationIP, err := hostedSingleLineValue(path, "flow_expected_dst_ip")
+	if err != nil {
+		return err
+	}
+	if flowDestinationIP != backendIPText {
+		return fmt.Errorf("%s flow destination %q does not match Service backend PodIP %q", path, flowDestinationIP, backendIPText)
+	}
+	selectorEpochText, err := hostedSingleLineValue(path, "selector_peer_policy_epoch")
+	if err != nil {
+		return err
+	}
+	selectorEpoch, err := strconv.ParseUint(selectorEpochText, 10, 64)
+	if err != nil || selectorEpoch == 0 {
+		return fmt.Errorf("%s has invalid selector_peer_policy_epoch=%q", path, selectorEpochText)
+	}
+	explicitEpochText, err := hostedSingleLineValue(path, "explicit_clusterip_policy_epoch")
+	if err != nil {
+		return err
+	}
+	explicitEpoch, err := strconv.ParseUint(explicitEpochText, 10, 64)
+	if err != nil || explicitEpoch <= selectorEpoch {
+		return fmt.Errorf("%s explicit ClusterIP policy epoch %q must exceed selector policy epoch %d", path, explicitEpochText, selectorEpoch)
+	}
+	return nil
 }
 
 func decodeHostedFlowRecord(line string, output *hostedFlowRecord) error {
@@ -1451,6 +1525,32 @@ func requireHostedPositiveUintLine(path, key string) error {
 		return fmt.Errorf("%s must contain a positive unsigned %s value", path, key)
 	}
 	return nil
+}
+
+func hostedSingleLineValue(path, key string) (string, error) {
+	text, err := readHostedEvidence(path)
+	if err != nil {
+		return "", err
+	}
+	count := 0
+	var value string
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	for scanner.Scan() {
+		line := strings.TrimSpace(strings.TrimSuffix(scanner.Text(), "\r"))
+		recordedKey, recordedValue, ok := strings.Cut(line, "=")
+		if !ok || recordedKey != key {
+			continue
+		}
+		count++
+		value = strings.TrimSpace(recordedValue)
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("scan %s: %w", path, err)
+	}
+	if count != 1 || value == "" {
+		return "", fmt.Errorf("%s must contain exactly one non-empty %s value", path, key)
+	}
+	return value, nil
 }
 
 func validateHostedFixture(path string) error {

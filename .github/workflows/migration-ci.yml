@@ -456,6 +456,21 @@ jobs:
                 command: ["sh", "-c", "mkdir -p /www && printf 'ok\\n' > /www/index.html && exec httpd -f -p 8080 -h /www"]
           ---
           apiVersion: v1
+          kind: Service
+          metadata:
+            name: smoke-server
+            namespace: ztap-smoke
+          spec:
+            type: ClusterIP
+            selector:
+              app: smoke-server
+            ports:
+              - name: http
+                protocol: TCP
+                port: 8080
+                targetPort: 8080
+          ---
+          apiVersion: v1
           kind: Pod
           metadata:
             name: smoke-control
@@ -507,8 +522,21 @@ jobs:
             | if length == 1 then .[0] else empty end
           ' <<< "$agent_pods")"
           server_ip="$(kubectl -n ztap-smoke get pod smoke-server -o jsonpath='{.status.podIP}')"
+          service_ip="$(kubectl -n ztap-smoke get service smoke-server -o jsonpath='{.spec.clusterIP}')"
           test -n "$agent_pod"
           test -n "$server_ip"
+          test -n "$service_ip"
+          test "$service_ip" != None
+          service_endpoint_ip=
+          for ((attempt = 0; attempt < 30; attempt++)); do
+            service_endpoint_ip="$(kubectl -n ztap-smoke get endpoints smoke-server -o jsonpath='{.subsets[*].addresses[*].ip}')"
+            if [ "$service_endpoint_ip" = "$server_ip" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$service_endpoint_ip" = "$server_ip"
+          printf 'service_cluster_ip=%s\nservice_backend_pod_ip=%s\n' "$service_ip" "$server_ip"
 
           printf '%s\n' '--- agent security context ---'
           agent_json="$(kubectl -n ztap-system get pod "$agent_pod" -o json)"
@@ -690,6 +718,26 @@ jobs:
               return 1
             fi
           }
+          wait_for_policy_epoch_after() {
+            local previous_epoch="$1"
+            local current_epoch
+            local updated=0
+            for ((attempt = 0; attempt < 30; attempt++)); do
+              metrics="$(curl --fail --silent http://127.0.0.1:19090/metrics 2>/dev/null || true)"
+              if [ -n "$metrics" ] && current_epoch="$(read_uint_metric ztap_active_policy_epoch "$metrics")"; then
+                if [ "$current_epoch" -gt "$previous_epoch" ]; then
+                  updated=1
+                  break
+                fi
+              fi
+              sleep 2
+            done
+            if [ "$updated" -ne 1 ]; then
+              printf 'smoke probe failed: active policy epoch did not advance beyond %s\n' "$previous_epoch" >&2
+              return 1
+            fi
+            printf '%s\n' "$current_epoch"
+          }
           classified=0
           for ((attempt = 0; attempt < 90; attempt++)); do
             metrics="$(curl --fail --silent http://127.0.0.1:19090/metrics 2>/dev/null || true)"
@@ -732,6 +780,8 @@ jobs:
           printf '%s\n' '--- unselected control must reach the server ---'
           control_response="$(kubectl -n ztap-smoke exec smoke-control -- wget -qO- -T 3 "http://$server_ip:8080/")"
           test "$control_response" = ok
+          control_service_response="$(kubectl -n ztap-smoke exec smoke-control -- wget -qO- -T 3 "http://$service_ip:8080/")"
+          test "$control_service_response" = ok
 
           printf '%s\n' '--- selected client must be blocked ---'
           if kubectl -n ztap-smoke exec smoke-client -- wget -qO- -T 3 "http://$server_ip:8080/"; then
@@ -758,6 +808,74 @@ jobs:
           done
           test "$observed_deny" -eq 1
           printf 'packet_decisions_blocked_default_deny=%s\n' "$packet_decisions_blocked_default_deny"
+
+          printf '%s\n' '--- selector peer permits only the backend PodIP, not the Service frontend ---'
+          previous_policy_epoch="$active_policy_epoch"
+          kubectl apply -f - <<'EOF'
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: smoke-client-deny-egress
+            namespace: ztap-smoke
+          spec:
+            podSelector:
+              matchLabels:
+                app: smoke-client
+            policyTypes:
+              - Egress
+            egress:
+              - to:
+                  - podSelector:
+                      matchLabels:
+                        app: smoke-server
+                ports:
+                  - protocol: TCP
+                    port: 8080
+          EOF
+          active_policy_epoch="$(wait_for_policy_epoch_after "$previous_policy_epoch")"
+          printf 'selector_peer_policy_epoch=%s\n' "$active_policy_epoch"
+          selector_pod_response="$(kubectl -n ztap-smoke exec smoke-client -- wget -qO- -T 3 "http://$server_ip:8080/")"
+          test "$selector_pod_response" = ok
+          printf '%s\n' 'selector_peer_direct_podip=allowed'
+          if kubectl -n ztap-smoke exec smoke-client -- wget -qO- -T 3 "http://$service_ip:8080/"; then
+            printf '%s\n' 'selector peer unexpectedly allowed Service ClusterIP access' >&2
+            exit 1
+          fi
+          printf '%s\n' 'selector_peer_service_clusterip=blocked'
+
+          printf '%s\n' '--- explicit ClusterIP ipBlock permits the Service frontend, not the backend PodIP ---'
+          previous_policy_epoch="$active_policy_epoch"
+          kubectl apply -f - <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: smoke-client-deny-egress
+            namespace: ztap-smoke
+          spec:
+            podSelector:
+              matchLabels:
+                app: smoke-client
+            policyTypes:
+              - Egress
+            egress:
+              - to:
+                  - ipBlock:
+                      cidr: ${service_ip}/32
+                ports:
+                  - protocol: TCP
+                    port: 8080
+          EOF
+          active_policy_epoch="$(wait_for_policy_epoch_after "$previous_policy_epoch")"
+          printf 'explicit_clusterip_policy_epoch=%s\nexplicit_clusterip_ipblock_cidr=%s/32\n' \
+            "$active_policy_epoch" "$service_ip"
+          explicit_service_response="$(kubectl -n ztap-smoke exec smoke-client -- wget -qO- -T 3 "http://$service_ip:8080/")"
+          test "$explicit_service_response" = ok
+          printf '%s\n' 'explicit_clusterip_ipblock_service=allowed'
+          if kubectl -n ztap-smoke exec smoke-client -- wget -qO- -T 3 "http://$server_ip:8080/"; then
+            printf '%s\n' 'explicit ClusterIP ipBlock unexpectedly allowed direct backend PodIP access' >&2
+            exit 1
+          fi
+          printf '%s\n' 'explicit_clusterip_ipblock_podip=blocked'
           printf '%s\n' 'capability-only DaemonSet attached and enforced the smoke policy'
           ) 2>&1 | tee capability-agent-smoke.txt
 

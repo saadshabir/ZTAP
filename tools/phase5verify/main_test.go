@@ -1036,7 +1036,26 @@ func TestVerifyHostedEvidenceAcceptsReferenceBundle(t *testing.T) {
 		return path
 	}
 	write(ebpfDirectory, "ebpf-engine-tests.txt", "ebpf_engine_runtime_gate=passed\n")
-	smokeEvidence := "capability-only DaemonSet attached and enforced the smoke policy\nkindnet_networkpolicy_controller=disabled\nstatus_endpoints=passed\npacket_decisions_blocked_default_deny=1\nflow_expected_src_ip=10.244.0.2\nflow_expected_dst_ip=10.244.0.3\nflow_expected_dst_port=8080\n{\"timestamp\":\"2026-09-19T00:00:00Z\",\"policy_epoch\":1,\"cgroup_id\":123,\"direction\":\"egress\",\"protocol\":\"TCP\",\"src_ip\":\"10.244.0.2\",\"src_port\":40000,\"dst_ip\":\"10.244.0.3\",\"dst_port\":8080,\"action\":\"blocked\",\"reason\":\"default_deny\",\"schema_version\":1}\nflow_streaming=passed\n"
+	smokeEvidence := strings.Join([]string{
+		"capability-only DaemonSet attached and enforced the smoke policy",
+		"kindnet_networkpolicy_controller=disabled",
+		"status_endpoints=passed",
+		"packet_decisions_blocked_default_deny=1",
+		"service_cluster_ip=10.96.0.10",
+		"service_backend_pod_ip=10.244.0.3",
+		"selector_peer_policy_epoch=2",
+		"selector_peer_direct_podip=allowed",
+		"selector_peer_service_clusterip=blocked",
+		"explicit_clusterip_policy_epoch=3",
+		"explicit_clusterip_ipblock_cidr=10.96.0.10/32",
+		"explicit_clusterip_ipblock_service=allowed",
+		"explicit_clusterip_ipblock_podip=blocked",
+		"flow_expected_src_ip=10.244.0.2",
+		"flow_expected_dst_ip=10.244.0.3",
+		"flow_expected_dst_port=8080",
+		`{"timestamp":"2026-09-19T00:00:00Z","policy_epoch":1,"cgroup_id":123,"direction":"egress","protocol":"TCP","src_ip":"10.244.0.2","src_port":40000,"dst_ip":"10.244.0.3","dst_port":8080,"action":"blocked","reason":"default_deny","schema_version":1}`,
+		"flow_streaming=passed",
+	}, "\n") + "\n"
 	smokePath := write(capabilityDirectory, "capability-agent-smoke.txt", smokeEvidence)
 	fixtureEvidence := "offline_fixture_shape=pods=250 policies=25 compiled_rules=2500\nfixture_live_shape=verified\nfixture_shape=pods=250 policies=25 pods_per_policy=10 peers_per_policy=10 compiled_rules=2500\n"
 	fixturePath := write(capabilityDirectory, "capability-agent-reference-fixture.txt", fixtureEvidence)
@@ -1094,6 +1113,65 @@ func TestVerifyHostedEvidenceAcceptsReferenceBundle(t *testing.T) {
 
 	if err := verifyHostedEvidence(ebpfDirectory, capabilityDirectory); err != nil {
 		t.Fatalf("valid hosted evidence rejected: %v", err)
+	}
+	clusterEvidenceCases := []struct {
+		name  string
+		alter func(string) string
+	}{
+		{
+			name: "missing selector Service denial",
+			alter: func(text string) string {
+				return strings.Replace(text, "selector_peer_service_clusterip=blocked\n", "", 1)
+			},
+		},
+		{
+			name: "missing explicit Service allow",
+			alter: func(text string) string {
+				return strings.Replace(text, "explicit_clusterip_ipblock_service=allowed\n", "", 1)
+			},
+		},
+		{
+			name: "duplicate ClusterIP address",
+			alter: func(text string) string {
+				return strings.Replace(text, "service_cluster_ip=10.96.0.10\n", "service_cluster_ip=10.96.0.10\nservice_cluster_ip=10.96.0.10\n", 1)
+			},
+		},
+		{
+			name: "mismatched explicit ClusterIP CIDR",
+			alter: func(text string) string {
+				return strings.Replace(text, "explicit_clusterip_ipblock_cidr=10.96.0.10/32", "explicit_clusterip_ipblock_cidr=10.96.0.11/32", 1)
+			},
+		},
+		{
+			name: "non-advancing policy epoch",
+			alter: func(text string) string {
+				return strings.Replace(text, "explicit_clusterip_policy_epoch=3", "explicit_clusterip_policy_epoch=2", 1)
+			},
+		},
+		{
+			name: "flow destination differs from Service backend",
+			alter: func(text string) string {
+				altered := strings.Replace(text, "flow_expected_dst_ip=10.244.0.3", "flow_expected_dst_ip=10.244.0.4", 1)
+				return strings.Replace(altered, `"dst_ip":"10.244.0.3"`, `"dst_ip":"10.244.0.4"`, 1)
+			},
+		},
+	}
+	for _, test := range clusterEvidenceCases {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := test.alter(smokeEvidence)
+			if invalid == smokeEvidence {
+				t.Fatal("test did not alter the hosted smoke transcript")
+			}
+			if err := os.WriteFile(smokePath, []byte(invalid), 0o600); err != nil {
+				t.Fatalf("write altered hosted smoke evidence: %v", err)
+			}
+			if err := verifyHostedEvidence(ebpfDirectory, capabilityDirectory); err == nil {
+				t.Fatal("hosted verifier accepted invalid ClusterIP evidence")
+			}
+		})
+	}
+	if err := os.WriteFile(smokePath, []byte(smokeEvidence), 0o600); err != nil {
+		t.Fatalf("restore valid smoke evidence after ClusterIP checks: %v", err)
 	}
 	missingCNIProfile := strings.Replace(smokeEvidence, "kindnet_networkpolicy_controller=disabled\n", "", 1)
 	if err := os.WriteFile(smokePath, []byte(missingCNIProfile), 0o600); err != nil {
