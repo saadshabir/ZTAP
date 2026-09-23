@@ -25,7 +25,8 @@ import (
 
 const (
 	phase5PacketSamples    = 3
-	phase5PacketRoundTrips = 1000
+	// Keep roughly 100 observations in the tail used for each p99 estimate.
+	phase5PacketRoundTrips = 10_000
 	phase5TCPBytes         = 128 << 20
 )
 
