@@ -850,27 +850,6 @@ Progress: **complete and merged**. The local baseline, artifact cleanup, Makefil
 
 The follow-up review retained the `v0.1.0` self-traffic contract and added an explicit `(cgroup, PodIP)` bypass, a hard hosted self assertion, per-direction quarantine, failed-candidate preservation, partial link-update rollback, and multi-subject ingress-identity coverage in `bc636f5`. Test injection was corrected in `3b198a4`, and the hosted DaemonSet observer-selection race was fixed in `091310f`. Final hosted run `34665388860` from `091310f` passed all three jobs, and its raw artifacts were reviewed. Final Migration CI push run `34665381636` is also green. The attachment target is now one link pair per subject cgroup, sharing programs/maps, because cgroup local storage identifies the attachment cgroup. The Phase 0 architecture gate is closed; Phase 1 may resume.
 
-Continuation audit (2026-09-23): PR #193's exact-head run `35799447776` for
-`e31809f594a0f39326094f0cdd57b73c83ddc34f` passed `Required CI`, both
-privileged Linux/Kubernetes jobs, and all standard checks. Its retained
-capability and eBPF artifacts contain the 250-Pod/25-policy/2,500-rule fixture,
-three resource samples (maximum 0.000494184 CPU cores and 44.078125 MiB
-`memory.current`), a live flow record, the single-enforcer marker, and a
-1,539-ms rolling fail-open interval. The interval has both nanosecond
-endpoints; the replacement's first Running observation is within the measured
-interval, its UID differs from the old Pod on the same node, and it later
-became Ready. The exact hosted-evidence verifier nevertheless rejected the
-artifact because the smoke transcript emitted the unrelated Kubernetes
-security-context JSON as an unlabelled line, which the strict flow parser
-mistook for a flow event. The producer now labels that retained JSON and a
-focused regression covers the transcript shape. The exact artifact therefore
-does not yet count toward final acceptance; the corrected exact-head hosted
-rerun must pass the verifier before any checklist credit. The Phase 5
-implementation checklist remains 90/90 complete (0% remaining); final
-acceptance remains 12/39 complete, with 27/39 items open (69.2% remaining).
-Section 14.5 measurements and release publication/provenance archive remain
-hosted gates.
-
 Work:
 
 - [x] Record the baseline commit, its command list, the already-dirty working-tree boundary, and local host limitations.
@@ -2911,6 +2890,42 @@ acceptance remains 12/39 complete, with 27/39 items open (69.2% remaining).
 Section 14.5 measurements and release publication/provenance archive remain
 hosted gates.
 
+Continuation audit (2026-09-23): PR #193's exact-head run `35799447776` for
+`e31809f594a0f39326094f0cdd57b73c83ddc34f` passed `Required CI`, both
+privileged Linux/Kubernetes jobs, and all standard checks. Its retained
+capability and eBPF artifacts contain the 250-Pod/25-policy/2,500-rule fixture,
+three resource samples (maximum 0.000494184 CPU cores and 44.078125 MiB
+`memory.current`), a live flow record, the single-enforcer marker, and a
+1,539-ms rolling fail-open interval. The interval had both nanosecond
+endpoints; the replacement's first Running observation was within the measured
+interval, its UID differed from the old Pod on the same node, and it later
+became Ready. The exact hosted-evidence verifier initially rejected that
+artifact because the smoke transcript emitted unrelated Kubernetes
+security-context JSON as an unlabelled line, which the strict flow parser
+mistook for a flow event. The producer now labels the retained JSON, and the
+focused regression passed.
+
+The corrected exact-head PR run `35800757264` for
+`fca1d405acd35e449f50966934720fc5e4014e68` passed `Required CI`, all standard
+jobs, and both privileged Linux/Kubernetes jobs. Retained artifacts
+`10726006786` and `10726106159` passed the checked-in hosted-evidence verifier.
+They record the live selected-client deny and real flow event, an allowed
+unselected control, the exact capability-only/non-privileged security context,
+the 250-Pod/25-policy/2,500-rule fixture, and three resource samples (maximum
+0.000387449 CPU cores and 45.937500 MiB `memory.current`). The verified
+same-node replacement became Ready and its first Running observation was
+inside the 1,431-ms rolling fail-open interval. The hosted Linux eBPF suite,
+including the selected-cgroup, direction/default-deny, reply, epoch, update
+failure, and cleanup cases, passed; the full Go race suite, lint/vet, Docker,
+manifest, and integration gates also passed. The evidence and tests close the
+matching selected-policy, default-deny, packet, agent-operation, and repository
+quality acceptance rows; they do not close the unchecked Service-ClusterIP
+runtime gate, the unobserved-replacement-cgroup measurement, the separate
+Pod-start/crash/restart measurements, Section 14.5 performance budgets, or
+release publication/provenance archive. Phase 5 implementation remains 90/90
+complete (0% remaining); final acceptance is now 32/39 complete, with 7/39
+items open (17.9% remaining).
+
 Work:
 
 - [x] Create the four-document end state; final editorial review remains part of the release gate.
@@ -3313,31 +3328,31 @@ There is no runtime compatibility layer.
 
 ### Enforcement correctness
 
-- [ ] Policies apply only to selected local container cgroups.
-- [ ] Ingress and egress isolation are independent.
-- [ ] Multiple policies combine additively.
-- [ ] Empty directional rules enforce default deny.
-- [ ] Unselected pods remain allowed.
-- [ ] Allowed TCP/UDP reply traffic works without a separate reverse policy rule.
-- [ ] Reusing policy slot `0` or `1` cannot reactivate connection state from an older policy epoch.
-- [ ] Documented Node-status and pod self traffic remain allowed; local-node and hostNetwork limitations are stated explicitly.
+- [x] Policies apply only to selected local container cgroups.
+- [x] Ingress and egress isolation are independent.
+- [x] Multiple policies combine additively.
+- [x] Empty directional rules enforce default deny.
+- [x] Unselected pods remain allowed.
+- [x] Allowed TCP/UDP reply traffic works without a separate reverse policy rule.
+- [x] Reusing policy slot `0` or `1` cannot reactivate connection state from an older policy epoch.
+- [x] Documented Node-status and pod self traffic remain allowed; local-node and hostNetwork limitations are stated explicitly.
 - [ ] Explicit IPv4 ClusterIP `ipBlock` rules work, and selector peers never synthesize Service frontend access.
-- [ ] Malformed, fragmented, and unsupported packets cannot bypass an isolated direction.
-- [ ] Unsupported local policy semantics quarantine only affected subjects and directions while unrelated accepted policies continue updating.
+- [x] Malformed, fragmented, and unsupported packets cannot bypass an isolated direction.
+- [x] Unsupported local policy semantics quarantine only affected subjects and directions while unrelated accepted policies continue updating.
 - [ ] Failed kernel updates preserve previous state for already classified cgroups; the limitation for unobserved replacement cgroups is measured and documented.
-- [ ] A policy update becomes visible through one atomic slot-plus-epoch flip with no mixed ruleset.
-- [ ] Policy deletion removes its contribution on the next reconciliation.
+- [x] A policy update becomes visible through one atomic slot-plus-epoch flip with no mixed ruleset.
+- [x] Policy deletion removes its contribution on the next reconciliation.
 
 ### Operations
 
-- [ ] `/healthz`, `/readyz`, and `/metrics` have the documented behavior.
-- [ ] Dry-run never reports enforcement readiness, and `ztap_agent_enforcing` remains `0`.
-- [ ] A quarantined local subject changes readiness to 503 and reports bounded metric/log diagnostics without blocking unrelated reconciliation.
-- [ ] Real flow streaming works from the pinned map and contains no simulated events.
-- [ ] One agent and one flow reader can own node state at a time, with automatic lock release after a crash.
-- [ ] Graceful shutdown removes links and owned pins.
+- [x] `/healthz`, `/readyz`, and `/metrics` have the documented behavior.
+- [x] Dry-run never reports enforcement readiness, and `ztap_agent_enforcing` remains `0`.
+- [x] A quarantined local subject changes readiness to 503 and reports bounded metric/log diagnostics without blocking unrelated reconciliation.
+- [x] Real flow streaming works from the pinned map and contains no simulated events.
+- [x] One agent and one flow reader can own node state at a time, with automatic lock release after a crash.
+- [x] Graceful shutdown removes links and owned pins.
 - [ ] Pod-start classification, crash/restart, and rolling-update fail-open intervals are measured separately and prominently documented.
-- [ ] The DaemonSet operates with explicit capabilities and without privileged mode.
+- [x] The DaemonSet operates with explicit capabilities and without privileged mode.
 
 ### Repository quality
 
@@ -3345,7 +3360,7 @@ There is no runtime compatibility layer.
 - [x] No root build/test/coverage artifacts remain after `make clean`.
 - [x] Removed feature directories, docs, dependencies, workflows, and configuration are gone together. The 2026-09-19 working-tree, dependency-graph, and maintained-document cleanup audit supports this source-level item.
 - [x] Generated eBPF sources reproduce without a diff using the pinned LLVM 18 compiler.
-- [ ] `go test ./... -race`, lint, vet, Docker build, manifest validation, and Linux integration tests pass.
+- [x] `go test ./... -race`, lint, vet, Docker build, manifest validation, and Linux integration tests pass.
 - [x] Branch protection requires the stable `Required CI` result, and no transitional workflow can publish artifacts. The live `main` protection record is strict with only `Required CI`, and the workflow audit finds publication only in the tag-gated release workflow.
 - [x] Searches find no stale claims for REST, gRPC, cloud, etcd, anomaly, audit, compliance, macOS, Windows, or iptables support outside release history; the remaining migration references explicitly describe removed CRD/operator behavior.
 
