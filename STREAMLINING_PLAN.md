@@ -2977,8 +2977,40 @@ README and deployment/development documentation now state the separate
 measurement scopes and limitations. This closes five further acceptance rows:
 final acceptance is 38/39 complete, with only the tagged release's complete
 raw evidence/provenance archive and README-to-release evidence alignment
-remaining open. The temporary preflight job must be removed before the final
-tag, and the tag workflow must rerun its own measurements.
+remaining as one combined checklist row. The temporary preflight job must be
+removed before the final tag, and the tag workflow must rerun its own
+measurements.
+
+Continuation evidence update (2026-09-23): push run
+[`35812615459`](https://github.com/saadshabir/ZTAP/actions/runs/35812615459)
+for implementation commit `af4cfaed160825835d40190bab9d21eb32c6b071` passed
+`Required CI`, the standard jobs, privileged eBPF verification,
+capability-only kind, and the temporary Linux performance preflight. The
+preflight artifact `10730701615` (SHA-256
+`1f01ac343ac9eea0158ea491ed88bc98b357a4044f6c73873a8e4f2bb660d235`), eBPF
+artifact `10730142486` (SHA-256
+`baeb0babcdd62cc358450f6687958da03b26ac24c3fc87edaca2be30a8972c9f`, and
+capability artifact `10730033190` (SHA-256
+`0e0e48ff25fb9c453dc9b0fb2ee2ec79e5ceb70741be85d57f6997076a0d59c2`) all
+belong to that SHA. The ZIP digests matched locally, and `phase5verify`
+accepted all ten Phase 5 JSON files with the same-run hosted eBPF and
+capability evidence.
+
+Three packet samples each used 10,000 UDP round trips and a 128 MiB TCP
+transfer. The maximum p99 latency increase was 1.329 µs and maximum sampled
+TCP throughput regression was 3.906%, within the unchanged 10 µs and 10%
+budgets. Flow accounting balanced 60,099 decisions over 60.100 seconds as
+11,800 delivered, 48,299 rate-limited, and zero ring-full. Intermediate run
+[`35811744820`](https://github.com/saadshabir/ZTAP/actions/runs/35811744820)
+failed the latency budget; run
+[`35812473106`](https://github.com/saadshabir/ZTAP/actions/runs/35812473106)
+failed the TCP regression budget and formatting check. Neither receives
+acceptance credit; the passing run is the evidence recorded above. The
+branch-only preflight job is removed in this continuation; the tagged release
+must execute its own measurements and attach its durable evidence and
+provenance archive. Phase 5 implementation remains 90/90 complete (0% left);
+final acceptance remains 38/39 complete (2.6% left), with only the combined
+release archive/README-alignment row open.
 
 Work:
 

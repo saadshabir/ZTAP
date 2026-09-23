@@ -13,21 +13,23 @@ Kubernetes acceptance gate runs separately in a disposable kind cluster.
 
 ### Tested kernel record
 
-- Current Phase 5 CI validation: Linux `6.17.0-1022-azure` on the
-  CPU-pinned `ubuntu-24.04` runner in the exact-head preflight run
-  [`35810441612`](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
-  for commit `399b0d89603459ccffd879b6880bb55a9201fca2`.
+- Last Phase 5 measurement run: Linux `6.17.0-1022-azure` on the
+  CPU-pinned `ubuntu-24.04` runner in push run
+  [`35812615459`](https://github.com/saadshabir/ZTAP/actions/runs/35812615459)
+  for implementation commit `af4cfaed160825835d40190bab9d21eb32c6b071`.
 - Current Phase 5 manual validation: no separate Linux host run recorded.
 
 The release workflow records `uname` in `phase5-environment.txt` and requires
 all native-agent artifacts to report the same kernel release. The CI record
-above is for the linked preflight commit; the tagged release reruns the gates
-and retains its own exact environment and output. A separate manual Linux
-validation has not been claimed from the macOS checkout.
+above is for the linked measurement commit, before removal of the temporary
+branch-only preflight job. The tagged release reruns the gates and retains its
+own exact environment and output. A separate manual Linux validation has not
+been claimed from the macOS checkout.
 
 ### Hosted Phase 5 preflight record
 
-The [exact-head preflight run](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+The full-scope preflight run
+[35810441612](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
 retains the raw `phase5-performance.txt` and ten `phase5-*.json` files in its
 `phase5-performance-preflight` artifact. The command was
 `sudo --preserve-env=PATH,HOME,GOFLAGS,GOMODCACHE,GOCACHE,PHASE5_RUN_ID taskset --cpu-list 0,1 env GOMAXPROCS=2 make performance`, using real
@@ -46,9 +48,9 @@ the tag workflow runs and verifies a separate release measurement.
 | Flow decision accounting | 60,100 decisions = 11,967 delivered + 48,133 rate-limited + 0 ring-full |
 | Quiet helper maximum | 0.000998 CPU cores, 57.856 MiB RSS (0.10 core, 200 MiB budgets) |
 
-The TCP comparison used three 8 MiB loopback transfers from one selected
-cgroup, with the same full fixture attached and detached. The helper resource
-measurement excludes kernel-map memory and a real API server; the capability
+That run's TCP comparison used three 8 MiB loopback transfers from one
+selected cgroup, with the same full fixture attached and detached. The helper
+resource measurement excludes kernel-map memory and a real API server; the capability
 only kind job measures the shipped container separately. In that same
 exact-head run, the capability-only kind agent reached a maximum of
 0.000547992 CPU cores and 50.136719 MiB `memory.current` across three quiet
@@ -62,6 +64,32 @@ stable across three applies. The [capability artifact](https://github.com/saadsh
 and [eBPF artifact](https://github.com/saadshabir/ZTAP/actions/runs/35810441612/artifacts/10729382463)
 have published SHA-256 ZIP digests and pass `phase5verify` together with the
 ten preflight JSON files.
+
+The later [packet and flow follow-up run](https://github.com/saadshabir/ZTAP/actions/runs/35812615459)
+for implementation commit `af4cfaed160825835d40190bab9d21eb32c6b071` also
+passed `Required CI`, the standard jobs, the privileged eBPF suite, the
+capability-only kind job, and the temporary real-cgroup preflight. All ten
+Phase 5 JSON files passed `phase5verify` with the same-run hosted artifacts.
+The preflight artifact `10730701615` has SHA-256
+`1f01ac343ac9eea0158ea491ed88bc98b357a4044f6c73873a8e4f2bb660d235`; the
+eBPF artifact `10730142486` has SHA-256
+`baeb0babcdd62cc358450f6687958da03b26ac24c3fc87edaca2be30a8972c9f`; and the
+capability artifact `10730033190` has SHA-256
+`0e0e48ff25fb9c453dc9b0fb2ee2ec79e5ceb70741be85d57f6997076a0d59c2`.
+
+This higher-resolution packet run retained three samples of 10,000 UDP round
+trips and 128 MiB TCP transfers per sample. Maximum UDP p99 increase was
+1.329 µs (10 µs budget); maximum sampled TCP throughput regression was 3.906%
+(10% budget). It recorded 60,099 flow decisions over 60.100 seconds, balanced
+as 11,800 delivered, 48,299 rate-limited, and zero ring-full. The fixed budgets
+were unchanged. Intermediate runs
+[`35811744820`](https://github.com/saadshabir/ZTAP/actions/runs/35811744820)
+and
+[`35812473106`](https://github.com/saadshabir/ZTAP/actions/runs/35812473106)
+did not pass the latency and throughput gates respectively (the latter also
+reported a formatting failure); they receive no acceptance credit. The
+passing follow-up's hosted artifacts have limited retention and do not satisfy
+the release archive requirement.
 
 For the complete local workflow, install `make`, clang/LLVM with the
 configured `clang-18` binary, Docker, `kubectl`, and kind. `golangci-lint`,
@@ -362,7 +390,8 @@ Available kernel-memlock readings must be positive before their adjacent
 stability is compared; an unavailable reading must carry zero observed bytes
 so stale kernel metadata cannot be reused.
 It also compares three real-loopback UDP/TCP samples from one selected subject
-with the cgroup eBPF program detached and attached while the full
+(10,000 UDP round trips and a 128 MiB TCP transfer per sample) with the cgroup
+eBPF program detached and attached while the full
 250-subject/2,500-rule engine state is resident, enforcing the 10-microsecond
 UDP p99 delta and 10-percent TCP throughput regression budgets in
 `dist/phase5-packet.json`; one complete detached/attached pass warms the

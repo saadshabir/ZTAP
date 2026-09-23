@@ -73,11 +73,11 @@ latency and are not zero-gap availability guarantees.
 
 ### Measured Linux reference results
 
-The [Phase 5 preflight](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+The full-scope [Phase 5 preflight](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
 for commit `399b0d8` used Linux `6.17.0-1022-azure`, a process pinned to two
 CPUs, real cgroups and packets, and the 250-Pod/25-policy/2,500-rule fixture.
 Its raw JSON and hosted Kubernetes/eBPF transcripts are attached to that
-workflow run. The checked-in verifier accepts the combined evidence.
+workflow run, and the checked-in verifier accepted the combined evidence.
 
 | Measurement | Result | Scope |
 | --- | ---: | --- |
@@ -97,6 +97,17 @@ the policy on an already classified cgroup while a newly created cgroup was
 unobserved; its first allowed probe to blocked probe after a controlled retry
 spanned 2,046.5 ms. See [deployment limits](docs/deployment.md) for the
 operational implications.
+
+A later [packet and flow follow-up](https://github.com/saadshabir/ZTAP/actions/runs/35812615459)
+for implementation commit `af4cfae` used three loopback samples, each with
+10,000 UDP round trips and a 128 MiB TCP transfer. The maximum UDP p99 increase
+was 1.329 µs (10 µs budget), and the maximum sampled TCP throughput regression
+was 3.906% (10% budget). Its 60.100-second flow run reconciled 60,099 decisions
+as 11,800 delivered, 48,299 rate-limited, and zero ring-full. This follow-up
+passed the checked-in verifier together with same-run hosted eBPF and
+capability-agent evidence. These pre-release workflow artifacts have limited
+retention and are not the tagged release's provenance archive; the release
+workflow must produce and attach that archive before these claims are final.
 
 The DaemonSet mounts the host cgroup v2 hierarchy and bpffs, requests only the
 capabilities needed by the eBPF engine, and exposes health, readiness, and

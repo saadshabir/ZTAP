@@ -45,6 +45,15 @@ The 60.101-second flow run accounted for all 60,100 decisions. The shipped
 kind agent peaked at 0.000548 CPU cores and 50.137 MiB `memory.current`
 across three quiet samples.
 
+A higher-resolution [packet and flow follow-up](https://github.com/saadshabir/ZTAP/actions/runs/35812615459)
+for implementation commit `af4cfae` used 10,000 UDP round trips and a 128 MiB
+TCP transfer in each of three samples. UDP p99 increased by at most 1.329 µs;
+the maximum sampled TCP throughput regression was 3.906%. The 60.100-second
+flow run accounted for 60,099 decisions: 11,800 delivered, 48,299 rate-limited,
+and zero ring-full. This pre-release result passed the fixed 10 µs/10% budgets;
+its short-lived CI artifacts are not a substitute for the tagged release's
+raw-evidence and provenance archive.
+
 Watcher discovery and process-owned links cause fail-open windows. In the
 linked fixtures, newly Running Pod classification was 207.381 ms p95, an
 orderly agent restart was 421.457 ms p95, SIGKILL to the first allowed packet
