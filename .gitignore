@@ -82,6 +82,3 @@ yarn-error.log*
 .cache/
 .mypy_cache/
 .pytest_cache/
-
-# Private local planning
-/STREAMLINING_PLAN.md
