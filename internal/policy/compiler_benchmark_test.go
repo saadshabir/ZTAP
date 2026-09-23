@@ -13,8 +13,8 @@ const (
 )
 
 // TestReferenceFixtureShape protects the documented compiler workload from
-// drifting. This is deliberately a Go-only supporting fixture: the Phase 5
-// release gate still requires separate real-cgroup, real-packet, CPU, and
+// drifting. This is deliberately a Go-only supporting fixture: release
+// acceptance still requires separate real-cgroup, real-packet, CPU, and
 // memory measurements on the documented Linux reference environment.
 func TestReferenceFixtureShape(t *testing.T) {
 	policies, input := referenceCompileFixture()
@@ -35,8 +35,8 @@ func TestReferenceFixtureShape(t *testing.T) {
 
 // BenchmarkCompileReferenceFixture measures only native-policy compilation
 // for the 250-Pod/25-policy/2,500-rule shape. It must not be used to claim the
-// kernel-path reconciliation, packet latency, CPU, memory, or flow-loss gates
-// from STREAMLINING_PLAN.md.
+// kernel-path reconciliation, packet latency, CPU, memory, or flow-loss
+// acceptance criteria from real Linux runs.
 func BenchmarkCompileReferenceFixture(b *testing.B) {
 	policies, input := referenceCompileFixture()
 	b.ReportAllocs()
