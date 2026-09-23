@@ -2949,9 +2949,36 @@ that gate's budgets. The verified same-node rolling-update fail-open interval
 is 1,853 ms. This closes the explicit ClusterIP acceptance row only; the
 unobserved-replacement-cgroup measurement, separate Pod-start/crash/restart
 measurements, Section 14.5 performance gates, and release
-publication/provenance archive remain open. Phase 5 implementation remains
-90/90 complete (0% remaining); final acceptance is now 33/39 complete, with
-6/39 items open (15.4% remaining).
+publication/provenance archive remained open at that audit. Phase 5
+implementation remained 90/90 complete; final acceptance was 33/39.
+
+Continuation audit (2026-09-23): exact-head run
+[`35810441612`](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+for `399b0d89603459ccffd879b6880bb55a9201fca2` passed `Required CI`, all
+standard jobs, the privileged eBPF suite, the capability-only kind job, and
+the temporary real-cgroup performance preflight. The preflight artifact
+`10729970202` contains all ten Phase 5 JSON files and the raw command output;
+the checked-in verifier accepted their shared run ID. The capability artifact
+`10729438809` and eBPF artifact `10729382463` match their published SHA-256
+digests, and the same verifier accepted them together with the preflight
+files. On the CPU-pinned Linux `6.17.0-1022-azure` fixture, reconciliation
+p95 was 180.467 ms, initial activation p95 423.878 ms, informer-event
+activation p95 105.217 ms, packet p99 latency increase 3.697 µs, maximum
+sampled TCP regression 0%, and 60,100 flow decisions reconciled exactly as
+11,967 delivered, 48,133 rate-limited, and zero ring-full. The shipped kind
+agent peaked at 0.000547992 CPU cores and 50.136719 MiB `memory.current` over
+three quiet samples. Pod-start classification p95 was 207.381 ms, orderly
+restart p95 421.457 ms, SIGKILL to first allowed packet p95 4.672 ms, and
+the same-node DaemonSet rollout had a 2,084-ms fail-open interval. The
+privileged failed candidate-link test preserved the already classified
+cgroup's active policy while an unobserved new cgroup sent an allowed packet;
+first allowed probe to blocked probe after controlled retry was 2,046.500 ms.
+README and deployment/development documentation now state the separate
+measurement scopes and limitations. This closes five further acceptance rows:
+final acceptance is 38/39 complete, with only the tagged release's complete
+raw evidence/provenance archive and README-to-release evidence alignment
+remaining open. The temporary preflight job must be removed before the final
+tag, and the tag workflow must rerun its own measurements.
 
 Work:
 
@@ -3366,7 +3393,7 @@ There is no runtime compatibility layer.
 - [x] Explicit IPv4 ClusterIP `ipBlock` rules work, and selector peers never synthesize Service frontend access. Exact-head hosted run `35806655929` verified direct backend PodIP access and Service ClusterIP denial for selector peers, then explicit `/32` Service access and backend PodIP denial; capability artifact `10727314888` passed the checked-in hosted-evidence verifier.
 - [x] Malformed, fragmented, and unsupported packets cannot bypass an isolated direction.
 - [x] Unsupported local policy semantics quarantine only affected subjects and directions while unrelated accepted policies continue updating.
-- [ ] Failed kernel updates preserve previous state for already classified cgroups; the limitation for unobserved replacement cgroups is measured and documented.
+- [x] Failed kernel updates preserve previous state for already classified cgroups; the limitation for unobserved replacement cgroups is measured and documented. Exact-head hosted run `35810441612` passed the active-policy candidate-link test and recorded the controlled probe-to-retry interval; README and deployment guidance state its scope.
 - [x] A policy update becomes visible through one atomic slot-plus-epoch flip with no mixed ruleset.
 - [x] Policy deletion removes its contribution on the next reconciliation.
 
@@ -3378,7 +3405,7 @@ There is no runtime compatibility layer.
 - [x] Real flow streaming works from the pinned map and contains no simulated events.
 - [x] One agent and one flow reader can own node state at a time, with automatic lock release after a crash.
 - [x] Graceful shutdown removes links and owned pins.
-- [ ] Pod-start classification, crash/restart, and rolling-update fail-open intervals are measured separately and prominently documented.
+- [x] Pod-start classification, crash/restart, and rolling-update fail-open intervals are measured separately and prominently documented. Exact-head run `35810441612` supplies the four distinct measurements and scopes.
 - [x] The DaemonSet operates with explicit capabilities and without privileged mode.
 
 ### Repository quality
@@ -3393,9 +3420,9 @@ There is no runtime compatibility layer.
 
 ### Efficiency evidence
 
-- [ ] The documented 250-Pod/25-policy/2,500-rule fixture meets the reconciliation, activation, CPU, and memory budgets.
-- [ ] Real-packet measurements meet the latency and throughput budgets on the reference environment.
-- [ ] The 1,000-decisions/second flow test has no silent loss; delivered, rate-limited, and ring-full accounting reconciles with decision totals.
+- [x] The documented 250-Pod/25-policy/2,500-rule fixture meets the reconciliation, activation, CPU, and memory budgets. Exact-head hosted run `35810441612` passed the native-agent and shipped kind-container gates; the latter used a two-CPU quota and retained raw cgroup counters.
+- [x] Real-packet measurements meet the latency and throughput budgets on the reference environment. The Linux real-cgroup preflight artifact `10729970202` records the three packet samples and passes the checked-in verifier.
+- [x] The 1,000-decisions/second flow test has no silent loss; delivered, rate-limited, and ring-full accounting reconciles with decision totals. The same preflight recorded 60,100 decisions over 60.101 seconds with exact accounting.
 - [ ] Raw benchmark commands, environment details, and outputs are attached to the release; README claims do not exceed that evidence.
 
 ## 18. Fixed assumptions

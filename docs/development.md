@@ -13,15 +13,55 @@ Kubernetes acceptance gate runs separately in a disposable kind cluster.
 
 ### Tested kernel record
 
-- Current Phase 5 CI validation: pending for the uncommitted Phase 5 diff.
-- Current Phase 5 manual validation: no kernel release recorded.
+- Current Phase 5 CI validation: Linux `6.17.0-1022-azure` on the
+  CPU-pinned `ubuntu-24.04` runner in the exact-head preflight run
+  [`35810441612`](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+  for commit `399b0d89603459ccffd879b6880bb55a9201fca2`.
+- Current Phase 5 manual validation: no separate Linux host run recorded.
 
-No exact kernel version is claimed until the hosted gates pass for the reviewed
-commit. The release workflow records `uname` in `phase5-environment.txt` and
-requires all native-agent artifacts to report the same kernel release. Release
-preparation must replace the pending entries above with those exact CI and
-manual-validation kernel releases; missing kernel records remain a release
-blocker.
+The release workflow records `uname` in `phase5-environment.txt` and requires
+all native-agent artifacts to report the same kernel release. The CI record
+above is for the linked preflight commit; the tagged release reruns the gates
+and retains its own exact environment and output. A separate manual Linux
+validation has not been claimed from the macOS checkout.
+
+### Hosted Phase 5 preflight record
+
+The [exact-head preflight run](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+retains the raw `phase5-performance.txt` and ten `phase5-*.json` files in its
+`phase5-performance-preflight` artifact. The command was
+`sudo --preserve-env=PATH,HOME,GOFLAGS,GOMODCACHE,GOCACHE,PHASE5_RUN_ID taskset --cpu-list 0,1 env GOMAXPROCS=2 make performance`, using real
+cgroups and packets with the 250-subject/25-policy/2,500-rule fixture. The
+checked-in `phase5verify` accepted all ten downloaded JSON files with the
+preflight run ID. These values are pre-release results for the linked commit;
+the tag workflow runs and verifies a separate release measurement.
+
+| Gate | Hosted preflight result |
+| --- | ---: |
+| Native reconciliation p95 | 180.467 ms (2,000 ms budget) |
+| Initial activation p95 | 423.878 ms (3,000 ms budget) |
+| Informer event to active epoch p95 | 105.217 ms (3,000 ms budget) |
+| Packet p99 latency increase | 3.697 µs (10 µs budget) |
+| Maximum sampled TCP throughput regression | 0% (10% budget) |
+| Flow decision accounting | 60,100 decisions = 11,967 delivered + 48,133 rate-limited + 0 ring-full |
+| Quiet helper maximum | 0.000998 CPU cores, 57.856 MiB RSS (0.10 core, 200 MiB budgets) |
+
+The TCP comparison used three 8 MiB loopback transfers from one selected
+cgroup, with the same full fixture attached and detached. The helper resource
+measurement excludes kernel-map memory and a real API server; the capability
+only kind job measures the shipped container separately. In that same
+exact-head run, the capability-only kind agent reached a maximum of
+0.000547992 CPU cores and 50.136719 MiB `memory.current` across three quiet
+five-second samples under a two-CPU cgroup quota. The verified same-node
+DaemonSet rollout recorded a 2,084 ms fail-open interval. The privileged
+eBPF test recorded 2,046.500 ms from an unobserved replacement cgroup's first
+allowed probe through a controlled retry and subsequent blocked probe while
+the previously classified cgroup kept its active policy. The kernel-map
+memlock readings stabilized after both policy slots were warmed and remained
+stable across three applies. The [capability artifact](https://github.com/saadshabir/ZTAP/actions/runs/35810441612/artifacts/10729438809)
+and [eBPF artifact](https://github.com/saadshabir/ZTAP/actions/runs/35810441612/artifacts/10729382463)
+have published SHA-256 ZIP digests and pass `phase5verify` together with the
+ten preflight JSON files.
 
 For the complete local workflow, install `make`, clang/LLVM with the
 configured `clang-18` binary, Docker, `kubectl`, and kind. `golangci-lint`,

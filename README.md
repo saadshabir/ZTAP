@@ -71,6 +71,33 @@ open on the affected node while the replacement attaches and completes its
 first reconciliation; these intervals are measured separately from policy
 latency and are not zero-gap availability guarantees.
 
+### Measured Linux reference results
+
+The [Phase 5 preflight](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+for commit `399b0d8` used Linux `6.17.0-1022-azure`, a process pinned to two
+CPUs, real cgroups and packets, and the 250-Pod/25-policy/2,500-rule fixture.
+Its raw JSON and hosted Kubernetes/eBPF transcripts are attached to that
+workflow run. The checked-in verifier accepts the combined evidence.
+
+| Measurement | Result | Scope |
+| --- | ---: | --- |
+| Native reconciliation p95 | 180.467 ms | Synchronized fake informer cache, real engine apply; excludes API list latency and fixed debounce |
+| New Pod classification p95 | 207.381 ms | Newly Running Pod in a fake informer cache with a pre-created cgroup; excludes API-server and runtime startup |
+| Orderly restart p95 | 421.457 ms | Process-owned engine shutdown, replacement startup, and initial apply |
+| SIGKILL to first allowed packet p95 | 4.672 ms | Link-owning child process and one selected cgroup; measures onset of fail-open, not recovery |
+| Same-node DaemonSet rollout fail-open interval | 2,084 ms | Shipped capability-only agent in kind, from first allowed probe to restored deny |
+| Quiet shipped-agent maximum | 0.000548 CPU cores, 50.137 MiB `memory.current` | Three five-second kind samples; `memory.current` includes non-RSS charges |
+| Packet latency p99 increase; maximum sampled TCP regression | 3.697 µs; 0% | Three loopback samples from one selected cgroup with enforcement on and off |
+| Flow decisions | 60,100 accounted | 11,967 delivered, 48,133 rate-limited, 0 ring-full over 60.101 seconds |
+
+These are measurements of the linked reference fixtures, not an availability
+guarantee for other nodes or workloads. A separate [failed-update
+test](https://github.com/saadshabir/ZTAP/actions/runs/35810441612) preserved
+the policy on an already classified cgroup while a newly created cgroup was
+unobserved; its first allowed probe to blocked probe after a controlled retry
+spanned 2,046.5 ms. See [deployment limits](docs/deployment.md) for the
+operational implications.
+
 The DaemonSet mounts the host cgroup v2 hierarchy and bpffs, requests only the
 capabilities needed by the eBPF engine, and exposes health, readiness, and
 Prometheus-compatible metrics on port `9090`. The runtime image is `scratch`,

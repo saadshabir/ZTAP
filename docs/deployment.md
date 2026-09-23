@@ -79,6 +79,27 @@ A SIGKILL crash has the same process-owned link behavior. The crash interval
 is measured separately from orderly restart and DaemonSet rollout; none of
 these intervals are zero-gap availability guarantees.
 
+### Measured fail-open intervals
+
+The [hosted Phase 5 run](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+on Linux `6.17.0-1022-azure` recorded these separate boundaries for the
+250-Pod/25-policy/2,500-rule fixture:
+
+| Boundary | Measurement | What was observed |
+| --- | ---: | --- |
+| Pod start to classification | 207.381 ms p95 | Newly Running Pod appeared in a synchronized fake informer cache with its cgroup already present; API-server and runtime startup are excluded. |
+| Orderly agent shutdown through replacement apply | 421.457 ms p95 | Process-owned links closed, then a new native agent applied the fixture. |
+| SIGKILL to first allowed packet | 4.672 ms p95 | A link-owning child process was killed; this measures when fail-open begins, not when Kubernetes recovers. |
+| Planned DaemonSet replacement | 2,084 ms | In kind, the selected smoke client first became allowed and was then blocked again on the same node. The replacement Pod was observed Running inside the interval and confirmed Ready. |
+
+The failed-update Linux test separately preserved the active policy on an
+already classified cgroup after an injected candidate-link failure. A newly
+created cgroup had no link and sent an allowed packet until a controlled
+retry classified it. The first allowed probe to the blocked probe after retry
+spanned 2,046.5 ms in that test. This is a probe-to-retry measurement, not a
+bound on Kubernetes watcher delay or failure recovery. A selected container
+can also send before its ID and cgroup become visible to the watcher.
+
 ## Agent flags
 
 The DaemonSet starts the equivalent of:
