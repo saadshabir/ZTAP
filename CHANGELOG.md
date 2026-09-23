@@ -35,7 +35,7 @@ the earlier CRD/operator product.
 
 ### Operational limits and measurements
 
-The [hosted Phase 5 preflight](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+The [hosted Linux pre-release run](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
 used Linux `6.17.0-1022-azure`, two pinned CPUs, and the
 250-Pod/25-policy/2,500-rule reference fixture. The checked-in verifier
 accepted the raw packet, flow, agent, resource, privileged eBPF, and kind

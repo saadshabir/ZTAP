@@ -81,7 +81,7 @@ these intervals are zero-gap availability guarantees.
 
 ### Measured fail-open intervals
 
-The [hosted Phase 5 run](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+The [hosted Linux validation run](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
 on Linux `6.17.0-1022-azure` recorded these separate boundaries for the
 250-Pod/25-policy/2,500-rule fixture:
 

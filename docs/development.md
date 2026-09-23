@@ -7,17 +7,17 @@ for privileged eBPF and Kubernetes acceptance tests; a non-Linux checkout is
 suitable for the non-privileged unit tests.
 
 The privileged Linux integration gate vet-checks and executes both the
-enforcer and CLI integration-tagged package trees, including the Phase 5
+enforcer and CLI integration-tagged package trees, including the native
 agent, flow-reader, cgroup-path, and evidence-writer support tests. The
 Kubernetes acceptance gate runs separately in a disposable kind cluster.
 
 ### Tested kernel record
 
-- Last Phase 5 measurement run: Linux `6.17.0-1022-azure` on the
+- Last hosted measurement run: Linux `6.17.0-1022-azure` on the
   CPU-pinned `ubuntu-24.04` runner in push run
   [`35812615459`](https://github.com/saadshabir/ZTAP/actions/runs/35812615459)
   for implementation commit `af4cfaed160825835d40190bab9d21eb32c6b071`.
-- Current Phase 5 manual validation: no separate Linux host run recorded.
+- Manual Linux validation: no separate host run recorded.
 
 The release workflow records `uname` in `phase5-environment.txt` and requires
 all native-agent artifacts to report the same kernel release. The CI record
@@ -26,7 +26,7 @@ branch-only preflight job. The tagged release reruns the gates and retains its
 own exact environment and output. A separate manual Linux validation has not
 been claimed from the macOS checkout.
 
-### Hosted Phase 5 preflight record
+### Hosted Linux measurement record
 
 The full-scope preflight run
 [35810441612](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
@@ -69,7 +69,7 @@ The later [packet and flow follow-up run](https://github.com/saadshabir/ZTAP/act
 for implementation commit `af4cfaed160825835d40190bab9d21eb32c6b071` also
 passed `Required CI`, the standard jobs, the privileged eBPF suite, the
 capability-only kind job, and the temporary real-cgroup preflight. All ten
-Phase 5 JSON files passed `phase5verify` with the same-run hosted artifacts.
+measurement JSON files passed `phase5verify` with the same-run hosted artifacts.
 The preflight artifact `10730701615` has SHA-256
 `1f01ac343ac9eea0158ea491ed88bc98b357a4044f6c73873a8e4f2bb660d235`; the
 eBPF artifact `10730142486` has SHA-256
@@ -129,7 +129,7 @@ make check            # non-privileged merge gate
 make check-generated  # regenerate and compare eBPF bindings
 make integration      # privileged Linux engine and agent tests
 make performance      # real-cgroup performance and agent evidence (Linux only)
-make verify-performance # validate retained Phase 5 JSON evidence
+make verify-performance # validate retained performance evidence
 make docker           # scratch runtime image
 make clean            # remove local build and tool artifacts
 ```
@@ -162,8 +162,8 @@ GOCACHE="$PWD/.cache/go-build" GOFLAGS=-buildvcs=false \
   go test ./internal/flow -run '^$' -fuzz '^FuzzParseRawEventNeverPanics$' -fuzztime=10s
 ```
 
-Phase 5 also fuzzes hosted fixture YAML splitting/strict decoding and IPv4
-`ipBlock` exclusion expansion. Both targets have bounded inputs and checked-in
+The evidence tooling also fuzzes hosted fixture YAML splitting/strict decoding
+and IPv4 `ipBlock` exclusion expansion. Both targets have bounded inputs and checked-in
 regression seeds, so the normal suite runs the seeds without starting an
 unbounded fuzz job:
 
@@ -229,7 +229,7 @@ those measurements must run on the documented Linux reference environment.
 
 On the documented 2-vCPU Linux reference environment, the release workflow
 pins the performance process to CPUs 0 and 1, and the `make performance`
-target first removes only its ten named Phase 5 JSON outputs and enforces
+target first removes only its ten named measurement JSON outputs and enforces
 `GOMAXPROCS=2`. It then creates 250 real cgroups, applies 2,500 kernel
 rules after a warm-up, runs three timed samples, enforces the direct
 engine-apply 2-second p95 budget, and writes raw
@@ -338,7 +338,7 @@ commit.
 The release job passes `PHASE5_EXPECTED_RUN_ID` from its retained environment
 record so the artifact set cannot be substituted with a different same-host
 run.
-The verifier also cross-checks the environment's Phase 5 run ID, recorded Go
+The verifier also cross-checks the environment's measurement run ID, recorded Go
 version, OS, architecture, and reference CPU count against the producer
 metadata in `phase5-performance.json`, so those records cannot be mixed
 independently.
@@ -482,7 +482,7 @@ two-CPU profile before publication. It also includes the
 trusted same-commit eBPF and capability-agent artifacts from `Migration CI`;
 the capability smoke also exercises `ztap flows` against the pinned map and
 records the smoke client/server IPv4 tuple plus TCP/8080 destination. The
-workflow and checked-in Phase 5 verifier require a blocked flow record for
+workflow and checked-in evidence verifier require a blocked flow record for
 that exact tuple before accepting the flow-streaming result. The smoke also
 probes `/healthz`, `/readyz`, and `/metrics` after active enforcement, checks
 the ready response's enforcing state, and verifies that POST requests receive
@@ -492,7 +492,7 @@ values, exact `ztap-system` namespace and valid `ztap-agent-` resource and
 rolling Pod-name markers, and rolling fail-open timestamps before attaching the complete bundle as
 `ztap-<tag>-phase5-evidence.tar.gz`.
 It also requires the evidence tree to contain exactly the ten named
-`phase5-*.json` artifacts; an extra or duplicate Phase 5 JSON file is rejected
+`phase5-*.json` artifacts; an extra or duplicate evidence JSON file is rejected
 rather than silently omitted from verification, and symlinked or non-regular
 evidence-tree entries are rejected. The release preflight and GoReleaser
 staging steps also apply case-insensitive uniqueness with canonical basenames,

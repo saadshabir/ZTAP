@@ -73,7 +73,7 @@ latency and are not zero-gap availability guarantees.
 
 ### Measured Linux reference results
 
-The full-scope [Phase 5 preflight](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+The full-scope [hosted Linux pre-release run](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
 for commit `399b0d8` used Linux `6.17.0-1022-azure`, a process pinned to two
 CPUs, real cgroups and packets, and the 250-Pod/25-policy/2,500-rule fixture.
 Its raw JSON and hosted Kubernetes/eBPF transcripts are attached to that
