@@ -2922,9 +2922,36 @@ matching selected-policy, default-deny, packet, agent-operation, and repository
 quality acceptance rows; they do not close the unchecked Service-ClusterIP
 runtime gate, the unobserved-replacement-cgroup measurement, the separate
 Pod-start/crash/restart measurements, Section 14.5 performance budgets, or
-release publication/provenance archive. Phase 5 implementation remains 90/90
-complete (0% remaining); final acceptance is now 32/39 complete, with 7/39
-items open (17.9% remaining).
+release publication/provenance archive. At that point, final acceptance was
+32/39 complete (7/39 open; 17.9% remaining).
+
+Continuation audit (2026-09-23): exact-head run `35804857264` for
+`a515e0c1e75362bad64eb6b641e11f8749d229ea` passed the ClusterIP smoke itself:
+selector peers allowed the backend PodIP but blocked the Service ClusterIP,
+and an explicit IPv4 `/32` allowed the Service frontend while blocking the
+backend PodIP. Resource sampling then failed because the retained smoke policy
+adds one compiled rule to the 2,500-rule fixture (2,501 total); no acceptance
+credit is taken from that run. Commit `5ea16cdb858db2ed95c25aae5b8284efb538bb4c`
+now reports total and fixture-scoped cgroup/rule counts separately and verifies
+the exact subtraction.
+
+Corrected exact-head run `35806655929` for
+`5ea16cdb858db2ed95c25aae5b8284efb538bb4c` passed `Required CI`, all standard
+jobs, and both privileged Linux/Kubernetes jobs. Capability artifact
+`10727314888` and eBPF artifact `10727863588` match their published SHA-256
+digests and pass the checked-in hosted-evidence verifier. The verified smoke
+uses Service ClusterIP `10.96.30.200` and backend PodIP `10.244.0.6` with the
+expected selector-peer and explicit-`/32` outcomes. Resource evidence reconciles
+251 total enforced cgroups (250 fixture + 1 smoke client) and 2,501 total
+compiled rules (2,500 fixture + 1 retained smoke rule); the capability-agent
+samples peak at 0.000629841 CPU cores and 49.531250 MiB `memory.current`, within
+that gate's budgets. The verified same-node rolling-update fail-open interval
+is 1,853 ms. This closes the explicit ClusterIP acceptance row only; the
+unobserved-replacement-cgroup measurement, separate Pod-start/crash/restart
+measurements, Section 14.5 performance gates, and release
+publication/provenance archive remain open. Phase 5 implementation remains
+90/90 complete (0% remaining); final acceptance is now 33/39 complete, with
+6/39 items open (15.4% remaining).
 
 Work:
 
@@ -3142,7 +3169,7 @@ Work:
 - [x] Verify `make clean` leaves no tracked or ignored workspace debris; artifact deletion itself was completed in Phase 0.
 - [x] Add the `v0.1.0` breaking-change entry and migration notes.
 - Once all checklist items are recorded as complete, delete this temporary plan in the release-preparation commit.
-- Run the full unit, generated-code, Docker, manifest, and Linux integration gates; local unit and manifest checks pass, while generated-code, Docker, and hosted Linux checks remain required or tool-gated.
+- Full unit, generated-code, Docker/image-scan, manifest/example, and Linux integration gates passed in exact-head Migration CI run `35806655929` for `5ea16cdb858db2ed95c25aae5b8284efb538bb4c`.
 - Run the Section 14.5 performance/resource gates and retain raw results with the release artifacts.
 
 Exit criteria:
@@ -3336,7 +3363,7 @@ There is no runtime compatibility layer.
 - [x] Allowed TCP/UDP reply traffic works without a separate reverse policy rule.
 - [x] Reusing policy slot `0` or `1` cannot reactivate connection state from an older policy epoch.
 - [x] Documented Node-status and pod self traffic remain allowed; local-node and hostNetwork limitations are stated explicitly.
-- [ ] Explicit IPv4 ClusterIP `ipBlock` rules work, and selector peers never synthesize Service frontend access.
+- [x] Explicit IPv4 ClusterIP `ipBlock` rules work, and selector peers never synthesize Service frontend access. Exact-head hosted run `35806655929` verified direct backend PodIP access and Service ClusterIP denial for selector peers, then explicit `/32` Service access and backend PodIP denial; capability artifact `10727314888` passed the checked-in hosted-evidence verifier.
 - [x] Malformed, fragmented, and unsupported packets cannot bypass an isolated direction.
 - [x] Unsupported local policy semantics quarantine only affected subjects and directions while unrelated accepted policies continue updating.
 - [ ] Failed kernel updates preserve previous state for already classified cgroups; the limitation for unobserved replacement cgroups is measured and documented.
