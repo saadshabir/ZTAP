@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -678,43 +679,16 @@ func TestVerifyEnvironmentFileAcceptsReferenceProvenance(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "phase5-environment.txt")
 	commit := strings.Repeat("a", 40)
-	payload := strings.Join([]string{
-		"timestamp_utc=2026-09-19T00:00:00Z",
-		"phase5_run_id=github-77-commit",
-		"migration_ci_run_id=12345",
-		"release_commit=" + commit,
-		"release_ref=v0.1.0",
-		"release_workflow=release.yml",
-		"release_event=push",
-		"migration_ci_workflow=migration-ci.yml",
-		"migration_ci_event=push",
-		"migration_ci_branch=main",
-		"go_version=go version go1.26.6 linux/amd64",
-		"goos=linux",
-		"goarch=amd64",
-		"nproc=8",
-		"reference_cpu_set=0,1",
-		"reference_nproc=2",
-		"reference_gomaxprocs=2",
-		"cgroup2=cgroup2fs",
-		"bpffs=bpf",
-		"getconf_clk_tck=100",
-		"uname=Linux runner 6.1.0 x86_64 GNU/Linux",
-		"cpu_max=max 100000",
-	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		t.Fatalf("write environment evidence: %v", err)
-	}
+	values := validEnvironmentValues("release")
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentFile(path, "github-77-commit", "12345", commit, "v0.1.0", "amd64"); err != nil {
 		t.Fatalf("valid environment evidence rejected: %v", err)
 	}
 	if err := verifyEnvironmentFile(path, "github-77-commit", "12345", commit, "v0.2.0", "amd64"); err == nil {
 		t.Fatal("environment evidence accepted an unexpected release reference")
 	}
-	invalidCommit := strings.Replace(payload, "release_commit="+commit, "release_commit=not-a-commit", 1)
-	if err := os.WriteFile(path, []byte(invalidCommit), 0o600); err != nil {
-		t.Fatalf("write invalid commit environment evidence: %v", err)
-	}
+	values["commit"] = "not-a-commit"
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentFile(path, "github-77-commit", "12345", "", "v0.1.0", "amd64"); err == nil {
 		t.Fatal("environment evidence accepted a malformed release commit without an expected value")
 	}
@@ -748,24 +722,21 @@ func TestVerifyEnvironmentFileAcceptsReferenceProvenance(t *testing.T) {
 	if err := os.WriteFile(resourcePath, resourcePayload, 0o600); err != nil {
 		t.Fatalf("restore resource provenance: %v", err)
 	}
-	invalidReleaseRef := strings.Replace(payload, "release_ref=v0.1.0", "release_ref=v0.1", 1)
-	if err := os.WriteFile(path, []byte(invalidReleaseRef), 0o600); err != nil {
-		t.Fatalf("write invalid release-ref environment evidence: %v", err)
-	}
+	values["commit"] = commit
+	values["ref"] = "refs/tags/v0.1"
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentFile(path, "github-77-commit", "12345", commit, "v0.1.0", "amd64"); err == nil {
 		t.Fatal("environment evidence accepted an invalid release reference")
 	}
-	invalidReleaseWorkflow := strings.Replace(payload, "release_workflow=release.yml", "release_workflow=other.yml", 1)
-	if err := os.WriteFile(path, []byte(invalidReleaseWorkflow), 0o600); err != nil {
-		t.Fatalf("write invalid release-workflow environment evidence: %v", err)
-	}
+	values = validEnvironmentValues("release")
+	values["workflow_path"] = ".github/workflows/other.yml"
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentFile(path, "github-77-commit", "12345", commit, "v0.1.0", "amd64"); err == nil {
 		t.Fatal("environment evidence accepted an invalid release workflow")
 	}
-	mismatchedRun := strings.Replace(payload, "phase5_run_id=github-77-commit", "phase5_run_id=other-run", 1)
-	if err := os.WriteFile(path, []byte(mismatchedRun), 0o600); err != nil {
-		t.Fatalf("write mismatched environment evidence: %v", err)
-	}
+	values = validEnvironmentValues("release")
+	values["phase5_run_id"] = "other-run"
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentMatchesEvidence(path, directory); err == nil {
 		t.Fatal("environment provenance accepted a mismatched Phase 5 run ID")
 	}
@@ -776,32 +747,8 @@ func TestVerifyEnvironmentFileAcceptsReferenceProvenance(t *testing.T) {
 
 func TestVerifyEnvironmentMatchesEvidenceRejectsMixedToolchain(t *testing.T) {
 	directory := t.TempDir()
-	commit := strings.Repeat("a", 40)
 	environmentPath := filepath.Join(directory, "phase5-environment.txt")
-	environment := strings.Join([]string{
-		"timestamp_utc=2026-09-19T00:00:00Z",
-		"phase5_run_id=github-77-commit",
-		"migration_ci_run_id=12345",
-		"release_commit=" + commit,
-		"migration_ci_workflow=migration-ci.yml",
-		"migration_ci_event=push",
-		"migration_ci_branch=main",
-		"go_version=go version go1.26.6 linux/amd64",
-		"goos=linux",
-		"goarch=amd64",
-		"nproc=8",
-		"reference_cpu_set=0,1",
-		"reference_nproc=2",
-		"reference_gomaxprocs=2",
-		"cgroup2=cgroup2fs",
-		"bpffs=bpf",
-		"getconf_clk_tck=100",
-		"uname=Linux runner 6.1.0 x86_64 GNU/Linux",
-		"cpu_max=max 100000",
-	}, "\n") + "\n"
-	if err := os.WriteFile(environmentPath, []byte(environment), 0o600); err != nil {
-		t.Fatalf("write environment evidence: %v", err)
-	}
+	writeEnvironmentFixture(t, environmentPath, validEnvironmentValues("release"))
 	payload, err := json.Marshal(referenceEvidence{GoVersion: "go1.27.1", GOOS: "linux", GOARCH: "amd64", CPUs: 2})
 	if err != nil {
 		t.Fatalf("marshal mixed reference evidence: %v", err)
@@ -818,26 +765,9 @@ func TestVerifyEnvironmentFileRequiresRecordedHostMetadata(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "phase5-environment.txt")
 	commit := strings.Repeat("a", 40)
-	contents := strings.Join([]string{
-		"timestamp_utc=2026-09-19T00:00:00Z",
-		"phase5_run_id=github-77-commit",
-		"migration_ci_run_id=12345",
-		"release_commit=" + commit,
-		"migration_ci_workflow=migration-ci.yml",
-		"migration_ci_event=push",
-		"migration_ci_branch=main",
-		"goos=linux",
-		"goarch=amd64",
-		"reference_cpu_set=0,1",
-		"reference_nproc=2",
-		"reference_gomaxprocs=2",
-		"cgroup2=cgroup2fs",
-		"bpffs=bpf",
-		"getconf_clk_tck=100",
-	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write incomplete environment evidence: %v", err)
-	}
+	values := validEnvironmentValues("release")
+	delete(values, "go_version")
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentFile(path, "github-77-commit", "12345", commit, "", "amd64"); err == nil {
 		t.Fatal("environment verifier accepted missing recorded host metadata")
 	}
@@ -847,33 +777,9 @@ func TestVerifyEnvironmentFileRejectsImpossibleReferenceCPUProfile(t *testing.T)
 	directory := t.TempDir()
 	path := filepath.Join(directory, "phase5-environment.txt")
 	commit := strings.Repeat("a", 40)
-	contents := strings.Join([]string{
-		"timestamp_utc=2026-09-19T00:00:00Z",
-		"phase5_run_id=github-77-commit",
-		"migration_ci_run_id=12345",
-		"release_commit=" + commit,
-		"release_ref=v0.1.0",
-		"release_workflow=release.yml",
-		"release_event=push",
-		"migration_ci_workflow=migration-ci.yml",
-		"migration_ci_event=push",
-		"migration_ci_branch=main",
-		"go_version=go version go1.26.6 linux/amd64",
-		"goos=linux",
-		"goarch=amd64",
-		"nproc=1",
-		"reference_cpu_set=0,1",
-		"reference_nproc=2",
-		"reference_gomaxprocs=2",
-		"cgroup2=cgroup2fs",
-		"bpffs=bpf",
-		"getconf_clk_tck=100",
-		"uname=Linux runner 6.1.0 x86_64 GNU/Linux",
-		"cpu_max=max 100000",
-	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write impossible reference environment evidence: %v", err)
-	}
+	values := validEnvironmentValues("release")
+	values["nproc"] = "1"
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentFile(path, "github-77-commit", "12345", commit, "v0.1.0", "amd64"); err == nil {
 		t.Fatal("environment verifier accepted a host smaller than the reference CPU profile")
 	}
@@ -883,33 +789,9 @@ func TestVerifyEnvironmentFileRejectsZeroMigrationRunID(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "phase5-environment.txt")
 	commit := strings.Repeat("a", 40)
-	contents := strings.Join([]string{
-		"timestamp_utc=2026-09-19T00:00:00Z",
-		"phase5_run_id=github-77-commit",
-		"migration_ci_run_id=0",
-		"release_commit=" + commit,
-		"release_ref=v0.1.0",
-		"release_workflow=release.yml",
-		"release_event=push",
-		"migration_ci_workflow=migration-ci.yml",
-		"migration_ci_event=push",
-		"migration_ci_branch=main",
-		"go_version=go version go1.26.6 linux/amd64",
-		"goos=linux",
-		"goarch=amd64",
-		"nproc=8",
-		"reference_cpu_set=0,1",
-		"reference_nproc=2",
-		"reference_gomaxprocs=2",
-		"cgroup2=cgroup2fs",
-		"bpffs=bpf",
-		"getconf_clk_tck=100",
-		"uname=Linux runner 6.1.0 x86_64 GNU/Linux",
-		"cpu_max=max 100000",
-	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write zero-run environment evidence: %v", err)
-	}
+	values := validEnvironmentValues("release")
+	values["migration_ci_run_id"] = "0"
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentFile(path, "github-77-commit", "", commit, "v0.1.0", "amd64"); err == nil {
 		t.Fatal("environment verifier accepted a zero trusted Migration CI run ID")
 	}
@@ -919,32 +801,164 @@ func TestVerifyEnvironmentFileRejectsMalformedHostMetadata(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "phase5-environment.txt")
 	commit := strings.Repeat("a", 40)
-	contents := strings.Join([]string{
-		"timestamp_utc=2026-09-19T00:00:00Z",
-		"phase5_run_id=github-77-commit",
-		"migration_ci_run_id=12345",
-		"release_commit=" + commit,
-		"migration_ci_workflow=migration-ci.yml",
-		"migration_ci_event=push",
-		"migration_ci_branch=main",
-		"go_version=go version go1.26.6 darwin/arm64",
-		"goos=linux",
-		"goarch=amd64",
-		"nproc=8",
-		"reference_cpu_set=0,1",
-		"reference_nproc=2",
-		"reference_gomaxprocs=2",
-		"cgroup2=cgroup2fs",
-		"bpffs=bpf",
-		"getconf_clk_tck=100",
-		"uname=Darwin runner 24.0.0 arm64",
-		"cpu_max=not-a-quota",
-	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write malformed environment evidence: %v", err)
-	}
+	values := validEnvironmentValues("release")
+	values["go_version"] = "go version go1.26.6 darwin/arm64"
+	values["uname"] = "Darwin runner 24.0.0 arm64"
+	values["cpu_max"] = "not-a-quota"
+	writeEnvironmentFixture(t, path, values)
 	if err := verifyEnvironmentFile(path, "github-77-commit", "12345", commit, "", "amd64"); err == nil {
 		t.Fatal("environment verifier accepted malformed host metadata")
+	}
+}
+
+func TestVerifyPreflightEnvironmentFileAcceptsDispatchProvenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "performance-preflight-environment.txt")
+	values := validEnvironmentValues("preflight")
+	writeEnvironmentFixture(t, path, values)
+	expected := environmentContext{
+		Mode: "preflight", RunID: "github-77-commit", MigrationRunID: "12345", Commit: strings.Repeat("a", 40),
+		Ref: "refs/heads/codex/streamline-ztap", WorkflowRunID: "77", WorkflowEvent: "workflow_dispatch",
+		WorkflowPath: ".github/workflows/migration-ci.yml", MigrationBranch: "codex/streamline-ztap", Arch: "amd64",
+	}
+	if err := verifyEnvironmentFileForContext(path, expected); err != nil {
+		t.Fatalf("valid preflight environment rejected: %v", err)
+	}
+	values["workflow_event"] = "push"
+	writeEnvironmentFixture(t, path, values)
+	if err := verifyEnvironmentFileForContext(path, expected); err == nil {
+		t.Fatal("preflight verifier accepted a non-dispatch workflow event")
+	}
+}
+
+func TestVerifyCPUQuotaProvenanceSelectsTightestObservedAncestor(t *testing.T) {
+	values := validEnvironmentValues("release")
+	observations := []cpuMaxObservation{
+		{Path: "/sys/fs/cgroup/runner/job", Status: "recorded", Value: "max 100000"},
+		{Path: "/sys/fs/cgroup/runner", Status: "recorded", Value: "250000 100000"},
+		{Path: "/sys/fs/cgroup", Status: "recorded", Value: "max 100000"},
+	}
+	encoded, err := json.Marshal(observations)
+	if err != nil {
+		t.Fatalf("marshal quota observations: %v", err)
+	}
+	values["cpu_max_hierarchy_json"] = string(encoded)
+	values["cpu_max_path"] = "/sys/fs/cgroup/runner/cpu.max"
+	values["cpu_max"] = "250000 100000"
+	if err := verifyCPUQuotaProvenance(values); err != nil {
+		t.Fatalf("valid hierarchical CPU quota rejected: %v", err)
+	}
+}
+
+func TestVerifyCPUQuotaProvenanceRejectsInventedOrInsufficientQuota(t *testing.T) {
+	values := validEnvironmentValues("release")
+	values["cpu_max"] = "200000 100000"
+	if err := verifyCPUQuotaProvenance(values); err == nil {
+		t.Fatal("quota verifier accepted a value not recorded at its claimed path")
+	}
+
+	observations := []cpuMaxObservation{
+		{Path: "/sys/fs/cgroup/runner/job", Status: "recorded", Value: "150000 100000"},
+		{Path: "/sys/fs/cgroup/runner", Status: "missing"},
+		{Path: "/sys/fs/cgroup", Status: "missing"},
+	}
+	encoded, err := json.Marshal(observations)
+	if err != nil {
+		t.Fatalf("marshal insufficient quota observations: %v", err)
+	}
+	values = validEnvironmentValues("release")
+	values["cpu_max_hierarchy_json"] = string(encoded)
+	values["cpu_max_path"] = "/sys/fs/cgroup/runner/job/cpu.max"
+	values["cpu_max"] = "150000 100000"
+	if err := verifyCPUQuotaProvenance(values); err == nil {
+		t.Fatal("quota verifier accepted an effective limit below two CPUs")
+	}
+
+	values = validEnvironmentValues("release")
+	observations = []cpuMaxObservation{
+		{Path: "/sys/fs/cgroup/runner/job", Status: "missing"},
+		{Path: "/sys/fs/cgroup/runner", Status: "missing"},
+		{Path: "/sys/fs/cgroup", Status: "missing"},
+	}
+	encoded, err = json.Marshal(observations)
+	if err != nil {
+		t.Fatalf("marshal absent quota observations: %v", err)
+	}
+	values["cpu_max_status"] = "unavailable"
+	values["cpu_max_path"] = "unavailable"
+	values["cpu_max"] = "unavailable"
+	values["cpu_max_hierarchy_json"] = string(encoded)
+	if err := verifyCPUQuotaProvenance(values); err == nil {
+		t.Fatal("quota verifier accepted absent cpu.max files as an invented quota")
+	}
+}
+
+func validEnvironmentValues(mode string) map[string]string {
+	ref := "refs/tags/v0.1.0"
+	workflowPath := ".github/workflows/release.yml"
+	workflowEvent := "push"
+	migrationBranch := "main"
+	if mode == "preflight" {
+		ref = "refs/heads/codex/streamline-ztap"
+		workflowPath = ".github/workflows/migration-ci.yml"
+		workflowEvent = "workflow_dispatch"
+		migrationBranch = "codex/streamline-ztap"
+	}
+	observations, _ := json.Marshal([]cpuMaxObservation{
+		{Path: "/sys/fs/cgroup/runner/job", Status: "recorded", Value: "max 100000"},
+		{Path: "/sys/fs/cgroup/runner", Status: "missing"},
+		{Path: "/sys/fs/cgroup", Status: "missing"},
+	})
+	return map[string]string{
+		"environment_schema":     "2",
+		"environment_mode":       mode,
+		"timestamp_utc":          "2026-09-19T00:00:00Z",
+		"phase5_run_id":          "github-77-commit",
+		"migration_ci_run_id":    "12345",
+		"commit":                 strings.Repeat("a", 40),
+		"ref":                    ref,
+		"workflow_run_id":        "77",
+		"workflow_event":         workflowEvent,
+		"workflow_path":          workflowPath,
+		"migration_ci_workflow":  ".github/workflows/migration-ci.yml",
+		"migration_ci_event":     "push",
+		"migration_ci_branch":    migrationBranch,
+		"go_version":             "go version go1.26.6 linux/amd64",
+		"goos":                   "linux",
+		"goarch":                 "amd64",
+		"nproc":                  "8",
+		"allowed_cpu_list":       "0-7",
+		"reference_cpu_set":      "0,1",
+		"reference_nproc":        "2",
+		"reference_gomaxprocs":   "2",
+		"getconf_clk_tck":        "100",
+		"uname":                  "Linux runner 6.1.0 x86_64 GNU/Linux",
+		"cgroup2":                "cgroup2fs",
+		"bpffs":                  "bpf_fs",
+		"cgroup_mount_root":      "/",
+		"cgroup_mount_point":     "/sys/fs/cgroup",
+		"cgroup_membership_path": "/runner/job",
+		"cgroup_process_path":    "/sys/fs/cgroup/runner/job",
+		"cpu_max_status":         "recorded",
+		"cpu_max_path":           "/sys/fs/cgroup/runner/job/cpu.max",
+		"cpu_max":                "max 100000",
+		"cpu_max_hierarchy_json": string(observations),
+		"capture_errors_json":    "[]",
+	}
+}
+
+func writeEnvironmentFixture(t *testing.T, path string, values map[string]string) {
+	t.Helper()
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var payload strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&payload, "%s=%s\n", key, values[key])
+	}
+	if err := os.WriteFile(path, []byte(payload.String()), 0o600); err != nil {
+		t.Fatalf("write environment fixture: %v", err)
 	}
 }
 

@@ -1864,93 +1864,17 @@ jobs:
       - name: Record the measurement environment
         run: |
           set -euo pipefail
-          goos="$(go env GOOS)"
-          goarch="$(go env GOARCH)"
-          host_nproc="$(nproc)"
-          allowed_cpus="$(awk '/^Cpus_allowed_list:/ { print $2 }' /proc/self/status)"
-          taskset_status=0
-          if reference_nproc="$(taskset --cpu-list 0,1 nproc 2>&1)"; then
-            :
-          else
-            taskset_status=$?
-          fi
-          cgroup2_status=0
-          if cgroup2="$(stat -fc '%T' /sys/fs/cgroup 2>&1)"; then
-            :
-          else
-            cgroup2_status=$?
-          fi
-          bpffs_status=0
-          if bpffs="$(stat -fc '%T' /sys/fs/bpf 2>&1)"; then
-            :
-          else
-            bpffs_status=$?
-          fi
-          cpu_max_status=0
-          if cpu_max="$(cat /sys/fs/cgroup/cpu.max 2>&1)"; then
-            :
-          else
-            cpu_max_status=$?
-          fi
-          printf 'Detected measurement environment: goos=%s goarch=%s host_nproc=%s allowed_cpus=%s taskset_status=%s taskset_output=%s cgroup2_status=%s cgroup2=%s bpffs_status=%s bpffs=%s cpu_max_status=%s cpu_max=%s\n' \
-            "$goos" "$goarch" "$host_nproc" "$allowed_cpus" "$taskset_status" \
-            "$reference_nproc" "$cgroup2_status" "$cgroup2" "$bpffs_status" \
-            "$bpffs" "$cpu_max_status" "$cpu_max"
-          if [ "$goos" != linux ]; then
-            printf 'unsupported Go target OS: expected linux, detected %s\n' "$goos" >&2
-            exit 1
-          fi
-          if [ "$goarch" != amd64 ]; then
-            printf 'unsupported Go target architecture: expected amd64, detected %s\n' "$goarch" >&2
-            exit 1
-          fi
-          if [ "$taskset_status" -ne 0 ]; then
-            printf 'reference CPU set 0,1 is unavailable: taskset exited %s: %s\n' \
-              "$taskset_status" "$reference_nproc" >&2
-            exit 1
-          fi
-          if [ "$reference_nproc" -ne 2 ]; then
-            printf 'reference CPU set 0,1 exposes %s processors, expected 2\n' \
-              "$reference_nproc" >&2
-            exit 1
-          fi
-          if [ "$cgroup2_status" -ne 0 ] || [ "$cgroup2" != cgroup2fs ]; then
-            printf 'cgroup v2 filesystem is unavailable: expected cgroup2fs, detected %s (stat status %s)\n' \
-              "$cgroup2" "$cgroup2_status" >&2
-            exit 1
-          fi
-          if [ "$bpffs_status" -ne 0 ] || [ "$bpffs" != bpf ]; then
-            printf 'bpffs is unavailable: expected bpf, detected %s (stat status %s)\n' \
-              "$bpffs" "$bpffs_status" >&2
-            exit 1
-          fi
-          if [ "$cpu_max_status" -ne 0 ]; then
-            printf 'cannot read cgroup CPU quota at /sys/fs/cgroup/cpu.max: %s\n' \
-              "$cpu_max" >&2
-            exit 1
-          fi
-          {
-            printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            printf 'performance_run_id=%s\n' "$PHASE5_RUN_ID"
-            printf 'migration_ci_run_id=%s\n' "$MIGRATION_CI_RUN_ID"
-            printf 'commit=%s\n' "$GITHUB_SHA"
-            printf 'ref=%s\n' "$GITHUB_REF"
-            printf 'workflow_run_id=%s\n' "$GITHUB_RUN_ID"
-            printf 'workflow_event=%s\n' "$GITHUB_EVENT_NAME"
-            printf 'workflow_path=.github/workflows/migration-ci.yml\n'
-            printf 'go_version='; go version
-            printf 'goos=%s\n' "$goos"
-            printf 'goarch=%s\n' "$goarch"
-            printf 'nproc=%s\n' "$host_nproc"
-            printf 'reference_cpu_set=0,1\n'
-            printf 'reference_nproc=%s\n' "$reference_nproc"
-            printf 'reference_gomaxprocs=2\n'
-            printf 'getconf_clk_tck='; getconf CLK_TCK
-            printf 'uname='; uname -a
-            printf 'cgroup2=%s\n' "$cgroup2"
-            printf 'bpffs=%s\n' "$bpffs"
-            printf 'cpu_max=%s\n' "$cpu_max"
-          } | tee performance-preflight-environment.txt
+          GOMAXPROCS=2 go run ./tools/phase5verify record-environment \
+            --output performance-preflight-environment.txt \
+            --mode preflight \
+            --phase5-run-id "$PHASE5_RUN_ID" \
+            --migration-ci-run-id "$MIGRATION_CI_RUN_ID" \
+            --commit "$GITHUB_SHA" \
+            --ref "$GITHUB_REF" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-event "$GITHUB_EVENT_NAME" \
+            --workflow-path .github/workflows/migration-ci.yml \
+            --migration-ci-branch "$GITHUB_REF_NAME"
 
       - name: Run real-cgroup performance measurements
         run: |
@@ -1969,31 +1893,22 @@ jobs:
             fi
           done
 
-      - name: Validate exact measurement provenance
-        run: |
-          set -euo pipefail
-          for expected in \
-            "performance_run_id=$PHASE5_RUN_ID" \
-            "migration_ci_run_id=$MIGRATION_CI_RUN_ID" \
-            "commit=$GITHUB_SHA" \
-            "ref=$GITHUB_REF" \
-            "workflow_run_id=$GITHUB_RUN_ID" \
-            'workflow_event=workflow_dispatch' \
-            'workflow_path=.github/workflows/migration-ci.yml'; do
-            count="$(awk -v expected="$expected" '$0 == expected { count++ } END { print count + 0 }' \
-              performance-preflight-environment.txt)"
-            test "$count" -eq 1 || {
-              printf 'measurement environment must contain exactly one line: %s\n' "$expected" >&2
-              exit 1
-            }
-          done
-
       - name: Verify measurements and hosted evidence
         run: |
           set -euo pipefail
           make verify-performance \
             PHASE5_EVIDENCE_DIR=dist \
             PHASE5_EXPECTED_RUN_ID="$PHASE5_RUN_ID" \
+            PHASE5_ENVIRONMENT_FILE=performance-preflight-environment.txt \
+            PHASE5_ENVIRONMENT_MODE=preflight \
+            PHASE5_EXPECTED_MIGRATION_RUN_ID="$MIGRATION_CI_RUN_ID" \
+            PHASE5_EXPECTED_COMMIT="$GITHUB_SHA" \
+            PHASE5_EXPECTED_REF="$GITHUB_REF" \
+            PHASE5_EXPECTED_WORKFLOW_RUN_ID="$GITHUB_RUN_ID" \
+            PHASE5_EXPECTED_WORKFLOW_EVENT=workflow_dispatch \
+            PHASE5_EXPECTED_WORKFLOW_PATH=.github/workflows/migration-ci.yml \
+            PHASE5_EXPECTED_MIGRATION_BRANCH="$GITHUB_REF_NAME" \
+            PHASE5_EXPECTED_ENVIRONMENT_ARCH=amd64 \
             PHASE5_HOSTED_EBPF_DIR=dist/hosted-ebpf-engine-evidence \
             PHASE5_HOSTED_CAPABILITY_DIR=dist/hosted-capability-agent-evidence
 

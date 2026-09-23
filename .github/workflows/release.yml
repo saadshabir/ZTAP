@@ -229,30 +229,17 @@ jobs:
       - name: Record performance reference environment
         run: |
           set -euo pipefail
-          {
-            printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            printf 'phase5_run_id=%s\n' "$PHASE5_RUN_ID"
-            printf 'migration_ci_run_id=%s\n' "$MIGRATION_RUN_ID"
-            printf 'release_commit=%s\n' "$GITHUB_SHA"
-            printf 'release_ref=%s\n' "$GITHUB_REF_NAME"
-            printf 'release_workflow=release.yml\n'
-            printf 'release_event=push\n'
-            printf 'migration_ci_workflow=migration-ci.yml\n'
-            printf 'migration_ci_event=push\n'
-            printf 'migration_ci_branch=main\n'
-            printf 'go_version='; go version
-            printf 'goos=%s\n' "$(go env GOOS)"
-            printf 'goarch=%s\n' "$(go env GOARCH)"
-            printf 'nproc=%s\n' "$(nproc)"
-            printf 'reference_cpu_set=0,1\n'
-            printf 'reference_nproc='; taskset --cpu-list 0,1 nproc
-            printf 'reference_gomaxprocs=2\n'
-            printf 'getconf_clk_tck='; getconf CLK_TCK
-            printf 'uname='; uname -a
-            printf 'cgroup2='; stat -fc '%T' /sys/fs/cgroup
-            printf 'bpffs='; stat -fc '%T' /sys/fs/bpf
-            printf 'cpu_max='; cat /sys/fs/cgroup/cpu.max
-          } | tee phase5-environment.txt
+          GOMAXPROCS=2 go run ./tools/phase5verify record-environment \
+            --output phase5-environment.txt \
+            --mode release \
+            --phase5-run-id "$PHASE5_RUN_ID" \
+            --migration-ci-run-id "$MIGRATION_RUN_ID" \
+            --commit "$GITHUB_SHA" \
+            --ref "$GITHUB_REF" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-event "$GITHUB_EVENT_NAME" \
+            --workflow-path .github/workflows/release.yml \
+            --migration-ci-branch main
 
       - name: Run the real-cgroup performance gates
         run: |
@@ -276,9 +263,14 @@ jobs:
           PHASE5_EVIDENCE_DIR=dist
           PHASE5_EXPECTED_RUN_ID="$PHASE5_RUN_ID"
           PHASE5_ENVIRONMENT_FILE=phase5-environment.txt
+          PHASE5_ENVIRONMENT_MODE=release
           PHASE5_EXPECTED_MIGRATION_RUN_ID="$MIGRATION_RUN_ID"
           PHASE5_EXPECTED_COMMIT="$GITHUB_SHA"
-          PHASE5_EXPECTED_RELEASE_REF="$GITHUB_REF_NAME"
+          PHASE5_EXPECTED_REF="$GITHUB_REF"
+          PHASE5_EXPECTED_WORKFLOW_RUN_ID="$GITHUB_RUN_ID"
+          PHASE5_EXPECTED_WORKFLOW_EVENT=push
+          PHASE5_EXPECTED_WORKFLOW_PATH=.github/workflows/release.yml
+          PHASE5_EXPECTED_MIGRATION_BRANCH=main
           PHASE5_EXPECTED_ENVIRONMENT_ARCH=amd64
           PHASE5_HOSTED_EBPF_DIR=dist/hosted-ebpf-engine-evidence
           PHASE5_HOSTED_CAPABILITY_DIR=dist/hosted-capability-agent-evidence
@@ -690,9 +682,14 @@ jobs:
             PHASE5_EVIDENCE_DIR="$verify_dir" \
             PHASE5_EXPECTED_RUN_ID="${GITHUB_RUN_ID}-${GITHUB_SHA}" \
             PHASE5_ENVIRONMENT_FILE="$verify_dir/phase5-environment.txt" \
+            PHASE5_ENVIRONMENT_MODE=release \
             PHASE5_EXPECTED_MIGRATION_RUN_ID="$MIGRATION_RUN_ID" \
             PHASE5_EXPECTED_COMMIT="$GITHUB_SHA" \
-            PHASE5_EXPECTED_RELEASE_REF="$GITHUB_REF_NAME" \
+            PHASE5_EXPECTED_REF="$GITHUB_REF" \
+            PHASE5_EXPECTED_WORKFLOW_RUN_ID="$GITHUB_RUN_ID" \
+            PHASE5_EXPECTED_WORKFLOW_EVENT=push \
+            PHASE5_EXPECTED_WORKFLOW_PATH=.github/workflows/release.yml \
+            PHASE5_EXPECTED_MIGRATION_BRANCH=main \
             PHASE5_EXPECTED_ENVIRONMENT_ARCH=amd64 \
             PHASE5_HOSTED_EBPF_DIR="$verify_dir/hosted-ebpf-engine-evidence" \
             PHASE5_HOSTED_CAPABILITY_DIR="$verify_dir/hosted-capability-agent-evidence"

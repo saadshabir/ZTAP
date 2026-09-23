@@ -293,13 +293,14 @@ sample counts, Linux/two-CPU environment metadata, positive elapsed/packet
 measurements, fixed documented budgets, and flow-accounting invariants. The
 verifier requires exactly the documented two-CPU profile, not merely a host
 with at least two CPUs. It can also validate the retained
-`phase5-environment.txt` record, including its timestamp, semantic release ref
-(which the verifier compares with the current release tag), release
-workflow/event, trusted Migration CI run ID, tagged commit, migration
-workflow/event/branch provenance, cgroup-v2 and bpffs
-markers, positive clock-tick rate, and the complete recorded Go, host CPU, and
-kernel metadata when the release job supplies the expected values. Duplicate
-or unknown environment keys are rejected. It
+`phase5-environment.txt` record in release mode or
+`performance-preflight-environment.txt` in preflight mode. Both records bind
+the measurement to the full workflow ref, commit, workflow run ID, event, and
+path, plus the trusted Migration CI run ID and branch. The verifier checks the
+mode-specific ref and workflow, cgroup-v2 and bpffs filesystem types, the
+`0,1` affinity and `GOMAXPROCS=2` profile, positive clock-tick rate, and the
+recorded Go, host CPU, and kernel metadata. Duplicate or unknown environment
+keys are rejected. It
 also recomputes reported p95/max and packet aggregate values so a manually
 edited summary field cannot bypass the release gate.
 Hosted resource transcripts must also retain the exact reference-fixture scope,
@@ -329,15 +330,20 @@ there only after it is Running and Kubernetes Ready, retain
 Kubernetes UIDs, retain the replacement creation timestamp and first
 observation time, and bound both to the rollout-to-fail-open interval together
 with a positive fail-open interval.
-The environment verifier additionally checks that the recorded Go target and
-`uname` are Linux-compatible and that `cpu_max` has a valid cgroup quota form.
-Its `release_commit` record must be a full 40- or 64-character hexadecimal
-commit ID even when verification is run without an externally supplied
-expected SHA; release publication additionally compares it with the tagged
-commit.
-The release job passes `PHASE5_EXPECTED_RUN_ID` from its retained environment
-record so the artifact set cannot be substituted with a different same-host
-run.
+The environment recorder maps `/proc/self/cgroup` through the cgroup2 mount
+recorded in `/proc/self/mountinfo`, then records every visible `cpu.max` from
+the process cgroup through the mount root. The verifier checks that this path
+chain is complete and ordered, validates each observed value, and confirms
+that the selected entry is the most restrictive visible quota and allows at
+least two CPUs. The selected `cpu_max_path` names the actual `cpu.max` file.
+Missing files remain recorded as missing; the recorder never substitutes an
+assumed quota. A host with no readable quota provenance fails the reference
+gate. The recorded Go target and `uname` must also be Linux-compatible, and
+the full `commit` value must be a 40- or 64-character hexadecimal ID even
+without an externally supplied expected SHA. Release verification additionally
+compares it with the tagged commit. The release job passes
+`PHASE5_EXPECTED_RUN_ID` from its retained environment record so the artifact
+set cannot be substituted with a different same-host run.
 The verifier also cross-checks the environment's measurement run ID, recorded Go
 version, OS, architecture, and reference CPU count against the producer
 metadata in `phase5-performance.json`, so those records cannot be mixed

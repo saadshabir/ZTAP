@@ -1,7 +1,7 @@
-// Command phase5verify validates the raw JSON evidence emitted by the Linux
-// Phase 5 performance harness. It intentionally checks only the documented
-// fixture shape, sample counts, measurement validity, budgets, and accounting
-// invariants; it does not manufacture or reinterpret measurements.
+// Command phase5verify records and validates the environment and raw evidence
+// emitted by the Linux Phase 5 performance harness. It checks the documented
+// fixture shape, provenance, sample counts, measurement validity, budgets, and
+// accounting invariants; it does not manufacture or reinterpret measurements.
 package main
 
 import (
@@ -88,28 +88,40 @@ var phase5JSONArtifactSpecs = [...]phase5JSONArtifactSpec{
 }
 
 var phase5EnvironmentKeys = map[string]struct{}{
-	"timestamp_utc":         {},
-	"phase5_run_id":         {},
-	"migration_ci_run_id":   {},
-	"release_commit":        {},
-	"release_ref":           {},
-	"release_workflow":      {},
-	"release_event":         {},
-	"migration_ci_workflow": {},
-	"migration_ci_event":    {},
-	"migration_ci_branch":   {},
-	"go_version":            {},
-	"goos":                  {},
-	"goarch":                {},
-	"nproc":                 {},
-	"reference_cpu_set":     {},
-	"reference_nproc":       {},
-	"reference_gomaxprocs":  {},
-	"getconf_clk_tck":       {},
-	"uname":                 {},
-	"cgroup2":               {},
-	"bpffs":                 {},
-	"cpu_max":               {},
+	"environment_schema":     {},
+	"environment_mode":       {},
+	"timestamp_utc":          {},
+	"phase5_run_id":          {},
+	"migration_ci_run_id":    {},
+	"commit":                 {},
+	"ref":                    {},
+	"workflow_run_id":        {},
+	"workflow_event":         {},
+	"workflow_path":          {},
+	"migration_ci_workflow":  {},
+	"migration_ci_event":     {},
+	"migration_ci_branch":    {},
+	"go_version":             {},
+	"goos":                   {},
+	"goarch":                 {},
+	"nproc":                  {},
+	"allowed_cpu_list":       {},
+	"reference_cpu_set":      {},
+	"reference_nproc":        {},
+	"reference_gomaxprocs":   {},
+	"getconf_clk_tck":        {},
+	"uname":                  {},
+	"cgroup2":                {},
+	"bpffs":                  {},
+	"cgroup_mount_root":      {},
+	"cgroup_mount_point":     {},
+	"cgroup_membership_path": {},
+	"cgroup_process_path":    {},
+	"cpu_max_status":         {},
+	"cpu_max_path":           {},
+	"cpu_max":                {},
+	"cpu_max_hierarchy_json": {},
+	"capture_errors_json":    {},
 }
 
 var hostedResourceEvidenceKeys = map[string]struct{}{
@@ -412,12 +424,25 @@ type phase5AgentProvenance struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "record-environment" {
+		if err := recordEnvironmentCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "phase5verify: record environment: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	directory := flag.String("dir", "dist", "directory containing Phase 5 JSON evidence")
 	expectedRunID := flag.String("run-id", "", "expected run ID shared by the Phase 5 artifacts")
 	environmentPath := flag.String("environment", "", "optional phase5-environment.txt path to validate")
+	environmentMode := flag.String("environment-mode", "release", "environment provenance mode: release or preflight")
 	expectedMigrationRunID := flag.String("migration-ci-run-id", "", "expected trusted Migration CI workflow run ID")
-	expectedCommit := flag.String("commit", "", "expected tagged commit recorded in the environment file")
-	expectedReleaseRef := flag.String("release-ref", "", "expected semantic release tag recorded in the environment file")
+	expectedCommit := flag.String("commit", "", "expected source commit recorded in the environment file")
+	expectedRef := flag.String("ref", "", "expected workflow ref recorded in the environment file")
+	expectedWorkflowRunID := flag.String("workflow-run-id", "", "expected workflow run ID recorded in the environment file")
+	expectedWorkflowEvent := flag.String("workflow-event", "", "expected workflow event recorded in the environment file")
+	expectedWorkflowPath := flag.String("workflow-path", "", "expected workflow path recorded in the environment file")
+	expectedMigrationBranch := flag.String("migration-ci-branch", "", "expected trusted Migration CI branch recorded in the environment file")
 	expectedEnvironmentArch := flag.String("environment-arch", "", "expected environment GOARCH")
 	hostedEBPFDirectory := flag.String("hosted-ebpf-dir", "", "optional directory containing trusted hosted eBPF evidence")
 	hostedCapabilityDirectory := flag.String("hosted-capability-dir", "", "optional directory containing trusted hosted capability-agent evidence")
@@ -427,7 +452,12 @@ func main() {
 		os.Exit(1)
 	}
 	if strings.TrimSpace(*environmentPath) != "" {
-		if err := verifyEnvironmentFile(*environmentPath, *expectedRunID, *expectedMigrationRunID, *expectedCommit, *expectedReleaseRef, *expectedEnvironmentArch); err != nil {
+		if err := verifyEnvironmentFileForContext(*environmentPath, environmentContext{
+			Mode: *environmentMode, RunID: *expectedRunID, MigrationRunID: *expectedMigrationRunID,
+			Commit: *expectedCommit, Ref: *expectedRef, WorkflowRunID: *expectedWorkflowRunID,
+			WorkflowEvent: *expectedWorkflowEvent, WorkflowPath: *expectedWorkflowPath,
+			MigrationBranch: *expectedMigrationBranch, Arch: *expectedEnvironmentArch,
+		}); err != nil {
 			fmt.Fprintf(os.Stderr, "phase5verify: environment: %v\n", err)
 			os.Exit(1)
 		}
@@ -888,18 +918,33 @@ func readEnvironmentValues(path string) (values map[string]string, err error) {
 }
 
 func verifyEnvironmentFile(path, expectedRunID, expectedMigrationRunID, expectedCommit, expectedReleaseRef, expectedArch string) error {
+	expectedRef := ""
+	if expectedReleaseRef != "" {
+		expectedRef = "refs/tags/" + expectedReleaseRef
+	}
+	return verifyEnvironmentFileForContext(path, environmentContext{
+		Mode: "release", RunID: expectedRunID, MigrationRunID: expectedMigrationRunID,
+		Commit: expectedCommit, Ref: expectedRef, WorkflowEvent: "push",
+		WorkflowPath: ".github/workflows/release.yml", Arch: expectedArch,
+	})
+}
+
+func verifyEnvironmentFileForContext(path string, expected environmentContext) error {
 	values, err := readEnvironmentValues(path)
 	if err != nil {
 		return err
 	}
 	required := []string{
+		"environment_schema",
+		"environment_mode",
 		"timestamp_utc",
 		"phase5_run_id",
 		"migration_ci_run_id",
-		"release_commit",
-		"release_ref",
-		"release_workflow",
-		"release_event",
+		"commit",
+		"ref",
+		"workflow_run_id",
+		"workflow_event",
+		"workflow_path",
 		"migration_ci_workflow",
 		"migration_ci_event",
 		"migration_ci_branch",
@@ -907,6 +952,7 @@ func verifyEnvironmentFile(path, expectedRunID, expectedMigrationRunID, expected
 		"goos",
 		"goarch",
 		"nproc",
+		"allowed_cpu_list",
 		"reference_cpu_set",
 		"reference_nproc",
 		"reference_gomaxprocs",
@@ -915,6 +961,14 @@ func verifyEnvironmentFile(path, expectedRunID, expectedMigrationRunID, expected
 		"getconf_clk_tck",
 		"uname",
 		"cpu_max",
+		"cpu_max_status",
+		"cpu_max_path",
+		"cpu_max_hierarchy_json",
+		"cgroup_mount_root",
+		"cgroup_mount_point",
+		"cgroup_membership_path",
+		"cgroup_process_path",
+		"capture_errors_json",
 	}
 	for _, key := range required {
 		if strings.TrimSpace(values[key]) == "" {
@@ -924,35 +978,64 @@ func verifyEnvironmentFile(path, expectedRunID, expectedMigrationRunID, expected
 	if _, err := time.Parse(time.RFC3339Nano, values["timestamp_utc"]); err != nil {
 		return fmt.Errorf("timestamp_utc %q is not RFC3339: %v", values["timestamp_utc"], err)
 	}
-	if expectedRunID != "" && values["phase5_run_id"] != expectedRunID {
-		return fmt.Errorf("phase5_run_id %q does not match expected %q", values["phase5_run_id"], expectedRunID)
+	if values["environment_schema"] != "2" {
+		return fmt.Errorf("environment_schema %q is unsupported", values["environment_schema"])
 	}
-	if expectedMigrationRunID != "" && values["migration_ci_run_id"] != expectedMigrationRunID {
-		return fmt.Errorf("migration_ci_run_id %q does not match expected %q", values["migration_ci_run_id"], expectedMigrationRunID)
+	if values["environment_mode"] != expected.Mode || (expected.Mode != "preflight" && expected.Mode != "release") {
+		return fmt.Errorf("environment_mode %q does not match expected %q", values["environment_mode"], expected.Mode)
+	}
+	if expected.RunID != "" && values["phase5_run_id"] != expected.RunID {
+		return fmt.Errorf("phase5_run_id %q does not match expected %q", values["phase5_run_id"], expected.RunID)
+	}
+	if expected.MigrationRunID != "" && values["migration_ci_run_id"] != expected.MigrationRunID {
+		return fmt.Errorf("migration_ci_run_id %q does not match expected %q", values["migration_ci_run_id"], expected.MigrationRunID)
 	}
 	migrationRunID, err := strconv.ParseUint(values["migration_ci_run_id"], 10, 64)
 	if err != nil || migrationRunID == 0 {
 		return fmt.Errorf("migration_ci_run_id %q is not a positive integer", values["migration_ci_run_id"])
 	}
-	if expectedCommit != "" && values["release_commit"] != expectedCommit {
-		return fmt.Errorf("release_commit %q does not match expected %q", values["release_commit"], expectedCommit)
+	if expected.Commit != "" && values["commit"] != expected.Commit {
+		return fmt.Errorf("commit %q does not match expected %q", values["commit"], expected.Commit)
 	}
-	if !validCommit(values["release_commit"]) {
-		return fmt.Errorf("release_commit %q is not a full hexadecimal commit ID", values["release_commit"])
+	if !validCommit(values["commit"]) {
+		return fmt.Errorf("commit %q is not a full hexadecimal commit ID", values["commit"])
 	}
-	if expectedReleaseRef != "" && values["release_ref"] != expectedReleaseRef {
-		return fmt.Errorf("release_ref %q does not match expected %q", values["release_ref"], expectedReleaseRef)
+	if expected.Ref != "" && values["ref"] != expected.Ref {
+		return fmt.Errorf("ref %q does not match expected %q", values["ref"], expected.Ref)
 	}
-	if !validReleaseRef(values["release_ref"]) {
-		return fmt.Errorf("release_ref %q is not a semantic release tag", values["release_ref"])
+	workflowRunID, err := strconv.ParseUint(values["workflow_run_id"], 10, 64)
+	if err != nil || workflowRunID == 0 {
+		return fmt.Errorf("workflow_run_id %q is not a positive integer", values["workflow_run_id"])
 	}
-	if values["release_workflow"] != "release.yml" || values["release_event"] != "push" {
-		return errors.New("release provenance is not release.yml push")
+	if expected.WorkflowRunID != "" && values["workflow_run_id"] != expected.WorkflowRunID {
+		return fmt.Errorf("workflow_run_id %q does not match expected %q", values["workflow_run_id"], expected.WorkflowRunID)
 	}
-	if strings.TrimSpace(expectedArch) != "" && values["goarch"] != expectedArch {
-		return fmt.Errorf("goarch %q does not match expected %q", values["goarch"], expectedArch)
+	if expected.WorkflowEvent != "" && values["workflow_event"] != expected.WorkflowEvent {
+		return fmt.Errorf("workflow_event %q does not match expected %q", values["workflow_event"], expected.WorkflowEvent)
 	}
-	if values["goos"] != "linux" || values["reference_cpu_set"] != "0,1" || values["reference_nproc"] != "2" || values["reference_gomaxprocs"] != "2" || values["cgroup2"] != "cgroup2fs" || values["bpffs"] != "bpf" {
+	if expected.WorkflowPath != "" && values["workflow_path"] != expected.WorkflowPath {
+		return fmt.Errorf("workflow_path %q does not match expected %q", values["workflow_path"], expected.WorkflowPath)
+	}
+	if expected.MigrationBranch != "" && values["migration_ci_branch"] != expected.MigrationBranch {
+		return fmt.Errorf("migration_ci_branch %q does not match expected %q", values["migration_ci_branch"], expected.MigrationBranch)
+	}
+	if expected.Arch != "" && values["goarch"] != expected.Arch {
+		return fmt.Errorf("goarch %q does not match expected %q", values["goarch"], expected.Arch)
+	}
+	if values["migration_ci_workflow"] != ".github/workflows/migration-ci.yml" || values["migration_ci_event"] != "push" {
+		return errors.New("trusted Migration CI provenance is not a workflow push")
+	}
+	if !validRefForMode(values["environment_mode"], values["ref"], values["migration_ci_branch"]) {
+		return fmt.Errorf("ref %q, migration_ci_branch %q, and mode %q are inconsistent", values["ref"], values["migration_ci_branch"], values["environment_mode"])
+	}
+	var captureErrors []string
+	if err := json.Unmarshal([]byte(values["capture_errors_json"]), &captureErrors); err != nil {
+		return fmt.Errorf("capture_errors_json is invalid JSON: %w", err)
+	}
+	if len(captureErrors) != 0 {
+		return fmt.Errorf("environment capture reported errors: %s", strings.Join(captureErrors, "; "))
+	}
+	if values["goos"] != "linux" || values["goarch"] != "amd64" || values["reference_cpu_set"] != "0,1" || values["reference_nproc"] != "2" || values["reference_gomaxprocs"] != "2" || values["cgroup2"] != "cgroup2fs" || values["bpffs"] != "bpf_fs" {
 		return errors.New("environment is not the documented Linux two-CPU reference profile")
 	}
 	if _, err := recordedGoVersion(values["go_version"], values["goarch"]); err != nil {
@@ -961,11 +1044,8 @@ func verifyEnvironmentFile(path, expectedRunID, expectedMigrationRunID, expected
 	if !strings.HasPrefix(values["uname"], "Linux ") {
 		return fmt.Errorf("uname %q does not report a Linux host", values["uname"])
 	}
-	if err := validateCPUQuota(values["cpu_max"]); err != nil {
+	if err := verifyCPUQuotaProvenance(values); err != nil {
 		return err
-	}
-	if values["migration_ci_workflow"] != "migration-ci.yml" || values["migration_ci_event"] != "push" || values["migration_ci_branch"] != "main" {
-		return errors.New("trusted Migration CI provenance is not migration-ci.yml push on main")
 	}
 	clockTicks, err := strconv.ParseInt(values["getconf_clk_tck"], 10, 64)
 	if err != nil || clockTicks <= 0 {
@@ -983,6 +1063,17 @@ func verifyEnvironmentFile(path, expectedRunID, expectedMigrationRunID, expected
 		return fmt.Errorf("nproc %d is smaller than the reference CPU count %d", nproc, referenceNproc)
 	}
 	return nil
+}
+
+func validRefForMode(mode, ref, migrationBranch string) bool {
+	switch mode {
+	case "release":
+		return strings.HasPrefix(ref, "refs/tags/") && validReleaseRef(strings.TrimPrefix(ref, "refs/tags/")) && migrationBranch == "main"
+	case "preflight":
+		return strings.HasPrefix(ref, "refs/heads/") && strings.TrimPrefix(ref, "refs/heads/") == migrationBranch
+	default:
+		return false
+	}
 }
 
 func validReleaseRef(value string) bool {
