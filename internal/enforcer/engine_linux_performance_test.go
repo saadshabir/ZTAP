@@ -369,7 +369,9 @@ func TestPhase5FlowAccounting(t *testing.T) {
 	measuredEpoch.Store(before.ActivePolicyEpoch)
 	loop := startUDPLoopHelper(t, cgroup, []string{allowedAddress, blockedAddress}, phase5FlowRate)
 	started := time.Now()
-	time.Sleep(phase5FlowDuration)
+	// Include a small scheduling margin so the absolute-deadline sender can
+	// emit its 60,000th packet before the parent stops it at the 60-second edge.
+	time.Sleep(phase5FlowDuration + 100*time.Millisecond)
 	trafficDuration := time.Since(started)
 	if loop.ProcessState == nil {
 		_ = loop.Process.Kill()

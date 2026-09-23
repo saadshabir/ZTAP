@@ -141,6 +141,10 @@ func TestPhase5PacketAndTCPPerformance(t *testing.T) {
 			}
 			if delta := decision.Count - beforeTCP.Decisions[index].Count; delta != 0 {
 				t.Logf("packet sample %d: TCP %s/%s/%s decisions=%d", sample, decision.Direction, decision.Action, decision.Reason, delta)
+				if decision.Direction == "egress" && decision.Action == "blocked" {
+					_ = engine.Close()
+					t.Fatalf("allowed TCP transfer blocked %d packets as %s in sample %d", delta, decision.Reason, sample)
+				}
 			}
 		}
 		if err := engine.Close(); err != nil {
