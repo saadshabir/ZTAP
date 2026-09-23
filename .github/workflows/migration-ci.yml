@@ -1012,7 +1012,9 @@ jobs:
           expected_policies=25
           expected_rules=2500
           retained_smoke_client_cgroups=1
+          retained_smoke_client_rules=1
           expected_enforced_cgroups=$((expected_pods + retained_smoke_client_cgroups))
+          expected_total_rules=$((expected_rules + retained_smoke_client_rules))
           agent_pods="$(kubectl -n ztap-system get pods -l app=ztap-agent -o json)"
           agent_pod="$(jq -r '
             [
@@ -1086,13 +1088,16 @@ jobs:
             fi
             if [ "$agent_enforcing" -eq 1 ] &&
               [ "$enforced" -eq "$expected_enforced_cgroups" ] &&
-              [ "$rules" -eq "$expected_rules" ] &&
+              [ "$rules" -eq "$expected_total_rules" ] &&
               [ "$active_policy_epoch" -ge 1 ]; then
               fixture_enforced_cgroups=$((enforced - retained_smoke_client_cgroups))
               test "$fixture_enforced_cgroups" -eq "$expected_pods"
+              fixture_compiled_rules=$((rules - retained_smoke_client_rules))
+              test "$fixture_compiled_rules" -eq "$expected_rules"
               reference_ready=1
-              printf 'reference_fixture_agent_enforcing=%s\nreference_fixture_active_policy_epoch=%s\nreference_fixture_enforced_cgroups=%s\nreference_fixture_compiled_rules=%s\n' \
-                "$agent_enforcing" "$active_policy_epoch" "$fixture_enforced_cgroups" "$rules"
+              printf 'reference_fixture_agent_enforcing=%s\nreference_fixture_active_policy_epoch=%s\nreference_total_enforced_cgroups=%s\nretained_smoke_client_cgroups=%s\nreference_fixture_enforced_cgroups=%s\nreference_total_compiled_rules=%s\nretained_smoke_client_rules=%s\nreference_fixture_compiled_rules=%s\n' \
+                "$agent_enforcing" "$active_policy_epoch" "$enforced" "$retained_smoke_client_cgroups" \
+                "$fixture_enforced_cgroups" "$rules" "$retained_smoke_client_rules" "$fixture_compiled_rules"
               break
             fi
             sleep 2

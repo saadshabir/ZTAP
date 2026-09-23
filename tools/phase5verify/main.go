@@ -133,6 +133,10 @@ var hostedResourceEvidenceKeys = map[string]struct{}{
 	"reference_fixture_enforced_cgroups":    {},
 	"reference_fixture_agent_enforcing":     {},
 	"reference_fixture_status":              {},
+	"reference_total_compiled_rules":        {},
+	"reference_total_enforced_cgroups":      {},
+	"retained_smoke_client_cgroups":         {},
+	"retained_smoke_client_rules":           {},
 	"sample":                                {},
 	"sample_interval_seconds":               {},
 	"samples":                               {},
@@ -2203,6 +2207,10 @@ func validateHostedResourceEvidence(path string) error {
 		"reference_cpu_max":                 "200000 100000",
 		"reference_fixture_agent_enforcing": "1",
 		"reference_fixture_compiled_rules":  "2500",
+		"reference_total_compiled_rules":    "2501",
+		"reference_total_enforced_cgroups":  "251",
+		"retained_smoke_client_cgroups":     "1",
+		"retained_smoke_client_rules":       "1",
 		"memory_metric":                     "memory.current (conservative cgroup memory upper bound; includes non-RSS charges)",
 		"samples":                           "3",
 		"quiet_settle_seconds":              "10",
@@ -2229,6 +2237,32 @@ func validateHostedResourceEvidence(path string) error {
 	}
 	if enforced != referenceSubjects {
 		return fmt.Errorf("%s reports %d enforced cgroups, want exactly %d", path, enforced, referenceSubjects)
+	}
+	totalEnforced, err := parseHostedUint(values, path, "reference_total_enforced_cgroups")
+	if err != nil {
+		return err
+	}
+	retainedCgroups, err := parseHostedUint(values, path, "retained_smoke_client_cgroups")
+	if err != nil {
+		return err
+	}
+	if totalEnforced != enforced+retainedCgroups {
+		return fmt.Errorf("%s reports %d total enforced cgroups, want fixture count %d plus %d retained smoke cgroups", path, totalEnforced, enforced, retainedCgroups)
+	}
+	compiledRules, err := parseHostedUint(values, path, "reference_fixture_compiled_rules")
+	if err != nil {
+		return err
+	}
+	totalRules, err := parseHostedUint(values, path, "reference_total_compiled_rules")
+	if err != nil {
+		return err
+	}
+	retainedRules, err := parseHostedUint(values, path, "retained_smoke_client_rules")
+	if err != nil {
+		return err
+	}
+	if totalRules != compiledRules+retainedRules {
+		return fmt.Errorf("%s reports %d total compiled rules, want fixture count %d plus %d retained smoke rules", path, totalRules, compiledRules, retainedRules)
 	}
 	maxCPU, err := parseHostedFloat(values, path, "max_cpu_cores")
 	if err != nil {

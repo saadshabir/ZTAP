@@ -1023,6 +1023,41 @@ func TestReadEnvironmentValuesRejectsOversizedEvidence(t *testing.T) {
 	}
 }
 
+func hostedResourceEvidenceFixture(containerID string) string {
+	return strings.Join([]string{
+		"agent_namespace=ztap-system",
+		"agent_pod=ztap-agent-abc12",
+		"container_id=" + containerID,
+		"cgroup_path=/sys/fs/cgroup/kubepods.slice/cri-containerd-" + containerID + ".scope",
+		"observed_fixture_pods=250",
+		"observed_fixture_policies=25",
+		"reference_cpu_max=200000 100000",
+		"reference_fixture_agent_enforcing=1",
+		"reference_fixture_active_policy_epoch=1",
+		"reference_fixture_enforced_cgroups=250",
+		"reference_fixture_compiled_rules=2500",
+		"reference_total_enforced_cgroups=251",
+		"retained_smoke_client_cgroups=1",
+		"reference_total_compiled_rules=2501",
+		"retained_smoke_client_rules=1",
+		"reference_fixture_status=active_waiting_for_quiet_interval",
+		"memory_metric=memory.current (conservative cgroup memory upper bound; includes non-RSS charges)",
+		"quiet_settle_seconds=10",
+		"sample_interval_seconds=5",
+		"memory_peak_sample_interval_ms=100",
+		"samples=3",
+		"scope=real capability-only DaemonSet in kind with 250 Pods, 25 policies, and 2500 rules",
+		"sample=1 start_cpu_usec=100000 end_cpu_usec=150000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=5000000000",
+		"sample=2 start_cpu_usec=200000 end_cpu_usec=300000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=5000000000",
+		"sample=3 start_cpu_usec=300000 end_cpu_usec=450000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=5000000000",
+		"cpu_budget_cores=0.10",
+		"memory_current_budget_mib=200",
+		"max_cpu_cores=0.03",
+		"max_memory_current_mib=120.00",
+		"budget_result=passed",
+	}, "\n") + "\n"
+}
+
 func TestVerifyHostedEvidenceAcceptsReferenceBundle(t *testing.T) {
 	ebpfDirectory := t.TempDir()
 	capabilityDirectory := t.TempDir()
@@ -1060,34 +1095,7 @@ func TestVerifyHostedEvidenceAcceptsReferenceBundle(t *testing.T) {
 	fixtureEvidence := "offline_fixture_shape=pods=250 policies=25 compiled_rules=2500\nfixture_live_shape=verified\nfixture_shape=pods=250 policies=25 pods_per_policy=10 peers_per_policy=10 compiled_rules=2500\n"
 	fixturePath := write(capabilityDirectory, "capability-agent-reference-fixture.txt", fixtureEvidence)
 	write(capabilityDirectory, "phase5-reference-fixture.yaml", referenceHostedFixture(true))
-	resourceEvidence := strings.Join([]string{
-		"agent_namespace=ztap-system",
-		"agent_pod=ztap-agent-abc12",
-		"container_id=" + containerID,
-		"cgroup_path=/sys/fs/cgroup/kubepods.slice/cri-containerd-" + containerID + ".scope",
-		"observed_fixture_pods=250",
-		"observed_fixture_policies=25",
-		"reference_cpu_max=200000 100000",
-		"reference_fixture_agent_enforcing=1",
-		"reference_fixture_active_policy_epoch=1",
-		"reference_fixture_enforced_cgroups=250",
-		"reference_fixture_compiled_rules=2500",
-		"reference_fixture_status=active_waiting_for_quiet_interval",
-		"memory_metric=memory.current (conservative cgroup memory upper bound; includes non-RSS charges)",
-		"quiet_settle_seconds=10",
-		"sample_interval_seconds=5",
-		"memory_peak_sample_interval_ms=100",
-		"samples=3",
-		"scope=real capability-only DaemonSet in kind with 250 Pods, 25 policies, and 2500 rules",
-		"sample=1 start_cpu_usec=100000 end_cpu_usec=150000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=5000000000",
-		"sample=2 start_cpu_usec=200000 end_cpu_usec=300000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=5000000000",
-		"sample=3 start_cpu_usec=300000 end_cpu_usec=450000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=5000000000",
-		"cpu_budget_cores=0.10",
-		"memory_current_budget_mib=200",
-		"max_cpu_cores=0.03",
-		"max_memory_current_mib=120.00",
-		"budget_result=passed",
-	}, "\n") + "\n"
+	resourceEvidence := hostedResourceEvidenceFixture(containerID)
 	resourcePath := write(capabilityDirectory, "capability-agent-resource.txt", resourceEvidence)
 	rollingEvidence := strings.Join([]string{
 		"baseline_selected_smoke_client=blocked",
@@ -1441,12 +1449,8 @@ func TestHostedKeyValuesRejectsMalformedLine(t *testing.T) {
 
 func TestValidateHostedResourceEvidenceRejectsUnexpectedKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capability-agent-resource.txt")
-	payload := strings.Join([]string{
-		"sample=1 start_cpu_usec=100000 end_cpu_usec=150000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=5000000000",
-		"sample=2 start_cpu_usec=200000 end_cpu_usec=300000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=5000000000",
-		"sample=3 start_cpu_usec=300000 end_cpu_usec=450000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=5000000000",
-		"unexpected_key=value",
-	}, "\n") + "\n"
+	containerID := strings.Repeat("0123456789abcdef", 4)
+	payload := hostedResourceEvidenceFixture(containerID) + "unexpected_key=value\n"
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write unexpected-key resource evidence: %v", err)
 	}
@@ -1902,107 +1906,79 @@ func TestValidateHostedResourceSamplesRejectsPeakBelowEndpoint(t *testing.T) {
 
 func TestValidateHostedResourceEvidenceRejectsFabricatedMaximum(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capability-agent-resource.txt")
-	payload := strings.Join([]string{
-		"observed_fixture_pods=250",
-		"observed_fixture_policies=25",
-		"reference_cpu_max=200000 100000",
-		"reference_fixture_enforced_cgroups=250",
-		"reference_fixture_compiled_rules=2500",
-		"memory_metric=memory.current (conservative cgroup memory upper bound; includes non-RSS charges)",
-		"quiet_settle_seconds=10",
-		"sample_interval_seconds=5",
-		"memory_peak_sample_interval_ms=100",
-		"samples=3",
-		"sample=1 start_cpu_usec=100000 end_cpu_usec=150000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=5000000000",
-		"sample=2 start_cpu_usec=200000 end_cpu_usec=300000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=5000000000",
-		"sample=3 start_cpu_usec=300000 end_cpu_usec=450000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=5000000000",
-		"cpu_budget_cores=0.10",
-		"memory_current_budget_mib=200",
-		"max_cpu_cores=0.04",
-		"max_memory_current_mib=120.00",
-		"budget_result=passed",
-	}, "\n") + "\n"
+	containerID := strings.Repeat("0123456789abcdef", 4)
+	payload := strings.Replace(hostedResourceEvidenceFixture(containerID), "max_cpu_cores=0.03", "max_cpu_cores=0.04", 1)
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write fabricated resource evidence: %v", err)
 	}
 	if err := validateHostedResourceEvidence(path); err == nil {
 		t.Fatal("hosted resource verifier accepted a fabricated maximum")
+	} else if !strings.Contains(err.Error(), "want sample maximum") {
+		t.Fatalf("hosted resource verifier rejected fabricated maximum for the wrong reason: %v", err)
 	}
 }
 
 func TestValidateHostedResourceEvidenceRequiresExactEnforcedCgroups(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capability-agent-resource.txt")
-	payload := strings.Join([]string{
-		"scope=kind capability-only agent reference fixture",
-		"observed_fixture_pods=250",
-		"observed_fixture_policies=25",
-		"reference_cpu_max=200000 100000",
-		"reference_fixture_enforced_cgroups=251",
-		"reference_fixture_compiled_rules=2500",
-		"memory_metric=memory.current (conservative cgroup memory upper bound; includes non-RSS charges)",
-		"quiet_settle_seconds=10",
-		"sample_interval_seconds=5",
-		"memory_peak_sample_interval_ms=100",
-		"samples=3",
-		"sample=1 start_cpu_usec=100000 end_cpu_usec=150000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=5000000000",
-		"sample=2 start_cpu_usec=200000 end_cpu_usec=300000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=5000000000",
-		"sample=3 start_cpu_usec=300000 end_cpu_usec=450000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=5000000000",
-		"cpu_budget_cores=0.10",
-		"memory_current_budget_mib=200",
-		"max_cpu_cores=0.03",
-		"max_memory_current_mib=120.00",
-		"budget_result=passed",
-	}, "\n") + "\n"
+	containerID := strings.Repeat("0123456789abcdef", 4)
+	payload := hostedResourceEvidenceFixture(containerID)
+	payload = strings.Replace(payload, "reference_fixture_enforced_cgroups=250", "reference_fixture_enforced_cgroups=251", 1)
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write over-counted fixture resource evidence: %v", err)
 	}
 	if err := validateHostedResourceEvidence(path); err == nil {
 		t.Fatal("hosted resource verifier accepted a non-exact enforced-cgroup count")
+	} else if !strings.Contains(err.Error(), "enforced cgroups, want exactly") {
+		t.Fatalf("hosted resource verifier rejected the cgroup count for the wrong reason: %v", err)
 	}
 }
 
 func TestValidateHostedResourceEvidenceRequiresScope(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capability-agent-resource.txt")
-	payload := strings.Join([]string{
-		"sample=1 start_cpu_usec=100000 end_cpu_usec=150000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=5000000000",
-		"sample=2 start_cpu_usec=200000 end_cpu_usec=300000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=5000000000",
-		"sample=3 start_cpu_usec=300000 end_cpu_usec=450000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=5000000000",
-	}, "\n") + "\n"
+	containerID := strings.Repeat("0123456789abcdef", 4)
+	payload := strings.Replace(
+		hostedResourceEvidenceFixture(containerID),
+		"scope=real capability-only DaemonSet in kind with 250 Pods, 25 policies, and 2500 rules\n",
+		"",
+		1,
+	)
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write resource evidence without scope: %v", err)
 	}
 	if err := validateHostedResourceEvidence(path); err == nil {
 		t.Fatal("hosted resource verifier accepted evidence without scope provenance")
+	} else if !strings.Contains(err.Error(), "scope=") {
+		t.Fatalf("hosted resource verifier rejected missing scope for the wrong reason: %v", err)
 	}
 }
 
 func TestValidateHostedResourceEvidenceRequiresQuietInterval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capability-agent-resource.txt")
-	payload := strings.Join([]string{
-		"observed_fixture_pods=250",
-		"observed_fixture_policies=25",
-		"reference_cpu_max=200000 100000",
-		"reference_fixture_enforced_cgroups=250",
-		"reference_fixture_compiled_rules=2500",
-		"memory_metric=memory.current (conservative cgroup memory upper bound; includes non-RSS charges)",
-		"quiet_settle_seconds=10",
-		"sample_interval_seconds=5",
-		"memory_peak_sample_interval_ms=100",
-		"samples=3",
-		"sample=1 start_cpu_usec=100000 end_cpu_usec=110000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=1000000000",
-		"sample=2 start_cpu_usec=200000 end_cpu_usec=220000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=1000000000",
-		"sample=3 start_cpu_usec=300000 end_cpu_usec=330000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=1000000000",
-		"cpu_budget_cores=0.10",
-		"memory_current_budget_mib=200",
-		"max_cpu_cores=0.03",
-		"max_memory_current_mib=120.00",
-		"budget_result=passed",
-	}, "\n") + "\n"
+	containerID := strings.Repeat("0123456789abcdef", 4)
+	payload := hostedResourceEvidenceFixture(containerID)
+	for _, sample := range []struct{ complete, short string }{
+		{
+			"sample=1 start_cpu_usec=100000 end_cpu_usec=150000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=5000000000",
+			"sample=1 start_cpu_usec=100000 end_cpu_usec=110000 start_memory_current_bytes=104857600 end_memory_current_bytes=104857600 peak_memory_current_bytes=104857600 cpu_cores=0.010000000 memory_current_mib=100.000000 elapsed_ns=1000000000",
+		},
+		{
+			"sample=2 start_cpu_usec=200000 end_cpu_usec=300000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=5000000000",
+			"sample=2 start_cpu_usec=200000 end_cpu_usec=220000 start_memory_current_bytes=115343360 end_memory_current_bytes=115343360 peak_memory_current_bytes=115343360 cpu_cores=0.020000000 memory_current_mib=110.000000 elapsed_ns=1000000000",
+		},
+		{
+			"sample=3 start_cpu_usec=300000 end_cpu_usec=450000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=5000000000",
+			"sample=3 start_cpu_usec=300000 end_cpu_usec=330000 start_memory_current_bytes=125829120 end_memory_current_bytes=125829120 peak_memory_current_bytes=125829120 cpu_cores=0.030000000 memory_current_mib=120.000000 elapsed_ns=1000000000",
+		},
+	} {
+		payload = strings.Replace(payload, sample.complete, sample.short, 1)
+	}
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write short resource evidence: %v", err)
 	}
 	if err := validateHostedResourceEvidence(path); err == nil {
 		t.Fatal("hosted resource verifier accepted short sampling intervals")
+	} else if !strings.Contains(err.Error(), "shorter than the documented five seconds") {
+		t.Fatalf("hosted resource verifier rejected short intervals for the wrong reason: %v", err)
 	}
 }
 
