@@ -31,8 +31,10 @@ on:
     - cron: "0 2 * * 1"
 
 jobs:
+  # Manual preflight mode validates a successful same-commit CI run instead of duplicating it.
   lint:
     name: Lint & Format Check
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -76,6 +78,7 @@ jobs:
 
   zizmor:
     name: zizmor (Actions security)
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
@@ -93,6 +96,7 @@ jobs:
 
   actionlint:
     name: Actionlint
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
@@ -109,6 +113,7 @@ jobs:
 
   generated-code:
     name: Generated eBPF Code
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -136,6 +141,7 @@ jobs:
 
   test-go:
     name: Go Tests (Linux)
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight }}
     runs-on: ubuntu-24.04
     needs: lint
     timeout-minutes: 30
@@ -160,6 +166,7 @@ jobs:
 
   test-integration:
     name: Integration Tests (Linux)
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight }}
     runs-on: ubuntu-24.04
     needs: lint
     timeout-minutes: 20
@@ -207,6 +214,7 @@ jobs:
 
   docker-build:
     name: Docker Build (ztap)
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight }}
     runs-on: ubuntu-24.04
     needs: lint
     timeout-minutes: 20
@@ -248,7 +256,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [lint, test-go]
     # Forked PRs cannot run privileged eBPF steps
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ (github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     timeout-minutes: 30
 
     steps:
@@ -308,7 +316,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [lint, test-go]
     # Forked PRs cannot run the host bpffs and eBPF attach steps.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ (github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     timeout-minutes: 35
 
     steps:
@@ -1590,6 +1598,7 @@ jobs:
 
   build-assets:
     name: Build Assets (Linux)
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight }}
     runs-on: ubuntu-24.04
     needs: [lint, generated-code]
     timeout-minutes: 20
@@ -1650,7 +1659,7 @@ jobs:
       - capability-agent
       - build-assets
       - dependency-review
-    if: always()
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.run_performance_preflight) }}
     timeout-minutes: 5
 
     steps:
@@ -1730,7 +1739,6 @@ jobs:
   performance-preflight:
     name: Hosted performance preflight (Linux)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_performance_preflight }}
-    needs: all-checks
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
