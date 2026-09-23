@@ -26,7 +26,7 @@ import (
 const (
 	phase5PacketSamples    = 3
 	phase5PacketRoundTrips = 1000
-	phase5TCPBytes         = 8 << 20
+	phase5TCPBytes         = 128 << 20
 )
 
 type phase5PacketEvidence struct {
