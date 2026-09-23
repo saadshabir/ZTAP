@@ -2668,7 +2668,9 @@ func validateReference(e referenceEvidence) error {
 			return fmt.Errorf("map memory snapshot %q: %w", snapshot.Stage, err)
 		}
 		if index > 0 {
-			if err := compareMapMemory(e.MapMemoryHistory[index-1].Maps, snapshot.Maps, true); err != nil {
+			// The first population can allocate map backing pages. Require
+			// stable memlock only among the warmed, repeated apply samples.
+			if err := compareMapMemory(e.MapMemoryHistory[index-1].Maps, snapshot.Maps, index > 1); err != nil {
 				return fmt.Errorf("map memory snapshot %q: %w", snapshot.Stage, err)
 			}
 		}

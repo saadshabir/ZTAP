@@ -947,17 +947,21 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 
 	parent := createTestCgroup(t)
 	activeCgroup := createSubCgroup(t, parent, "active")
-	candidateCgroup := createSubCgroup(t, parent, "candidate")
 	activeID := mustCgroupID(t, activeCgroup)
-	candidateID := mustCgroupID(t, candidateCgroup)
 	activeListener := listenEngineTestUDP(t)
 	candidateListener := listenEngineTestUDP(t)
 	activePort := uint16(activeListener.LocalAddr().(*net.UDPAddr).Port)
 	candidatePort := uint16(candidateListener.LocalAddr().(*net.UDPAddr).Port)
-	engine := newLinuxEngineForTest(t, map[uint64]string{activeID: activeCgroup, candidateID: candidateCgroup})
+	cgroupPaths := map[uint64]string{activeID: activeCgroup}
+	engine := newLinuxEngineForTest(t, cgroupPaths)
 	if err := engine.Apply(context.Background(), engineTestPolicySet(t, activeID, activePort)); err != nil {
 		t.Fatalf("apply active policy: %v", err)
 	}
+	// This cgroup becomes runnable after the active policy is installed. It has
+	// no link until a subsequent candidate successfully includes it.
+	candidateCgroup := createSubCgroup(t, parent, "candidate")
+	candidateID := mustCgroupID(t, candidateCgroup)
+	cgroupPaths[candidateID] = candidateCgroup
 	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
 	if err != nil {
 		t.Fatalf("create flow event reader: %v", err)
@@ -965,6 +969,7 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 	t.Cleanup(func() { _ = reader.Close() })
 
 	injectedErr := errors.New("injected candidate link failure")
+	workingLinker := engine.engineCore.linker
 	engine.engineCore.linker = failingEngineSubjectLinker{cgroupID: candidateID, err: injectedErr}
 	candidate := compileEngineTestPolicySet(t, []uint64{activeID, candidateID}, []string{"Egress"}, []uint16{candidatePort}, nil, nil, nil)
 	if err := engine.Apply(context.Background(), candidate); !errors.Is(err, injectedErr) {
@@ -977,6 +982,9 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 		t.Fatalf("failed candidate slot was not cleared: %+v", engine.store.slotCounts[0])
 	}
 	assertEngineSlotEmpty(t, engine, 0)
+	if _, linked := engine.links[candidateID]; linked {
+		t.Fatal("failed candidate unexpectedly classified the new cgroup")
+	}
 
 	runUDPSendHelperInCgroup(t, activeCgroup, fmt.Sprintf("127.0.0.1:%d", activePort))
 	event := readFlowEvent(t, reader, activePort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
@@ -987,6 +995,26 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 	event = readFlowEvent(t, reader, candidatePort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
 	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonDefaultDeny, 1, activeID)
 	assertEngineUDPDelivery(t, candidateListener, false)
+
+	// An unobserved replacement cgroup is fail-open during the failed update.
+	// Measure from its first allowed packet to the first blocked packet after a
+	// controlled retry. This is not a watcher or Kubernetes restart latency.
+	gapStart := time.Now()
+	runUDPSendHelperInCgroup(t, candidateCgroup, fmt.Sprintf("127.0.0.1:%d", activePort))
+	assertEngineUDPDelivery(t, activeListener, true)
+	engine.engineCore.linker = workingLinker
+	if err := engine.Apply(context.Background(), candidate); err != nil {
+		t.Fatalf("retry candidate policy after link failure: %v", err)
+	}
+	if _, linked := engine.links[candidateID]; !linked {
+		t.Fatal("successful retry did not classify the new cgroup")
+	}
+	runUDPSendHelperInCgroup(t, candidateCgroup, fmt.Sprintf("127.0.0.1:%d", activePort))
+	event = readFlowEvent(t, reader, activePort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	gap := time.Since(gapStart)
+	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonDefaultDeny, 2, candidateID)
+	assertEngineUDPDelivery(t, activeListener, false)
+	t.Logf("unobserved_replacement_probe_to_retry_ms=%.3f; scope=real cgroup and UDP packets, injected candidate-link failure followed by controlled retry", float64(gap)/float64(time.Millisecond))
 }
 
 func TestLinuxEngineKernelMapWriteFailurePreservesActivePackets(t *testing.T) {
@@ -1244,10 +1272,16 @@ func TestCgroupUDPLoopHelper(t *testing.T) {
 		if interval <= 0 {
 			t.Fatalf("UDP loop interval is not positive for %d packets/second", packetsPerSecond)
 		}
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		// Ticker drops ticks when this process is descheduled. Pace against
+		// absolute deadlines so short scheduling delays do not silently
+		// reduce the number of decisions in the measured interval.
+		next := time.Now()
 		connectionIndex := 0
-		for range ticker.C {
+		for {
+			next = next.Add(interval)
+			if wait := time.Until(next); wait > 0 {
+				time.Sleep(wait)
+			}
 			_, _ = connections[connectionIndex].Write([]byte("flip"))
 			connectionIndex = (connectionIndex + 1) % len(connections)
 		}

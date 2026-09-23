@@ -123,14 +123,20 @@ func TestPhase5ReferenceFixtureApply(t *testing.T) {
 	mapMemorySamples := 1
 	mapMemoryHistory := []phase5MapMemorySnapshot{{Stage: "before_warmup", Maps: previousMapMemory}}
 
-	warmupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := engine.Apply(warmupContext, policySet); err != nil {
+	// Populate both policy slots before checking repeated-apply memory. The
+	// LPM trie allocates entries lazily, including on the first use of slot 0.
+	for warmup := 0; warmup < 2; warmup++ {
+		warmupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := engine.Apply(warmupContext, policySet)
 		cancel()
-		t.Fatalf("warm-up reference apply: %v", err)
+		if err != nil {
+			t.Fatalf("warm-up reference apply %d: %v", warmup+1, err)
+		}
 	}
-	cancel()
 	currentMapMemory := phase5MapMemory(t, engine)
-	if err := requireStablePhase5MapMemory(previousMapMemory, currentMapMemory, true); err != nil {
+	// LPM trie entries can allocate backing pages on first population. Capacity
+	// must stay fixed, but observed memlock is compared only after warm-up.
+	if err := requireStablePhase5MapMemory(previousMapMemory, currentMapMemory, false); err != nil {
 		t.Fatalf("map memory changed after warm-up apply: %v", err)
 	}
 	previousMapMemory = currentMapMemory

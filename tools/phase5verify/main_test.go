@@ -345,6 +345,15 @@ func TestValidateReferenceRecomputesMapMemoryHistory(t *testing.T) {
 	if err := validateReference(evidence); err == nil {
 		t.Fatal("validateReference accepted zero available map memlock")
 	}
+	evidence.MapMemoryHistory[0].Maps[0].MemlockAvailable = false
+	if err := validateReference(evidence); err != nil {
+		t.Fatalf("validateReference rejected first-population memlock allocation: %v", err)
+	}
+	evidence.MapMemoryHistory[2].Maps[0].MemlockAvailable = false
+	evidence.MapMemoryHistory[2].Maps[0].ObservedMemlockBytes = 0
+	if err := validateReference(evidence); err == nil {
+		t.Fatal("validateReference accepted memlock availability loss after warm-up")
+	}
 }
 
 func TestValidateMapMemoryRejectsUnknownDuplicateAndUnsortedEntries(t *testing.T) {

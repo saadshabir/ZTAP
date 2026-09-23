@@ -116,7 +116,33 @@ func TestPhase5PacketAndTCPPerformance(t *testing.T) {
 		}
 
 		enforcedUDPP99 := runPhase5UDPLatency(t, cgroup, enforcedUDP, phase5PacketRoundTrips)
+		beforeTCP, err := engine.MetricsSnapshot(context.Background())
+		if err != nil {
+			_ = engine.Close()
+			t.Fatalf("read packet-performance pre-transfer counters: %v", err)
+		}
 		enforcedTCPDuration := runPhase5TCPTransfer(t, cgroup, enforcedTCPListener, phase5TCPBytes)
+		afterTCP, err := engine.MetricsSnapshot(context.Background())
+		if err != nil {
+			_ = engine.Close()
+			t.Fatalf("read packet-performance post-transfer counters: %v", err)
+		}
+		t.Logf("packet sample %d: baseline TCP %.3f ms (%.2f Mbps), enforced TCP %.3f ms (%.2f Mbps), baseline UDP p99 %s, enforced UDP p99 %s",
+			sample, float64(baselineTCPDuration)/float64(time.Millisecond), phase5TCPMbps(phase5TCPBytes, baselineTCPDuration),
+			float64(enforcedTCPDuration)/float64(time.Millisecond), phase5TCPMbps(phase5TCPBytes, enforcedTCPDuration), baselineUDPP99, enforcedUDPP99)
+		if len(beforeTCP.Decisions) != len(afterTCP.Decisions) {
+			_ = engine.Close()
+			t.Fatalf("packet counter shape changed during sample %d", sample)
+		}
+		for index, decision := range afterTCP.Decisions {
+			if decision.Count < beforeTCP.Decisions[index].Count {
+				_ = engine.Close()
+				t.Fatalf("packet counter reset during sample %d: %+v", sample, decision)
+			}
+			if delta := decision.Count - beforeTCP.Decisions[index].Count; delta != 0 {
+				t.Logf("packet sample %d: TCP %s/%s/%s decisions=%d", sample, decision.Direction, decision.Action, decision.Reason, delta)
+			}
+		}
 		if err := engine.Close(); err != nil {
 			t.Fatalf("close packet-performance engine sample %d: %v", sample+1, err)
 		}
