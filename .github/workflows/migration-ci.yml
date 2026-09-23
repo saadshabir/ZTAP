@@ -12,6 +12,16 @@ env:
 
 on:
   workflow_dispatch:
+    inputs:
+      run_performance_preflight:
+        description: Run hosted Linux performance measurements without publishing a release
+        type: boolean
+        required: false
+        default: false
+      migration_ci_run_id:
+        description: Successful push run ID for this exact commit and branch
+        type: string
+        required: false
   push:
     branches: [main, codex/streamline-ztap]
   pull_request:
@@ -1716,3 +1726,231 @@ jobs:
           NEEDS_CAPABILITY_AGENT_RESULT: ${{ needs.capability-agent.result }}
           NEEDS_BUILD_ASSETS_RESULT: ${{ needs.build-assets.result }}
           NEEDS_DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
+
+  performance-preflight:
+    name: Hosted performance preflight (Linux)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_performance_preflight }}
+    needs: all-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PHASE5_RUN_ID: ${{ github.run_id }}-${{ github.sha }}
+      MIGRATION_CI_RUN_ID: ${{ inputs.migration_ci_run_id }}
+
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify the trusted CI run for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "${MIGRATION_CI_RUN_ID:-}" in
+            ''|*[!0-9]*)
+              echo 'migration_ci_run_id must be a positive run ID' >&2
+              exit 1
+              ;;
+          esac
+          migration_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${MIGRATION_CI_RUN_ID}")"
+          jq -e \
+            --arg sha "$GITHUB_SHA" \
+            --arg branch "$GITHUB_REF_NAME" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            '.status == "completed" and
+             .conclusion == "success" and
+             .event == "push" and
+             .head_branch == $branch and
+             .head_sha == $sha and
+             .path == ".github/workflows/migration-ci.yml" and
+             .head_repository.full_name == $repository' \
+            <<< "$migration_run" >/dev/null
+
+          require_successful_job() {
+            local job_name="$1"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${MIGRATION_CI_RUN_ID}/jobs?per_page=100" |
+              jq -e --arg name "$job_name" '
+                [.jobs[] | select(
+                  .name == $name and
+                  .status == "completed" and
+                  .conclusion == "success"
+                )] | length == 1
+              ' >/dev/null
+          }
+          require_successful_job 'Required CI'
+          require_successful_job 'eBPF Verification (Linux)'
+          require_successful_job 'Capability-only Agent (Kubernetes)'
+          printf 'trusted_source_run=%s\nsource_commit=%s\nsource_branch=%s\n' \
+            "$MIGRATION_CI_RUN_ID" "$GITHUB_SHA" "$GITHUB_REF_NAME"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Download trusted Linux evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for path in \
+            dist \
+            dist/hosted-capability-agent-evidence \
+            dist/hosted-ebpf-engine-evidence; do
+            if [ -L "$path" ]; then
+              printf 'hosted evidence path must not be a symlink: %s\n' "$path" >&2
+              exit 1
+            fi
+            if [ -e "$path" ] && [ ! -d "$path" ]; then
+              printf 'hosted evidence path must be a directory: %s\n' "$path" >&2
+              exit 1
+            fi
+          done
+          mkdir -p dist/hosted-capability-agent-evidence dist/hosted-ebpf-engine-evidence
+          gh run download "$MIGRATION_CI_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name capability-agent-evidence --dir dist/hosted-capability-agent-evidence
+          gh run download "$MIGRATION_CI_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name ebpf-engine-evidence --dir dist/hosted-ebpf-engine-evidence
+
+      - name: Prepare host bpffs
+        run: |
+          sudo mkdir -p /sys/fs/bpf
+          if ! mountpoint -q /sys/fs/bpf; then
+            sudo mount -t bpf bpffs /sys/fs/bpf
+          fi
+
+      - name: Validate fresh measurement output paths
+        run: |
+          set -euo pipefail
+          metric_files=(
+            dist/phase5-performance.json
+            dist/phase5-flow.json
+            dist/phase5-packet.json
+            dist/phase5-agent.json
+            dist/phase5-agent-reconcile.json
+            dist/phase5-agent-event.json
+            dist/phase5-agent-pod-start.json
+            dist/phase5-agent-restart.json
+            dist/phase5-agent-crash.json
+            dist/phase5-agent-resource.json
+          )
+          for path in \
+            performance-preflight-environment.txt \
+            performance-preflight.log \
+            "${metric_files[@]}"; do
+            if [ -L "$path" ] || [ -e "$path" ]; then
+              printf 'performance output path must not already exist: %s\n' "$path" >&2
+              exit 1
+            fi
+          done
+
+      - name: Record the measurement environment
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)" = linux
+          test "$(go env GOARCH)" = amd64
+          reference_nproc="$(taskset --cpu-list 0,1 nproc)"
+          test "$reference_nproc" -eq 2
+          cgroup2="$(stat -fc '%T' /sys/fs/cgroup)"
+          bpffs="$(stat -fc '%T' /sys/fs/bpf)"
+          test "$cgroup2" = cgroup2fs
+          test "$bpffs" = bpf
+          {
+            printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'performance_run_id=%s\n' "$PHASE5_RUN_ID"
+            printf 'migration_ci_run_id=%s\n' "$MIGRATION_CI_RUN_ID"
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'ref=%s\n' "$GITHUB_REF"
+            printf 'workflow_run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'workflow_event=%s\n' "$GITHUB_EVENT_NAME"
+            printf 'workflow_path=.github/workflows/migration-ci.yml\n'
+            printf 'go_version='; go version
+            printf 'goos=%s\n' "$(go env GOOS)"
+            printf 'goarch=%s\n' "$(go env GOARCH)"
+            printf 'nproc=%s\n' "$(nproc)"
+            printf 'reference_cpu_set=0,1\n'
+            printf 'reference_nproc=%s\n' "$reference_nproc"
+            printf 'reference_gomaxprocs=2\n'
+            printf 'getconf_clk_tck='; getconf CLK_TCK
+            printf 'uname='; uname -a
+            printf 'cgroup2=%s\n' "$cgroup2"
+            printf 'bpffs=%s\n' "$bpffs"
+            printf 'cpu_max='; cat /sys/fs/cgroup/cpu.max
+          } | tee performance-preflight-environment.txt
+
+      - name: Run real-cgroup performance measurements
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=PATH,HOME,GOFLAGS,GOMODCACHE,GOCACHE,PHASE5_RUN_ID \
+            taskset --cpu-list 0,1 env GOMAXPROCS=2 make performance 2>&1 |
+            tee performance-preflight.log
+
+      - name: Restore workspace ownership after privileged measurements
+        if: always()
+        run: |
+          set -euo pipefail
+          for path in .cache dist; do
+            if [ -e "$path" ]; then
+              sudo chown -R "$(id -u):$(id -g)" "$path"
+            fi
+          done
+
+      - name: Validate exact measurement provenance
+        run: |
+          set -euo pipefail
+          for expected in \
+            "performance_run_id=$PHASE5_RUN_ID" \
+            "migration_ci_run_id=$MIGRATION_CI_RUN_ID" \
+            "commit=$GITHUB_SHA" \
+            "ref=$GITHUB_REF" \
+            "workflow_run_id=$GITHUB_RUN_ID" \
+            'workflow_event=workflow_dispatch' \
+            'workflow_path=.github/workflows/migration-ci.yml'; do
+            count="$(awk -v expected="$expected" '$0 == expected { count++ } END { print count + 0 }' \
+              performance-preflight-environment.txt)"
+            test "$count" -eq 1 || {
+              printf 'measurement environment must contain exactly one line: %s\n' "$expected" >&2
+              exit 1
+            }
+          done
+
+      - name: Verify measurements and hosted evidence
+        run: |
+          set -euo pipefail
+          make verify-performance \
+            PHASE5_EVIDENCE_DIR=dist \
+            PHASE5_EXPECTED_RUN_ID="$PHASE5_RUN_ID" \
+            PHASE5_HOSTED_EBPF_DIR=dist/hosted-ebpf-engine-evidence \
+            PHASE5_HOSTED_CAPABILITY_DIR=dist/hosted-capability-agent-evidence
+
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-performance-preflight-evidence
+          path: |
+            performance-preflight-environment.txt
+            performance-preflight.log
+            dist/phase5-performance.json
+            dist/phase5-flow.json
+            dist/phase5-packet.json
+            dist/phase5-agent.json
+            dist/phase5-agent-reconcile.json
+            dist/phase5-agent-event.json
+            dist/phase5-agent-pod-start.json
+            dist/phase5-agent-restart.json
+            dist/phase5-agent-crash.json
+            dist/phase5-agent-resource.json
+            dist/hosted-capability-agent-evidence
+            dist/hosted-ebpf-engine-evidence
+          if-no-files-found: error
+          retention-days: 14
