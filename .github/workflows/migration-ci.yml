@@ -1716,3 +1716,61 @@ jobs:
           NEEDS_CAPABILITY_AGENT_RESULT: ${{ needs.capability-agent.result }}
           NEEDS_BUILD_ASSETS_RESULT: ${{ needs.build-assets.result }}
           NEEDS_DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
+
+  phase5-performance-preflight:
+    name: Phase 5 performance preflight (Linux)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/streamline-ztap'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Prepare host bpffs
+        run: |
+          sudo mkdir -p /sys/fs/bpf
+          if ! mountpoint -q /sys/fs/bpf; then
+            sudo mount -t bpf bpffs /sys/fs/bpf
+          fi
+
+      - name: Run real-cgroup performance harness
+        env:
+          PHASE5_RUN_ID: preflight-${{ github.run_id }}-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=PATH,HOME,GOFLAGS,GOMODCACHE,GOCACHE,PHASE5_RUN_ID taskset --cpu-list 0,1 \
+            env GOMAXPROCS=2 make performance 2>&1 | tee phase5-performance.txt
+
+      - name: Restore evidence ownership
+        if: always()
+        run: |
+          for path in .cache dist; do
+            if [ -e "$path" ]; then
+              sudo chown -R "$(id -u):$(id -g)" "$path"
+            fi
+          done
+
+      - name: Retain raw preflight results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: phase5-performance-preflight
+          path: |
+            phase5-performance.txt
+            dist/phase5-*.json
+          if-no-files-found: warn
+          retention-days: 7
