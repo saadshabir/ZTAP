@@ -531,7 +531,7 @@ jobs:
               .readOnly == true)
           ' <<< "$agent_json" >/dev/null
           printf '%s\n' 'host namespace isolation and read-only cgroup mount verified'
-          jq -c '.spec.containers[0].securityContext' <<< "$agent_json"
+          printf 'agent_security_context_json=%s\n' "$(jq -c '.spec.containers[0].securityContext' <<< "$agent_json")"
           printf '\n'
           privileged="$(jq -r '.spec.containers[0].securityContext.privileged' <<< "$agent_json")"
           allow_privilege_escalation="$(jq -r '.spec.containers[0].securityContext.allowPrivilegeEscalation' <<< "$agent_json")"

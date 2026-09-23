@@ -1204,6 +1204,23 @@ func TestValidateHostedFlowEvidenceRejectsMissingJSONRecord(t *testing.T) {
 	}
 }
 
+func TestValidateHostedFlowEvidenceIgnoresLabeledSecurityContextJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capability-agent-smoke.txt")
+	payload := strings.Join([]string{
+		`agent_security_context_json={"allowPrivilegeEscalation":false,"privileged":false}`,
+		"flow_expected_src_ip=10.244.0.2",
+		"flow_expected_dst_ip=10.244.0.3",
+		"flow_expected_dst_port=8080",
+		`{"timestamp":"2026-09-19T00:00:00Z","policy_epoch":1,"cgroup_id":123,"direction":"egress","protocol":"TCP","src_ip":"10.244.0.2","src_port":40000,"dst_ip":"10.244.0.3","dst_port":8080,"action":"blocked","reason":"default_deny","schema_version":1}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write labeled security-context evidence: %v", err)
+	}
+	if err := validateHostedFlowEvidence(path); err != nil {
+		t.Fatalf("labeled security-context JSON interfered with flow evidence: %v", err)
+	}
+}
+
 func TestValidateHostedFlowEvidenceRejectsUnexpectedFlowTuple(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capability-agent-smoke.txt")
 	payload := strings.Join([]string{

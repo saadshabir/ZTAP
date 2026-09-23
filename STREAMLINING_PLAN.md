@@ -850,6 +850,27 @@ Progress: **complete and merged**. The local baseline, artifact cleanup, Makefil
 
 The follow-up review retained the `v0.1.0` self-traffic contract and added an explicit `(cgroup, PodIP)` bypass, a hard hosted self assertion, per-direction quarantine, failed-candidate preservation, partial link-update rollback, and multi-subject ingress-identity coverage in `bc636f5`. Test injection was corrected in `3b198a4`, and the hosted DaemonSet observer-selection race was fixed in `091310f`. Final hosted run `34665388860` from `091310f` passed all three jobs, and its raw artifacts were reviewed. Final Migration CI push run `34665381636` is also green. The attachment target is now one link pair per subject cgroup, sharing programs/maps, because cgroup local storage identifies the attachment cgroup. The Phase 0 architecture gate is closed; Phase 1 may resume.
 
+Continuation audit (2026-09-23): PR #193's exact-head run `35799447776` for
+`e31809f594a0f39326094f0cdd57b73c83ddc34f` passed `Required CI`, both
+privileged Linux/Kubernetes jobs, and all standard checks. Its retained
+capability and eBPF artifacts contain the 250-Pod/25-policy/2,500-rule fixture,
+three resource samples (maximum 0.000494184 CPU cores and 44.078125 MiB
+`memory.current`), a live flow record, the single-enforcer marker, and a
+1,539-ms rolling fail-open interval. The interval has both nanosecond
+endpoints; the replacement's first Running observation is within the measured
+interval, its UID differs from the old Pod on the same node, and it later
+became Ready. The exact hosted-evidence verifier nevertheless rejected the
+artifact because the smoke transcript emitted the unrelated Kubernetes
+security-context JSON as an unlabelled line, which the strict flow parser
+mistook for a flow event. The producer now labels that retained JSON and a
+focused regression covers the transcript shape. The exact artifact therefore
+does not yet count toward final acceptance; the corrected exact-head hosted
+rerun must pass the verifier before any checklist credit. The Phase 5
+implementation checklist remains 90/90 complete (0% remaining); final
+acceptance remains 12/39 complete, with 27/39 items open (69.2% remaining).
+Section 14.5 measurements and release publication/provenance archive remain
+hosted gates.
+
 Work:
 
 - [x] Record the baseline commit, its command list, the already-dirty working-tree boundary, and local host limitations.
