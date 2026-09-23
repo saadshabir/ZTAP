@@ -711,8 +711,8 @@ jobs:
               '' \
               '| Removed command or deployment component | Migration |' \
               '|---|---|' \
-              '| All prior CLI command roots except `agent`, `validate`, `flows`, and `version`, including HTTP/gRPC, cluster/policy-sync, cloud/status, security-extra, anomaly, metrics/discovery/logs, legacy-policy, and demo command areas; the old YAML file and `ZTAP_*` settings | Use the four retained commands; no compatibility aliases are provided. |' \
-              '| `ZtapNetworkPolicy` CRD, old operator and node agent, operator/anomaly/iptables/shell-utility/Python images, operator manifests, leader-election RBAC, policy ConfigMaps, duplicate install manifests, standalone Prometheus/Grafana stack and dashboards | Export custom resources before deleting the old CRD because deletion destroys stored objects. Stop the old operator and agent before installing the capability-only DaemonSet; update monitoring to the retained metrics. |' \
+              '| All prior CLI command roots except agent, validate, flows, and version, including HTTP/gRPC, cluster/policy-sync, cloud/status, security-extra, anomaly, metrics/discovery/logs, legacy-policy, and demo command areas; the old YAML file and ZTAP_* settings | Use the four retained commands; no compatibility aliases are provided. |' \
+              '| ZtapNetworkPolicy CRD, old operator and node agent, operator/anomaly/iptables/shell-utility/Python images, operator manifests, leader-election RBAC, policy ConfigMaps, duplicate install manifests, standalone Prometheus/Grafana stack and dashboards | Export custom resources before deleting the old CRD because deletion destroys stored objects. Stop the old operator and agent before installing the capability-only DaemonSet; update monitoring to the retained metrics. |' \
               '| REST/gRPC endpoints, authentication/session data, old metrics and dashboards, audit files and local databases | These are not migrated. Reconfigure integrations and scrape rules; legacy local data remains untouched but is not read by the new binary. |'
           } > release-notes.md
 
