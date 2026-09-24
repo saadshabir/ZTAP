@@ -413,18 +413,22 @@ struct packet_info {
     __u8 _padding;
 };
 
+/* These helpers only target per-CPU maps. BPF execution cannot migrate
+ * between CPUs, and each lookup returns the current CPU's value slot, so a
+ * plain increment avoids an unnecessary atomic read-modify-write per packet.
+ */
 static __always_inline void increment_counter(void *map, __u32 key)
 {
     __u64 *counter = bpf_map_lookup_elem(map, &key);
     if (counter)
-        __sync_fetch_and_add(counter, 1);
+        *counter += 1;
 }
 
 static __always_inline void increment_epoch_counter(void *map, const void *key)
 {
     __u64 *counter = bpf_map_lookup_elem(map, key);
     if (counter) {
-        __sync_fetch_and_add(counter, 1);
+        *counter += 1;
         return;
     }
 
@@ -432,7 +436,7 @@ static __always_inline void increment_epoch_counter(void *map, const void *key)
     if (bpf_map_update_elem(map, key, &first, BPF_NOEXIST) < 0) {
         counter = bpf_map_lookup_elem(map, key);
         if (counter)
-            __sync_fetch_and_add(counter, 1);
+            *counter += 1;
     }
 }
 
