@@ -26,7 +26,12 @@ sboms:
 
 signs:
   - cmd: cosign
-    args: [sign-blob, --bundle, "${artifact}.sigstore.json", --yes, "${artifact}"]
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - --yes
+      - "${artifact}"
     artifacts: checksum
     env:
       - COSIGN_YES=true
