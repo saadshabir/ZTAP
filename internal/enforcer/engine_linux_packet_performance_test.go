@@ -27,7 +27,8 @@ const (
 	phase5PacketSamples = 3
 	// Keep roughly 100 observations in the tail used for each p99 estimate.
 	phase5PacketRoundTrips = 10_000
-	phase5TCPBytes         = 128 << 20
+	// A long transfer makes TCP throughput less sensitive to short runner pauses.
+	phase5TCPBytes = 1 << 30
 )
 
 type phase5PacketEvidence struct {
@@ -196,13 +197,15 @@ func TestPhase5PacketAndTCPPerformance(t *testing.T) {
 		ThroughputBudgetPercent: 10,
 		Scope:                   "full 250-subject/2,500-rule real-cgroup fixture with loopback UDP round trips and TCP transfers from one selected subject, cgroup eBPF detached versus attached",
 	}
+	// Preserve the measured arrays even when a budget fails, so the hosted
+	// evidence artifact contains the raw result that caused the gate to fail.
+	writePhase5PacketEvidence(t, evidence)
 	if latencyDelta > evidence.LatencyBudgetUS {
 		t.Fatalf("packet latency p99 delta = %.2fµs, want <= %.2fµs", latencyDelta, evidence.LatencyBudgetUS)
 	}
 	if maxRegression > evidence.ThroughputBudgetPercent {
 		t.Fatalf("TCP throughput regression = %.2f%%, want <= %.2f%%", maxRegression, evidence.ThroughputBudgetPercent)
 	}
-	writePhase5PacketEvidence(t, evidence)
 }
 
 func phase5PacketPolicySet(t *testing.T, subjectIDs []uint64, udpPort, tcpPort uint16) policy.PolicySet {
@@ -542,7 +545,7 @@ func phase5TCPMbps(bytes int, duration time.Duration) float64 {
 	if duration <= 0 {
 		return 0
 	}
-	return float64(bytes*8) / duration.Seconds() / 1_000_000
+	return float64(bytes) * 8 / duration.Seconds() / 1_000_000
 }
 
 func writePhase5PacketEvidence(t *testing.T, evidence phase5PacketEvidence) {

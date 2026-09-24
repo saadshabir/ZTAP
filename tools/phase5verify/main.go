@@ -35,7 +35,7 @@ const (
 	flowSeconds              = 60
 	flowMaxSeconds           = flowSeconds + 5
 	packetRoundTrips         = 10_000
-	packetTCPBytes           = 128 << 20
+	packetTCPBytes           = 1 << 30
 	applyBudgetMS            = 2000
 	latencyBudgetUS          = 10
 	throughputBudget         = 10
