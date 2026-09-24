@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -257,6 +258,127 @@ func TestLinuxEngineDirectionAndBypassSemantics(t *testing.T) {
 	assertEngineDecisionCountAtLeast(t, engine.DecisionCountsMap(), flow.ReasonSelfBypass, flow.DirectionEgress, flow.ActionAllowed, 1)
 }
 
+func TestLinuxEnginePolicyDeletionRemovesSelectedContribution(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+
+	cgroup := createTestCgroup(t)
+	cgroupID := mustCgroupID(t, cgroup)
+	allowedListener := listenEngineTestUDP(t)
+	deletedListener := listenEngineTestUDP(t)
+	allowedPort := uint16(allowedListener.LocalAddr().(*net.UDPAddr).Port)
+	deletedPort := uint16(deletedListener.LocalAddr().(*net.UDPAddr).Port)
+	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
+	if err := engine.Apply(context.Background(), engineTestPolicySet(t, cgroupID, allowedPort)); err != nil {
+		t.Fatalf("apply selected policy: %v", err)
+	}
+	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
+	if err != nil {
+		t.Fatalf("create flow event reader: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	runUDPSendHelperInCgroup(t, cgroup, fmt.Sprintf("127.0.0.1:%d", allowedPort))
+	event := readFlowEvent(t, reader, allowedPort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonRule, 1, cgroupID)
+	assertEngineUDPDelivery(t, allowedListener, true)
+
+	// An empty policy set is the engine-level representation of deleting the
+	// last policy selecting this cgroup. It must clear both the active slot's
+	// contents and the process-owned cgroup attachment before the next epoch.
+	if err := engine.Apply(context.Background(), policy.PolicySet{NodeIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatalf("apply policy deletion: %v", err)
+	}
+	if len(engine.links) != 0 {
+		t.Fatalf("policy deletion retained %d active cgroup links", len(engine.links))
+	}
+	if len(engine.orphanLinks) != 0 {
+		t.Fatalf("policy deletion retained orphan cgroup links: %#v", engine.orphanLinks)
+	}
+	activeSlot := engine.engineCore.active.Slot
+	retiredSlot := activeSlot ^ 1
+	assertEnginePolicySlotEmpty(t, engine, activeSlot)
+	assertEngineSlotEmpty(t, engine, retiredSlot)
+	wantNode := nodeBypassKey{Slot: activeSlot, Address: [4]byte{127, 0, 0, 1}}
+	var nodeKey nodeBypassKey
+	var nodeValue uint8
+	iter := engine.store.maps["node_bypass"].Iterate()
+	var activeNodeEntries int
+	for iter.Next(&nodeKey, &nodeValue) {
+		if nodeKey.Slot != activeSlot {
+			continue
+		}
+		if nodeKey != wantNode {
+			t.Fatalf("policy deletion retained unexpected active node bypass: %+v", nodeKey)
+		}
+		activeNodeEntries++
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("iterate active node bypass entries: %v", err)
+	}
+	if activeNodeEntries != 1 {
+		t.Fatalf("active node bypass entries = %d, want exactly the configured node IP", activeNodeEntries)
+	}
+
+	// With the attachment removed, traffic to a port that was never allowed by
+	// the deleted policy is no longer subject to that policy's default deny.
+	runUDPSendHelperInCgroup(t, cgroup, fmt.Sprintf("127.0.0.1:%d", deletedPort))
+	assertEngineUDPDelivery(t, deletedListener, true)
+}
+
+func TestLinuxEnginePolicyDeletionPreservesRemainingContribution(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+
+	cgroup := createTestCgroup(t)
+	cgroupID := mustCgroupID(t, cgroup)
+	retainedListener := listenEngineTestUDP(t)
+	deletedListener := listenEngineTestUDP(t)
+	retainedPort := uint16(retainedListener.LocalAddr().(*net.UDPAddr).Port)
+	deletedPort := uint16(deletedListener.LocalAddr().(*net.UDPAddr).Port)
+	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
+	combined := compileEngineTestPolicySet(t, []uint64{cgroupID}, []string{"Egress"},
+		[]uint16{retainedPort, deletedPort}, nil, nil, nil)
+	if err := engine.Apply(context.Background(), combined); err != nil {
+		t.Fatalf("apply combined policy contributions: %v", err)
+	}
+	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
+	if err != nil {
+		t.Fatalf("create flow event reader: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	runUDPSendHelperInCgroup(t, cgroup, fmt.Sprintf("127.0.0.1:%d", retainedPort))
+	event := readFlowEvent(t, reader, retainedPort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonRule, 1, cgroupID)
+	assertEngineUDPDelivery(t, retainedListener, true)
+
+	runUDPSendHelperInCgroup(t, cgroup, fmt.Sprintf("127.0.0.1:%d", deletedPort))
+	event = readFlowEvent(t, reader, deletedPort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonRule, 1, cgroupID)
+	assertEngineUDPDelivery(t, deletedListener, true)
+
+	remaining := compileEngineTestPolicySet(t, []uint64{cgroupID}, []string{"Egress"},
+		[]uint16{retainedPort}, nil, nil, nil)
+	if err := engine.Apply(context.Background(), remaining); err != nil {
+		t.Fatalf("apply policy after deleting one contribution: %v", err)
+	}
+	if len(engine.links) != 1 {
+		t.Fatalf("remaining policy retained %d active cgroup links, want 1", len(engine.links))
+	}
+	if len(engine.orphanLinks) != 0 {
+		t.Fatalf("remaining policy left orphan links: %#v", engine.orphanLinks)
+	}
+
+	runUDPSendHelperInCgroup(t, cgroup, fmt.Sprintf("127.0.0.1:%d", retainedPort))
+	event = readFlowEvent(t, reader, retainedPort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonRule, 2, cgroupID)
+	assertEngineUDPDelivery(t, retainedListener, true)
+
+	runUDPSendHelperInCgroup(t, cgroup, fmt.Sprintf("127.0.0.1:%d", deletedPort))
+	event = readFlowEvent(t, reader, deletedPort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonDefaultDeny, 2, cgroupID)
+	assertEngineUDPDelivery(t, deletedListener, false)
+}
+
 func TestLinuxEngineIngressDirectionSpecificDeny(t *testing.T) {
 	requireLinuxEBPFRoot(t)
 
@@ -328,6 +450,121 @@ func TestLinuxEngineRejectsIPv6ForIsolatedSubject(t *testing.T) {
 		t.Fatalf("IPv6 event family = %d, want 6", event.Family)
 	}
 	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonIPv6, 1, cgroupID)
+}
+
+func TestLinuxEngineRejectsUnsupportedProtocolBeforeNodeAndSelfBypass(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+
+	cgroup := createTestCgroup(t)
+	cgroupID := mustCgroupID(t, cgroup)
+	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
+	set := compileEngineTestPolicySet(t, []uint64{cgroupID}, []string{"Egress"}, nil, nil,
+		[]netip.Addr{netip.MustParseAddr("127.0.0.1")}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
+	if err := engine.Apply(context.Background(), set); err != nil {
+		t.Fatalf("apply unsupported-protocol policy: %v", err)
+	}
+	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
+	if err != nil {
+		t.Fatalf("create flow event reader: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	runICMPSendHelperInCgroup(t, cgroup, "127.0.0.1")
+	event := readFlowEvent(t, reader, 0, flow.ProtocolICMP, flow.DirectionEgress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonUnsupported, 1, cgroupID)
+}
+
+func TestLinuxEngineRejectsUnsupportedProtocolOnIngress(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+
+	cgroup := createTestCgroup(t)
+	cgroupID := mustCgroupID(t, cgroup)
+	port := uint16(reserveUDPPort(t))
+	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
+	set := compileEngineTestPolicySet(t, []uint64{cgroupID}, []string{"Ingress"}, nil, nil,
+		[]netip.Addr{netip.MustParseAddr("127.0.0.1")}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
+	if err := engine.Apply(context.Background(), set); err != nil {
+		t.Fatalf("apply ingress unsupported-protocol policy: %v", err)
+	}
+	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
+	if err != nil {
+		t.Fatalf("create flow event reader: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	if runRawIPv4IngressHelperInCgroup(t, cgroup, port, "unsupported") {
+		t.Fatal("isolated ingress raw socket received unsupported traffic")
+	}
+	event := readFlowEvent(t, reader, 0, flow.ProtocolICMP, flow.DirectionIngress, 2*time.Second)
+	if event.Family != 4 {
+		t.Fatalf("unsupported ingress event family = %d, want 4", event.Family)
+	}
+	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonUnsupported, 1, cgroupID)
+}
+
+func TestLinuxEngineRejectsIPv4FragmentsForIsolatedSubject(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+
+	cgroup := createTestCgroup(t)
+	cgroupID := mustCgroupID(t, cgroup)
+	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
+	if err := engine.Apply(context.Background(), engineTestPolicySet(t, cgroupID, 80)); err != nil {
+		t.Fatalf("apply IPv4-only policy: %v", err)
+	}
+	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
+	if err != nil {
+		t.Fatalf("create flow event reader: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	runRawIPv4SendHelperInCgroup(t, cgroup, "fragment")
+	snapshot, err := engine.MetricsSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("read fragment decision counters: %v", err)
+	}
+	var fragmentDecisionFound bool
+	for _, decision := range snapshot.Decisions {
+		if decision.Action != "blocked" || decision.Direction != "egress" || decision.Reason != "fragment" {
+			continue
+		}
+		fragmentDecisionFound = true
+		t.Logf("fragment decision counter=%d; event drops=%+v", decision.Count, snapshot.EventDrops)
+		if decision.Count == 0 {
+			t.Fatal("fragment packet produced no blocked fragment decision")
+		}
+		break
+	}
+	if !fragmentDecisionFound {
+		t.Fatal("fragment decision counter label is unavailable")
+	}
+	event := readFlowEvent(t, reader, 0, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	if event.Family != 4 {
+		t.Fatalf("fragment event family = %d, want 4", event.Family)
+	}
+	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonFragment, 1, cgroupID)
+}
+
+func TestLinuxEngineRejectsMalformedIPv4ForIsolatedSubject(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+
+	cgroup := createTestCgroup(t)
+	cgroupID := mustCgroupID(t, cgroup)
+	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
+	if err := engine.Apply(context.Background(), engineTestPolicySet(t, cgroupID, 80)); err != nil {
+		t.Fatalf("apply IPv4-only policy: %v", err)
+	}
+	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
+	if err != nil {
+		t.Fatalf("create flow event reader: %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+
+	runRawIPv4SendHelperInCgroup(t, cgroup, "malformed")
+	event := readFlowEvent(t, reader, 0, 0, flow.DirectionEgress, 2*time.Second)
+	if event.Family != 0 || event.Protocol != 0 {
+		t.Fatalf("malformed event retained packet metadata: family=%d protocol=%d", event.Family, event.Protocol)
+	}
+	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonMalformed, 1, cgroupID)
 }
 
 func TestLinuxEngineFlowEventRateLimitPersistsAcrossPolicyEpochs(t *testing.T) {
@@ -606,7 +843,7 @@ func TestLinuxEngineConcurrentTrafficSeesCompletePolicyEpoch(t *testing.T) {
 	loopHelper := startUDPLoopHelper(t, cgroup, []string{
 		fmt.Sprintf("127.0.0.1:%d", portA),
 		fmt.Sprintf("127.0.0.1:%d", portB),
-	})
+	}, 0)
 
 	// Keep packets flowing while alternating two complete rule sets. Each event
 	// carries the epoch selected by the same map-of-maps lookup as the slot, so
@@ -710,17 +947,21 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 
 	parent := createTestCgroup(t)
 	activeCgroup := createSubCgroup(t, parent, "active")
-	candidateCgroup := createSubCgroup(t, parent, "candidate")
 	activeID := mustCgroupID(t, activeCgroup)
-	candidateID := mustCgroupID(t, candidateCgroup)
 	activeListener := listenEngineTestUDP(t)
 	candidateListener := listenEngineTestUDP(t)
 	activePort := uint16(activeListener.LocalAddr().(*net.UDPAddr).Port)
 	candidatePort := uint16(candidateListener.LocalAddr().(*net.UDPAddr).Port)
-	engine := newLinuxEngineForTest(t, map[uint64]string{activeID: activeCgroup, candidateID: candidateCgroup})
+	cgroupPaths := map[uint64]string{activeID: activeCgroup}
+	engine := newLinuxEngineForTest(t, cgroupPaths)
 	if err := engine.Apply(context.Background(), engineTestPolicySet(t, activeID, activePort)); err != nil {
 		t.Fatalf("apply active policy: %v", err)
 	}
+	// This cgroup becomes runnable after the active policy is installed. It has
+	// no link until a subsequent candidate successfully includes it.
+	candidateCgroup := createSubCgroup(t, parent, "candidate")
+	candidateID := mustCgroupID(t, candidateCgroup)
+	cgroupPaths[candidateID] = candidateCgroup
 	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
 	if err != nil {
 		t.Fatalf("create flow event reader: %v", err)
@@ -728,6 +969,7 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 	t.Cleanup(func() { _ = reader.Close() })
 
 	injectedErr := errors.New("injected candidate link failure")
+	workingLinker := engine.engineCore.linker
 	engine.engineCore.linker = failingEngineSubjectLinker{cgroupID: candidateID, err: injectedErr}
 	candidate := compileEngineTestPolicySet(t, []uint64{activeID, candidateID}, []string{"Egress"}, []uint16{candidatePort}, nil, nil, nil)
 	if err := engine.Apply(context.Background(), candidate); !errors.Is(err, injectedErr) {
@@ -740,6 +982,9 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 		t.Fatalf("failed candidate slot was not cleared: %+v", engine.store.slotCounts[0])
 	}
 	assertEngineSlotEmpty(t, engine, 0)
+	if _, linked := engine.links[candidateID]; linked {
+		t.Fatal("failed candidate unexpectedly classified the new cgroup")
+	}
 
 	runUDPSendHelperInCgroup(t, activeCgroup, fmt.Sprintf("127.0.0.1:%d", activePort))
 	event := readFlowEvent(t, reader, activePort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
@@ -750,6 +995,26 @@ func TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy(t *testing.T
 	event = readFlowEvent(t, reader, candidatePort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
 	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonDefaultDeny, 1, activeID)
 	assertEngineUDPDelivery(t, candidateListener, false)
+
+	// An unobserved replacement cgroup is fail-open during the failed update.
+	// Measure from its first allowed packet to the first blocked packet after a
+	// controlled retry. This is not a watcher or Kubernetes restart latency.
+	gapStart := time.Now()
+	runUDPSendHelperInCgroup(t, candidateCgroup, fmt.Sprintf("127.0.0.1:%d", activePort))
+	assertEngineUDPDelivery(t, activeListener, true)
+	engine.engineCore.linker = workingLinker
+	if err := engine.Apply(context.Background(), candidate); err != nil {
+		t.Fatalf("retry candidate policy after link failure: %v", err)
+	}
+	if _, linked := engine.links[candidateID]; !linked {
+		t.Fatal("successful retry did not classify the new cgroup")
+	}
+	runUDPSendHelperInCgroup(t, candidateCgroup, fmt.Sprintf("127.0.0.1:%d", activePort))
+	event = readFlowEvent(t, reader, activePort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	gap := time.Since(gapStart)
+	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonDefaultDeny, 2, candidateID)
+	assertEngineUDPDelivery(t, activeListener, false)
+	t.Logf("unobserved_replacement_probe_to_retry_ms=%.3f; scope=real cgroup and UDP packets, injected candidate-link failure followed by controlled retry", float64(gap)/float64(time.Millisecond))
 }
 
 func TestLinuxEngineKernelMapWriteFailurePreservesActivePackets(t *testing.T) {
@@ -972,6 +1237,14 @@ func TestCgroupUDPLoopHelper(t *testing.T) {
 	if len(addresses) < 2 || addresses[0] == "" || addresses[1] == "" {
 		t.Fatal("at least two UDP destinations are required")
 	}
+	packetsPerSecond := 0
+	if value := os.Getenv("ZTAP_CGROUP_LOOP_PACKETS_PER_SECOND"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			t.Fatalf("invalid UDP loop packets-per-second value %q", value)
+		}
+		packetsPerSecond = parsed
+	}
 	start := os.NewFile(uintptr(3), "start")
 	if start == nil {
 		t.Fatal("helper start pipe is missing")
@@ -994,6 +1267,25 @@ func TestCgroupUDPLoopHelper(t *testing.T) {
 			_ = connection.Close()
 		}
 	}()
+	if packetsPerSecond > 0 {
+		interval := time.Second / time.Duration(packetsPerSecond)
+		if interval <= 0 {
+			t.Fatalf("UDP loop interval is not positive for %d packets/second", packetsPerSecond)
+		}
+		// Ticker drops ticks when this process is descheduled. Pace against
+		// absolute deadlines so short scheduling delays do not silently
+		// reduce the number of decisions in the measured interval.
+		next := time.Now()
+		connectionIndex := 0
+		for {
+			next = next.Add(interval)
+			if wait := time.Until(next); wait > 0 {
+				time.Sleep(wait)
+			}
+			_, _ = connections[connectionIndex].Write([]byte("flip"))
+			connectionIndex = (connectionIndex + 1) % len(connections)
+		}
+	}
 	for {
 		for _, connection := range connections {
 			_, _ = connection.Write([]byte("flip"))
@@ -1027,7 +1319,7 @@ func newLinuxEngineForTest(t *testing.T, cgroupPaths map[uint64]string) *LinuxEn
 	return engine
 }
 
-func startUDPLoopHelper(t *testing.T, cgroup string, addresses []string) *exec.Cmd {
+func startUDPLoopHelper(t *testing.T, cgroup string, addresses []string, packetsPerSecond int) *exec.Cmd {
 	t.Helper()
 	startReader, startWriter, err := os.Pipe()
 	if err != nil {
@@ -1035,6 +1327,9 @@ func startUDPLoopHelper(t *testing.T, cgroup string, addresses []string) *exec.C
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "^TestCgroupUDPLoopHelper$")
 	cmd.Env = append(os.Environ(), "ZTAP_CGROUP_LOOP_HELPER=1", "ZTAP_UDP_ADDRS="+strings.Join(addresses, ","))
+	if packetsPerSecond > 0 {
+		cmd.Env = append(cmd.Env, "ZTAP_CGROUP_LOOP_PACKETS_PER_SECOND="+strconv.Itoa(packetsPerSecond))
+	}
 	cmd.ExtraFiles = []*os.File{startReader}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -1247,6 +1542,23 @@ func assertEngineEpochEventDropCountAtLeast(t *testing.T, countsMap *ebpf.Map, e
 
 func assertEngineSlotEmpty(t *testing.T, engine *LinuxEngine, slot uint32) {
 	t.Helper()
+	assertEnginePolicySlotEmpty(t, engine, slot)
+
+	var nodeKey nodeBypassKey
+	var nodeValue uint8
+	iter := engine.store.maps["node_bypass"].Iterate()
+	for iter.Next(&nodeKey, &nodeValue) {
+		if nodeKey.Slot == slot {
+			t.Fatalf("node_bypass retained slot %d entry: %+v", slot, nodeKey)
+		}
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("iterate node_bypass: %v", err)
+	}
+}
+
+func assertEnginePolicySlotEmpty(t *testing.T, engine *LinuxEngine, slot uint32) {
+	t.Helper()
 	var subjectKey subjectStateKey
 	var subjectValue subjectStateValue
 	iter := engine.store.maps["subject_state"].Iterate()
@@ -1257,18 +1569,6 @@ func assertEngineSlotEmpty(t *testing.T, engine *LinuxEngine, slot uint32) {
 	}
 	if err := iter.Err(); err != nil {
 		t.Fatalf("iterate subject_state: %v", err)
-	}
-
-	var nodeKey nodeBypassKey
-	var nodeValue uint8
-	iter = engine.store.maps["node_bypass"].Iterate()
-	for iter.Next(&nodeKey, &nodeValue) {
-		if nodeKey.Slot == slot {
-			t.Fatalf("node_bypass retained slot %d entry: %+v", slot, nodeKey)
-		}
-	}
-	if err := iter.Err(); err != nil {
-		t.Fatalf("iterate node_bypass: %v", err)
 	}
 
 	var selfKey selfBypassKey
@@ -1488,16 +1788,41 @@ func readEngineReplyResult(t *testing.T, reader *os.File) byte {
 
 func moveProcessToCgroup(t *testing.T, cmd *exec.Cmd, cgroup string) {
 	t.Helper()
-	procs := filepath.Join(cgroup, "cgroup.procs")
-	file, err := os.OpenFile(procs, os.O_WRONLY, 0)
+	expectedID, err := cgroupInodeID(cgroup)
 	if err != nil {
 		_ = cmd.Process.Kill()
-		t.Fatalf("open %s: %v", procs, err)
+		t.Fatalf("inspect cgroup %s: %v", cgroup, err)
+	}
+	directory, resolved, err := openValidatedCgroup("/sys/fs/cgroup", cgroup, expectedID)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("open validated cgroup %s: %v", cgroup, err)
+	}
+	fd, err := unix.Openat(int(directory.Fd()), "cgroup.procs", unix.O_WRONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	closeErr := directory.Close()
+	if err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("open %s/cgroup.procs without following symlinks: %v", resolved, err)
+	}
+	if closeErr != nil {
+		_ = cmd.Process.Kill()
+		_ = unix.Close(fd)
+		t.Fatalf("close validated cgroup %s: %v", resolved, closeErr)
+	}
+	file := os.NewFile(uintptr(fd), filepath.Join(resolved, "cgroup.procs"))
+	if file == nil {
+		_ = cmd.Process.Kill()
+		_ = unix.Close(fd)
+		t.Fatalf("open %s/cgroup.procs returned no file handle", resolved)
 	}
 	_, writeErr := fmt.Fprintf(file, "%d\n", cmd.Process.Pid)
-	_ = file.Close()
+	closeErr = file.Close()
 	if writeErr != nil {
 		_ = cmd.Process.Kill()
 		t.Fatalf("move helper into cgroup: %v", writeErr)
+	}
+	if closeErr != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("close %s/cgroup.procs: %v", resolved, closeErr)
 	}
 }

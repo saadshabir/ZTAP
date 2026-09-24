@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -102,6 +104,8 @@ type linuxEngineStore struct {
 	logger           *slog.Logger
 	flowEventsPin    string
 	agentStatusPin   string
+	pinDirectory     *os.File
+	pinDirectoryPath string
 	ownedPins        []string
 	slotCounts       [2]slotMapCounts
 	statusMu         sync.Mutex
@@ -120,8 +124,8 @@ type slotMapCounts struct {
 
 type subjectLinkPair struct {
 	mu      sync.Mutex
-	egress  link.Link
-	ingress link.Link
+	egress  io.Closer
+	ingress io.Closer
 }
 
 type linuxSubjectLinker struct {
@@ -142,27 +146,85 @@ type bpfAgentStatus struct {
 // RemoveStalePins removes only the two stable maps owned by the agent. It
 // never walks the directory or deletes unrelated bpffs entries. The caller
 // must hold the node-level agent lock before calling this at startup.
-func RemoveStalePins(bpffsRoot string) error {
+func RemoveStalePins(bpffsRoot string) (resultErr error) {
 	root, err := absoluteDirectoryPath(bpffsRoot, "/sys/fs/bpf")
 	if err != nil {
 		return err
 	}
 	pinDirectory := filepath.Join(root, "ztap")
-	info, err := os.Lstat(pinDirectory)
-	if errors.Is(err, os.ErrNotExist) {
+	rootFD, err := openEngineDirectoryNoFollow(root, "ZTAP bpffs root")
+	if err != nil {
+		return fmt.Errorf("open ZTAP bpffs root: %w", err)
+	}
+	defer func() {
+		if err := unix.Close(rootFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close ZTAP bpffs root: %w", err))
+		}
+	}()
+
+	pinDirectoryFD, err := unix.Openat(rootFD, "ztap", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect ZTAP bpffs directory: %w", err)
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("ZTAP bpffs path %q is not a real directory", pinDirectory)
-	}
-	for _, name := range []string{engineFlowEventsPinName, engineAgentStatusPinName} {
-		path := filepath.Join(pinDirectory, name)
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale ZTAP pin %q: %w", path, err)
+		if errors.Is(err, unix.ELOOP) ||
+			(errors.Is(err, unix.ENOTDIR) && engineEntryIsSymlinkAt(rootFD, "ztap")) {
+			return fmt.Errorf("ZTAP bpffs path %q is a symlink", pinDirectory)
 		}
+		if errors.Is(err, unix.ENOTDIR) {
+			return fmt.Errorf("ZTAP bpffs path %q is not a directory", pinDirectory)
+		}
+		return fmt.Errorf("open ZTAP bpffs directory: %w", err)
+	}
+	defer func() {
+		if err := unix.Close(pinDirectoryFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close ZTAP bpffs directory: %w", err))
+		}
+	}()
+
+	for _, name := range []string{engineFlowEventsPinName, engineAgentStatusPinName} {
+		if err := removeOwnedEnginePinAt(pinDirectoryFD, name); err != nil {
+			return fmt.Errorf("remove stale ZTAP pin %q: %w", filepath.Join(pinDirectory, name), err)
+		}
+	}
+	return nil
+}
+
+// removeOwnedEnginePin removes one stable path without treating a real
+// directory at that name as an owned eBPF pin. The parent directory is
+// traversed without following any component, and the entry is inspected and
+// unlinked relative to that descriptor.
+func removeOwnedEnginePin(path string) (resultErr error) {
+	parent := filepath.Dir(path)
+	name := filepath.Base(path)
+	directoryFD, err := openEngineDirectoryNoFollow(parent, "pin directory")
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return fmt.Errorf("open pin directory: %w", err)
+	}
+	defer func() {
+		if err := unix.Close(directoryFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close pin directory: %w", err))
+		}
+	}()
+	return removeOwnedEnginePinAt(directoryFD, name)
+}
+
+func removeOwnedEnginePinAt(directoryFD int, name string) error {
+	var info unix.Stat_t
+	if err := unix.Fstatat(directoryFD, name, &info, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode&unix.S_IFMT == unix.S_IFDIR {
+		return errors.New("path is a directory")
+	}
+	if err := unix.Unlinkat(directoryFD, name, 0); err != nil {
+		return err
 	}
 	return nil
 }
@@ -214,11 +276,6 @@ func NewLinuxEngine(ctx context.Context, options LinuxEngineOptions) (*LinuxEngi
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove eBPF memlock limit: %w", err)
 	}
-	pinDirectory := filepath.Join(bpffsRoot, "ztap")
-	if err := os.MkdirAll(pinDirectory, 0o750); err != nil {
-		return nil, fmt.Errorf("create ZTAP bpffs directory: %w", err)
-	}
-
 	spec, err := loadEngine()
 	if err != nil {
 		return nil, fmt.Errorf("load embedded engine collection spec: %w", err)
@@ -230,13 +287,21 @@ func NewLinuxEngine(ctx context.Context, options LinuxEngineOptions) (*LinuxEngi
 	if err != nil {
 		return nil, fmt.Errorf("load instance-owned eBPF collection: %w", err)
 	}
+	pinDirectoryPath := filepath.Join(bpffsRoot, "ztap")
+	pinDirectory, err := openOrCreateEnginePinDirectory(bpffsRoot)
+	if err != nil {
+		collection.Close()
+		return nil, fmt.Errorf("create ZTAP bpffs directory: %w", err)
+	}
 	store := &linuxEngineStore{
 		collection:       collection,
 		maps:             collection.Maps,
 		activeConfigSpec: spec.Maps["active_config"].InnerMap.Copy(),
 		logger:           logger,
-		flowEventsPin:    filepath.Join(pinDirectory, engineFlowEventsPinName),
-		agentStatusPin:   filepath.Join(pinDirectory, engineAgentStatusPinName),
+		flowEventsPin:    filepath.Join(pinDirectoryPath, engineFlowEventsPinName),
+		agentStatusPin:   filepath.Join(pinDirectoryPath, engineAgentStatusPinName),
+		pinDirectory:     pinDirectory,
+		pinDirectoryPath: pinDirectoryPath,
 		statusState:      engineStateStarting,
 		agentEpoch:       options.AgentEpoch,
 	}
@@ -259,6 +324,61 @@ func NewLinuxEngine(ctx context.Context, options LinuxEngineOptions) (*LinuxEngi
 		cgroupStorage: collection.Maps["attached_cgroup"],
 	}
 	return &LinuxEngine{engineCore: newEngineCore(store, linker, logger), store: store}, nil
+}
+
+func ensureEnginePinDirectory(root string) error {
+	pinDirectory, err := openOrCreateEnginePinDirectory(root)
+	if err != nil {
+		return err
+	}
+	return pinDirectory.Close()
+}
+
+func openOrCreateEnginePinDirectory(root string) (result *os.File, resultErr error) {
+	rootFD, err := openEngineDirectoryNoFollow(root, "ZTAP bpffs root")
+	if err != nil {
+		return nil, fmt.Errorf("open bpffs root %q: %w", root, err)
+	}
+	defer func() {
+		if err := unix.Close(rootFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close ZTAP bpffs root: %w", err))
+			if result != nil {
+				if closeErr := result.Close(); closeErr != nil {
+					resultErr = errors.Join(resultErr, fmt.Errorf("close ZTAP bpffs directory: %w", closeErr))
+				}
+				result = nil
+			}
+		}
+	}()
+
+	openDirectory := func() (int, error) {
+		return unix.Openat(rootFD, "ztap", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	}
+	pinFD, err := openDirectory()
+	if errors.Is(err, unix.ENOENT) {
+		if mkdirErr := unix.Mkdirat(rootFD, "ztap", 0o750); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
+			return nil, fmt.Errorf("create ztap directory: %w", mkdirErr)
+		}
+		pinFD, err = openDirectory()
+	}
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) ||
+			(errors.Is(err, unix.ENOTDIR) && engineEntryIsSymlinkAt(rootFD, "ztap")) {
+			return nil, errors.New("ztap pin directory is a symlink")
+		}
+		if errors.Is(err, unix.ENOTDIR) {
+			return nil, errors.New("ztap pin path is not a directory")
+		}
+		return nil, fmt.Errorf("open ztap directory: %w", err)
+	}
+	pinDirectory := os.NewFile(uintptr(pinFD), filepath.Join(root, "ztap"))
+	if pinDirectory == nil {
+		if closeErr := unix.Close(pinFD); closeErr != nil {
+			return nil, errors.Join(errors.New("create ZTAP bpffs directory handle"), fmt.Errorf("close ZTAP bpffs directory: %w", closeErr))
+		}
+		return nil, errors.New("create ZTAP bpffs directory handle")
+	}
+	return pinDirectory, nil
 }
 
 func (e *LinuxEngine) FlowEventsMap() *ebpf.Map {
@@ -371,11 +491,7 @@ func lookupPerCPUCounter(m *ebpf.Map, key uint32) (uint64, error) {
 	if err := m.Lookup(&key, &values); err != nil {
 		return 0, err
 	}
-	var total uint64
-	for _, value := range values {
-		total += value
-	}
-	return total, nil
+	return sumCounterValues(values)
 }
 
 func validateEngineCollectionSpec(spec *ebpf.CollectionSpec) error {
@@ -464,24 +580,41 @@ func (s *linuxEngineStore) initializeActiveConfig() error {
 }
 
 func (s *linuxEngineStore) pinStableMaps() error {
+	if s.pinDirectory == nil {
+		return errors.New("ZTAP bpffs directory handle is missing")
+	}
 	pins := []struct {
-		name string
-		path string
+		name        string
+		displayPath string
 	}{
-		{name: "flow_events", path: s.flowEventsPin},
-		{name: "agent_status", path: s.agentStatusPin},
+		{name: engineFlowEventsPinName, displayPath: s.flowEventsPin},
+		{name: engineAgentStatusPinName, displayPath: s.agentStatusPin},
 	}
 	for _, pin := range pins {
 		m := s.maps[pin.name]
 		if m == nil {
 			return fmt.Errorf("map %q is missing", pin.name)
 		}
-		if err := m.Pin(pin.path); err != nil {
-			return fmt.Errorf("pin map %q at %q: %w", pin.name, pin.path, err)
+		pinPath, err := enginePinPathAt(s.pinDirectory, pin.name)
+		if err != nil {
+			return err
 		}
-		s.ownedPins = append(s.ownedPins, pin.path)
+		if err := m.Pin(pinPath); err != nil {
+			return fmt.Errorf("pin map %q at %q: %w", pin.name, pin.displayPath, err)
+		}
+		s.ownedPins = append(s.ownedPins, pin.name)
 	}
 	return nil
+}
+
+func enginePinPathAt(directory *os.File, name string) (string, error) {
+	if directory == nil {
+		return "", errors.New("ZTAP bpffs directory handle is missing")
+	}
+	if filepath.Base(name) != name || name == "." || name == ".." {
+		return "", fmt.Errorf("invalid engine pin name %q", name)
+	}
+	return filepath.Join("/proc/self/fd", strconv.FormatUint(uint64(directory.Fd()), 10), name), nil
 }
 
 func (s *linuxEngineStore) PopulateSlot(ctx context.Context, slot uint32, set policy.PolicySet) error {
@@ -826,12 +959,26 @@ func (s *linuxEngineStore) Close() error {
 	}
 	remainingPins := make([]string, 0, len(s.ownedPins))
 	for i := len(s.ownedPins) - 1; i >= 0; i-- {
-		if err := os.Remove(s.ownedPins[i]); err != nil && !errors.Is(err, os.ErrNotExist) {
-			closeErrors = append(closeErrors, fmt.Errorf("remove engine pin %q: %w", s.ownedPins[i], err))
-			remainingPins = append(remainingPins, s.ownedPins[i])
+		name := s.ownedPins[i]
+		displayPath := filepath.Join(s.pinDirectoryPath, name)
+		if s.pinDirectory == nil {
+			closeErrors = append(closeErrors, fmt.Errorf("remove engine pin %q: ZTAP bpffs directory handle is missing", displayPath))
+			remainingPins = append(remainingPins, name)
+			continue
+		}
+		if err := removeOwnedEnginePinAt(int(s.pinDirectory.Fd()), name); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("remove engine pin %q: %w", displayPath, err))
+			remainingPins = append(remainingPins, name)
 		}
 	}
 	s.ownedPins = remainingPins
+	if len(s.ownedPins) == 0 && s.pinDirectory != nil {
+		pinDirectory := s.pinDirectory
+		s.pinDirectory = nil
+		if err := pinDirectory.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close ZTAP bpffs directory: %w", err))
+		}
+	}
 	if s.activeConfigMap != nil {
 		if err := s.activeConfigMap.Close(); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close active-config map: %w", err))
@@ -857,45 +1004,40 @@ func (l *linuxSubjectLinker) Attach(ctx context.Context, cgroupID uint64) (io.Cl
 	if err != nil {
 		return nil, fmt.Errorf("resolve cgroup %d path: %w", cgroupID, err)
 	}
-	path, err = validateCgroupTarget(l.cgroupRoot, path, cgroupID)
+	cgroup, _, err := openValidatedCgroup(l.cgroupRoot, path, cgroupID)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		_ = cgroup.Close()
+	}()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := rejectIncompatibleCgroupProgram(path, ebpf.AttachCGroupInetEgress, l.egress); err != nil {
+	if err := rejectIncompatibleCgroupProgram(cgroup, ebpf.AttachCGroupInetEgress, l.egress); err != nil {
 		return nil, fmt.Errorf("inspect egress attachments for cgroup %d: %w", cgroupID, err)
 	}
-	egress, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    path,
-		Attach:  ebpf.AttachCGroupInetEgress,
-		Program: l.egress,
-	})
+	egress, err := attachCgroupProgram(cgroup, ebpf.AttachCGroupInetEgress, l.egress)
 	if err != nil {
 		return nil, fmt.Errorf("attach egress program to cgroup %d: %w", cgroupID, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return &subjectLinkPair{egress: egress}, err
 	}
-	if err := rejectIncompatibleCgroupProgram(path, ebpf.AttachCGroupInetEgress, l.egress); err != nil {
+	if err := rejectIncompatibleCgroupProgram(cgroup, ebpf.AttachCGroupInetEgress, l.egress); err != nil {
 		return &subjectLinkPair{egress: egress}, fmt.Errorf("validate egress attachments for cgroup %d: %w", cgroupID, err)
 	}
-	if err := rejectIncompatibleCgroupProgram(path, ebpf.AttachCGroupInetIngress, l.ingress); err != nil {
+	if err := rejectIncompatibleCgroupProgram(cgroup, ebpf.AttachCGroupInetIngress, l.ingress); err != nil {
 		return &subjectLinkPair{egress: egress}, fmt.Errorf("inspect ingress attachments for cgroup %d: %w", cgroupID, err)
 	}
-	ingress, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    path,
-		Attach:  ebpf.AttachCGroupInetIngress,
-		Program: l.ingress,
-	})
+	ingress, err := attachCgroupProgram(cgroup, ebpf.AttachCGroupInetIngress, l.ingress)
 	if err != nil {
 		return &subjectLinkPair{egress: egress}, fmt.Errorf("attach ingress program to cgroup %d: %w", cgroupID, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return &subjectLinkPair{egress: egress, ingress: ingress}, err
 	}
-	if err := rejectIncompatibleCgroupProgram(path, ebpf.AttachCGroupInetIngress, l.ingress); err != nil {
+	if err := rejectIncompatibleCgroupProgram(cgroup, ebpf.AttachCGroupInetIngress, l.ingress); err != nil {
 		return &subjectLinkPair{egress: egress, ingress: ingress}, fmt.Errorf("validate ingress attachments for cgroup %d: %w", cgroupID, err)
 	}
 	pair := &subjectLinkPair{
@@ -925,6 +1067,120 @@ func (l *linuxSubjectLinker) Attach(ctx context.Context, cgroupID uint64) (io.Cl
 	return pair, nil
 }
 
+const (
+	cgroupAttachAllowOverride = 1 << iota
+	cgroupAttachAllowMulti
+)
+
+// legacyCgroupAttachment retains the cgroup and cloned program handles needed
+// by the legacy BPF_PROG_ATTACH fallback. bpf_link attachments are returned as
+// the package's raw link and do not need to retain the target descriptor.
+type legacyCgroupAttachment struct {
+	cgroup  *os.File
+	program *ebpf.Program
+	attach  ebpf.AttachType
+}
+
+func (a *legacyCgroupAttachment) Close() error {
+	if a == nil {
+		return nil
+	}
+	var closeErrors []error
+	if a.program != nil {
+		if a.cgroup == nil {
+			return errors.New("cgroup handle is missing while program is attached")
+		}
+		if err := link.RawDetachProgram(link.RawDetachProgramOptions{
+			Target:  int(a.cgroup.Fd()),
+			Program: a.program,
+			Attach:  a.attach,
+		}); err != nil {
+			// Retain both handles so an engine retry can attempt the detach again.
+			return fmt.Errorf("detach cgroup program: %w", err)
+		}
+		if err := a.program.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close cgroup program: %w", err))
+		}
+		a.program = nil
+	}
+	if a.cgroup != nil {
+		if err := a.cgroup.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close cgroup handle: %w", err))
+		}
+		a.cgroup = nil
+	}
+	return errors.Join(closeErrors...)
+}
+
+func attachCgroupProgram(cgroup *os.File, attach ebpf.AttachType, program *ebpf.Program) (io.Closer, error) {
+	if cgroup == nil {
+		return nil, errors.New("cgroup handle is nil")
+	}
+	if program == nil {
+		return nil, errors.New("cgroup program is nil")
+	}
+	raw, err := link.AttachRawLink(link.RawLinkOptions{
+		Target:  int(cgroup.Fd()),
+		Program: program,
+		Attach:  attach,
+	})
+	if err == nil {
+		return raw, nil
+	}
+	if !errors.Is(err, link.ErrNotSupported) {
+		return nil, err
+	}
+
+	clone, err := program.Clone()
+	if err != nil {
+		return nil, err
+	}
+	lastErr := tryLegacyCgroupAttach(func(flags uint32) error {
+		return link.RawAttachProgram(link.RawAttachProgramOptions{
+			Target:  int(cgroup.Fd()),
+			Program: clone,
+			Attach:  attach,
+			Flags:   flags,
+		})
+	})
+	if lastErr != nil {
+		_ = clone.Close()
+		return nil, lastErr
+	}
+	dupFD, dupErr := unix.Dup(int(cgroup.Fd()))
+	if dupErr != nil {
+		_ = link.RawDetachProgram(link.RawDetachProgramOptions{
+			Target:  int(cgroup.Fd()),
+			Program: clone,
+			Attach:  attach,
+		})
+		_ = clone.Close()
+		return nil, fmt.Errorf("duplicate cgroup handle: %w", dupErr)
+	}
+	return &legacyCgroupAttachment{
+		cgroup:  os.NewFile(uintptr(dupFD), "ztap cgroup attachment"),
+		program: clone,
+		attach:  attach,
+	}, nil
+}
+
+func tryLegacyCgroupAttach(attach func(uint32) error) error {
+	if attach == nil {
+		return errors.New("legacy cgroup attach function is nil")
+	}
+	if err := attach(cgroupAttachAllowMulti); err != nil {
+		if !cgroupMultiAttachUnsupported(err) {
+			return err
+		}
+		return attach(cgroupAttachAllowOverride)
+	}
+	return nil
+}
+
+func cgroupMultiAttachUnsupported(err error) bool {
+	return errors.Is(err, link.ErrNotSupported) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP)
+}
+
 // rejectIncompatibleCgroupProgram verifies that the target has no direct
 // cgroup-skb attachment other than the program this engine is about to use.
 // AttachCgroup intentionally supports multi-attach, but accepting an
@@ -932,9 +1188,12 @@ func (l *linuxSubjectLinker) Attach(ctx context.Context, cgroupID uint64) (io.Cl
 // ownership dependent on another controller. Querying before and after the
 // attach also closes the small race where a second controller attaches while
 // this engine is creating its link; the caller then closes only its own link.
-func rejectIncompatibleCgroupProgram(path string, attach ebpf.AttachType, expected *ebpf.Program) (err error) {
+func rejectIncompatibleCgroupProgram(cgroup *os.File, attach ebpf.AttachType, expected *ebpf.Program) error {
 	if expected == nil {
 		return errors.New("expected cgroup program is missing")
+	}
+	if cgroup == nil {
+		return errors.New("cgroup handle is nil")
 	}
 	info, err := expected.Info()
 	if err != nil {
@@ -944,15 +1203,6 @@ func rejectIncompatibleCgroupProgram(path string, attach ebpf.AttachType, expect
 	if !ok {
 		return errors.New("expected cgroup program has no kernel ID")
 	}
-	cgroup, err := os.Open(path) // #nosec G304 -- path is the validated cgroup path selected by the resolver.
-	if err != nil {
-		return fmt.Errorf("open cgroup: %w", err)
-	}
-	defer func() {
-		if closeErr := cgroup.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close cgroup: %w", closeErr)
-		}
-	}()
 	result, err := link.QueryPrograms(link.QueryOptions{
 		Target: int(cgroup.Fd()),
 		Attach: attach,
@@ -992,36 +1242,88 @@ func (p *subjectLinkPair) Close() error {
 }
 
 func validateCgroupTarget(root, target string, expectedID uint64) (string, error) {
+	cgroup, resolved, err := openValidatedCgroup(root, target, expectedID)
+	if err != nil {
+		return "", err
+	}
+	if err := cgroup.Close(); err != nil {
+		return "", fmt.Errorf("close validated cgroup %q: %w", resolved, err)
+	}
+	return resolved, nil
+}
+
+func openValidatedCgroup(root, target string, expectedID uint64) (*os.File, string, error) {
 	if !filepath.IsAbs(target) {
-		return "", fmt.Errorf("cgroup path %q is not absolute", target)
+		return nil, "", fmt.Errorf("cgroup path %q is not absolute", target)
 	}
 	resolved, err := filepath.EvalSymlinks(target)
 	if err != nil {
-		return "", fmt.Errorf("resolve cgroup path %q: %w", target, err)
+		return nil, "", fmt.Errorf("resolve cgroup path %q: %w", target, err)
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return "", fmt.Errorf("resolve cgroup root %q: %w", root, err)
+		return nil, "", fmt.Errorf("resolve cgroup root %q: %w", root, err)
 	}
 	relative, err := filepath.Rel(resolvedRoot, resolved)
 	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) ||
 		(len(relative) >= 3 && relative[:3] == ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("cgroup path %q is outside mounted root %q", resolved, resolvedRoot)
+		return nil, "", fmt.Errorf("cgroup path %q is outside mounted root %q", resolved, resolvedRoot)
 	}
-	cgroupID, err := cgroupInodeID(resolved)
+	rootFD, err := openEngineDirectoryNoFollow(resolvedRoot, "cgroup root")
 	if err != nil {
-		return "", fmt.Errorf("read cgroup ID for %q: %w", resolved, err)
+		return nil, "", fmt.Errorf("open cgroup root %q: %w", resolvedRoot, err)
 	}
+	currentFD := rootFD
+	closeCurrent := true
+	defer func() {
+		if closeCurrent {
+			_ = unix.Close(currentFD)
+		}
+	}()
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" || component == "." || component == ".." {
+			return nil, "", fmt.Errorf("cgroup path %q contains invalid component %q", resolved, component)
+		}
+		nextFD, openErr := unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if openErr != nil {
+			if errors.Is(openErr, unix.ELOOP) ||
+				(errors.Is(openErr, unix.ENOTDIR) && engineEntryIsSymlinkAt(currentFD, component)) {
+				return nil, "", fmt.Errorf("cgroup path %q contains symlink component %q", resolved, component)
+			}
+			if errors.Is(openErr, unix.ENOTDIR) {
+				return nil, "", fmt.Errorf("cgroup path %q component %q is not a directory", resolved, component)
+			}
+			return nil, "", fmt.Errorf("open cgroup path %q component %q: %w", resolved, component, openErr)
+		}
+		_ = unix.Close(currentFD)
+		currentFD = nextFD
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(currentFD, &stat); err != nil {
+		return nil, "", fmt.Errorf("stat validated cgroup %q: %w", resolved, err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return nil, "", fmt.Errorf("cgroup path %q is not a directory", resolved)
+	}
+	cgroupID := uint64(stat.Ino)
 	if cgroupID != expectedID {
-		return "", fmt.Errorf("cgroup path %q has ID %d, want %d", resolved, cgroupID, expectedID)
+		return nil, "", fmt.Errorf("cgroup path %q has ID %d, want %d", resolved, cgroupID, expectedID)
 	}
-	return resolved, nil
+	cgroup := os.NewFile(uintptr(currentFD), "ztap validated cgroup")
+	if cgroup == nil {
+		return nil, "", errors.New("create validated cgroup handle")
+	}
+	closeCurrent = false
+	return cgroup, resolved, nil
 }
 
 func cgroupInodeID(cgroupPath string) (uint64, error) {
 	info, err := os.Stat(cgroupPath)
 	if err != nil {
 		return 0, err
+	}
+	if !info.IsDir() {
+		return 0, fmt.Errorf("cgroup path %q is not a directory", cgroupPath)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -1050,6 +1352,55 @@ func absoluteDirectoryPath(path, fallback string) (string, error) {
 		return "", fmt.Errorf("path %q is not a directory", resolved)
 	}
 	return resolved, nil
+}
+
+// openEngineDirectoryNoFollow walks an already-canonical absolute directory
+// path through descriptor-relative handles. Keeping each parent descriptor
+// makes later component replacement unable to redirect the caller through a
+// symlink between validation and the final open.
+func openEngineDirectoryNoFollow(path, owner string) (int, error) {
+	if !filepath.IsAbs(path) {
+		return -1, fmt.Errorf("%s path %q is not absolute", owner, path)
+	}
+	clean := filepath.Clean(path)
+	rootFD, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open root for %s %q: %w", owner, clean, err)
+	}
+	currentFD := rootFD
+	for _, component := range strings.Split(strings.TrimPrefix(clean, string(filepath.Separator)), string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			_ = unix.Close(currentFD)
+			return -1, fmt.Errorf("%s path %q contains parent component", owner, clean)
+		}
+		nextFD, openErr := unix.Openat(currentFD, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if openErr != nil {
+			if errors.Is(openErr, unix.ELOOP) ||
+				(errors.Is(openErr, unix.ENOTDIR) && engineEntryIsSymlinkAt(currentFD, component)) {
+				_ = unix.Close(currentFD)
+				return -1, fmt.Errorf("%s path %q contains symlink component %q", owner, clean, component)
+			}
+			_ = unix.Close(currentFD)
+			if errors.Is(openErr, unix.ENOTDIR) {
+				return -1, fmt.Errorf("%s path %q component %q is not a directory", owner, clean, component)
+			}
+			return -1, fmt.Errorf("open %s path %q component %q: %w", owner, clean, component, openErr)
+		}
+		_ = unix.Close(currentFD)
+		currentFD = nextFD
+	}
+	return currentFD, nil
+}
+
+func engineEntryIsSymlinkAt(directoryFD int, name string) bool {
+	var stat unix.Stat_t
+	if err := unix.Fstatat(directoryFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return false
+	}
+	return stat.Mode&unix.S_IFMT == unix.S_IFLNK
 }
 
 func requireFilesystemType(path string, want int64, name string) error {

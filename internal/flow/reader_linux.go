@@ -17,11 +17,17 @@ import (
 
 // LinuxReader reads flow events from the eBPF ring buffer on Linux.
 type LinuxReader struct {
-	mu      sync.Mutex
-	ringbuf *ringbuf.Reader
-	flowMap *ebpf.Map
-	running bool
-	stopCh  chan struct{}
+	mu        sync.Mutex
+	ringbuf   linuxRingReader
+	flowMap   *ebpf.Map
+	newReader func(*ebpf.Map) (linuxRingReader, error)
+	running   bool
+	stopCh    chan struct{}
+}
+
+type linuxRingReader interface {
+	Read() (ringbuf.Record, error)
+	Close() error
 }
 
 // NewLinuxReader creates a new Linux flow reader.
@@ -51,13 +57,33 @@ func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) er
 	if ctx == nil {
 		return errors.New("linux flow reader context is nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
+	// Cancellation may arrive while a concurrent Stop or lifecycle inspection
+	// holds the reader lock. Recheck before opening a kernel ring reader so a
+	// canceled startup cannot create externally visible reader state.
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return err
+	}
 	if r.running {
 		r.mu.Unlock()
 		return nil
 	}
+	if r.flowMap == nil {
+		r.mu.Unlock()
+		return errors.New("flow_events map is unavailable")
+	}
 
-	reader, err := ringbuf.NewReader(r.flowMap)
+	newReader := r.newReader
+	if newReader == nil {
+		newReader = func(flowEventsMap *ebpf.Map) (linuxRingReader, error) {
+			return ringbuf.NewReader(flowEventsMap)
+		}
+	}
+	reader, err := newReader(r.flowMap)
 	if err != nil {
 		r.mu.Unlock()
 		return fmt.Errorf("failed to create ring buffer reader: %w", err)
@@ -66,7 +92,21 @@ func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) er
 	r.running = true
 	stopCh := r.stopCh
 	r.mu.Unlock()
+	contextDone := make(chan struct{})
+	contextWatcherDone := make(chan struct{})
+	go func() {
+		defer close(contextWatcherDone)
+		select {
+		case <-ctx.Done():
+			// ringbuf.Reader.Read blocks in the kernel wait path. Closing the
+			// reader makes cancellation observable even when no event arrives.
+			_ = r.Stop()
+		case <-contextDone:
+		}
+	}()
 	defer func() {
+		close(contextDone)
+		<-contextWatcherDone
 		// A caller may cancel Start without calling Stop. Release the reader and
 		// make a later Start observe a clean, restartable state. Stop() may have
 		// already closed the same reader; ringbuf.Reader.Close is idempotent.
@@ -155,9 +195,15 @@ func (r *LinuxReader) Stop() error {
 	return nil
 }
 
-// Available returns true since this is the Linux implementation.
+// Available reports whether the reader has a flow map to open. A zero-value or
+// nil reader must fail closed before Monitor starts its reader lifecycle.
 func (r *LinuxReader) Available() bool {
-	return true
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.flowMap != nil
 }
 
 // CreateFlowReader creates a flow reader for the given eBPF flow_events map.

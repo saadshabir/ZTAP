@@ -32,4 +32,5 @@ signs:
       - COSIGN_YES=true
 
 release:
+  draft: true
   prerelease: auto

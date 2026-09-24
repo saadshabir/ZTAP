@@ -60,12 +60,20 @@ type nativeAgentHealthResponse struct {
 }
 
 func startNativeAgentHTTP(listen string) (*nativeAgentHTTP, error) {
+	return startNativeAgentHTTPWithListener(listen, nil)
+}
+
+func startNativeAgentHTTPWithListener(listen string, supplied net.Listener) (*nativeAgentHTTP, error) {
 	if strings.TrimSpace(listen) == "" {
 		listen = ":9090"
 	}
-	listener, err := net.Listen("tcp", listen)
-	if err != nil {
-		return nil, fmt.Errorf("listen for native agent status on %q: %w", listen, err)
+	listener := supplied
+	if listener == nil {
+		var err error
+		listener, err = net.Listen("tcp", listen)
+		if err != nil {
+			return nil, fmt.Errorf("listen for native agent status on %q: %w", listen, err)
+		}
 	}
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -120,9 +128,9 @@ func startNativeAgentHTTP(listen string) (*nativeAgentHTTP, error) {
 		agent.flowDrops.WithLabelValues(metric.Reason).Add(0)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", agent.handleHealth)
-	mux.HandleFunc("/readyz", agent.handleReady)
-	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	mux.HandleFunc("/healthz", getOnly(agent.handleHealth))
+	mux.HandleFunc("/readyz", getOnly(agent.handleReady))
+	mux.Handle("/metrics", getOnlyHandler(promhttp.HandlerFor(registry, promhttp.HandlerOpts{})))
 	agent.server = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -460,6 +468,28 @@ func (a *nativeAgentHTTP) writeJSON(w http.ResponseWriter, status int, response 
 	_ = json.NewEncoder(w).Encode(response)
 }
 
+func getOnly(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		handler(w, r)
+	}
+}
+
+func getOnlyHandler(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
+
 func (a *nativeAgentHTTP) errorsCh() <-chan error { return a.errors }
 
 func (a *nativeAgentHTTP) close(ctx context.Context) error {
@@ -469,6 +499,7 @@ func (a *nativeAgentHTTP) close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("native agent HTTP shutdown context is nil")
 	}
+	a.markStopping()
 	return a.server.Shutdown(ctx)
 }
 

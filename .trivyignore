@@ -1,3 +1,5 @@
-# GO-2026-5932: golang.org/x/crypto/openpgp is deprecated/unmaintained.
-# This project does not import openpgp (only uses golang.org/x/crypto/bcrypt).
+# Temporary exception; review and remove by 2026-12-31.
+# GO-2026-5932: the project does not import openpgp; it only uses the
+# golang.org/x/crypto/bcrypt package. Keep this exception narrow until the
+# scanner and module graph no longer report the unrelated package advisory.
 GO-2026-5932

@@ -48,7 +48,39 @@ static void (*bpf_ringbuf_submit)(void *data, __u64 flags) = (void *)132;
 
 struct __sk_buff {
     __u32 len;
+    __u32 pkt_type;
+    __u32 mark;
+    __u32 queue_mapping;
+    __u32 protocol;
+    __u32 vlan_present;
+    __u32 vlan_tci;
+    __u32 vlan_proto;
+    __u32 priority;
+    __u32 ingress_ifindex;
+    __u32 ifindex;
+    __u32 tc_index;
+    __u32 cb[5];
+    __u32 hash;
+    __u32 tc_classid;
+    __u32 data;
+    __u32 data_end;
+    __u32 napi_id;
+    __u32 family;
+    __u32 remote_ip4;
+    __u32 local_ip4;
+    __u32 remote_ip6[4];
+    __u32 local_ip6[4];
+    __u32 remote_port;
+    __u32 local_port;
+    __u32 data_meta;
+    __u64 flow_keys;
+    __u64 tstamp;
+    __u32 wire_len;
+    __u32 gso_segs;
 };
+
+_Static_assert(__builtin_offsetof(struct __sk_buff, gso_segs) == 164,
+               "__sk_buff GSO segment ABI changed");
 
 struct ipv4_header {
     __u8 version_ihl;
@@ -449,6 +481,13 @@ static __always_inline int parse_packet(struct __sk_buff *skb, struct packet_inf
 
     __u32 header_length = (__u32)(ip.version_ihl & 0x0f) * 4;
     __u32 total_length = bpf_ntohs(ip.total_length);
+    if (ip.protocol == IPPROTO_TCP && skb->gso_segs > 1 &&
+        total_length < header_length + sizeof(struct tcp_header)) {
+        // TCP GSO may reach the cgroup hook before the IPv4 length is
+        // finalized. The kernel's GSO marker permits using the skb length
+        // for header bounds; ordinary malformed packets still fail closed.
+        total_length = skb->len;
+    }
     if (header_length < sizeof(ip) || header_length > 60 ||
         total_length < header_length || total_length > skb->len)
         return PACKET_MALFORMED;
@@ -732,7 +771,10 @@ static __always_inline int enforce_packet(struct __sk_buff *skb, __u8 direction,
         return result;
     }
 
-    if (packet_status == PACKET_VALID || packet_status == PACKET_UNSUPPORTED) {
+    // Node/self exceptions apply only after the packet has passed the
+    // supported TCP/UDP parser. Unsupported protocols must remain denied for
+    // isolated directions even when their IPv4 address matches a bypass.
+    if (packet_status == PACKET_VALID) {
         if (packet.family == 4) {
             __u32 peer = direction == DIR_EGRESS ? packet.destination_ip[0] : packet.source_ip[0];
             if (is_node_address(slot, peer)) {

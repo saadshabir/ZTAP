@@ -84,6 +84,9 @@ spec:
         prometheus.io/path: /metrics
     spec:
       serviceAccountName: ztap-agent
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
       terminationGracePeriodSeconds: 30
       nodeSelector:
         kubernetes.io/os: linux

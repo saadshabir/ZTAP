@@ -1,0 +1,69 @@
+# Git
+.git
+.gitignore
+.github
+
+# Documentation
+*.md
+docs/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+/ztap
+bin/
+vendor/
+
+# Test files and coverage
+*_test.go
+*.test
+*.out
+coverage.*
+.coverage
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs and databases
+*.log
+*.db
+*.sqlite
+*.sqlite3
+.ztap/
+
+# Configuration
+*.local.yaml
+config.local.yaml
+.env
+.env.*
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Deployment
+deployments/prometheus-data/
+deployments/grafana-data/

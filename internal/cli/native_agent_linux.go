@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -57,8 +55,19 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 	if client == nil {
 		return errors.New("native agent kubernetes client is nil")
 	}
+	statusListener := options.StatusListener
+	if statusListener != nil {
+		// The option transfers ownership to the agent, including when startup
+		// fails before the HTTP server is created.
+		defer func() { _ = statusListener.Close() }()
+	}
 	if strings.TrimSpace(options.NodeName) == "" {
 		return errors.New("native agent node name is required")
+	}
+	// Cancellation before startup is a clean lifecycle transition. Check it
+	// before creating the host lock or starting any externally visible state.
+	if err := ctx.Err(); err != nil {
+		return nil
 	}
 	if strings.TrimSpace(options.CgroupRoot) == "" {
 		options.CgroupRoot = "/sys/fs/cgroup"
@@ -78,7 +87,13 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 			returnErr = unlockErr
 		}
 	}()
-	status, err := startNativeAgentHTTP(options.Listen)
+	// Cancellation may arrive while waiting for the node lock. Do not start
+	// HTTP or informer state after ownership is acquired if shutdown already
+	// won the race.
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+	status, err := startNativeAgentHTTPWithListener(options.Listen, statusListener)
 	if err != nil {
 		return err
 	}
@@ -138,7 +153,6 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 		}
 		return err
 	}
-
 	resolver := newK8sSubjectResolver(client, options.CgroupRoot)
 	var engine enforcer.Engine
 	if options.DryRun {
@@ -187,9 +201,23 @@ func waitForNativeAgentCacheSync(ctx context.Context, timeout time.Duration, syn
 	if timeout <= 0 {
 		return errors.New("native agent cache sync timeout must be positive")
 	}
+	if len(synced) == 0 {
+		return errors.New("native agent cache sync requires at least one informer")
+	}
+	for index, syncFunc := range synced {
+		if syncFunc == nil {
+			return fmt.Errorf("native agent cache sync informer %d is nil", index)
+		}
+	}
 	syncCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if cache.WaitForCacheSync(syncCtx.Done(), synced...) {
+		// A final caller check prevents a callback that reports synchronized at
+		// the same moment as shutdown from allowing startup to continue into
+		// engine and HTTP state creation.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -259,10 +287,16 @@ func runNativeAgentReconciliation(ctx context.Context, dirty <-chan struct{}, st
 	defer stopRetry()
 
 	reconcileOnce := func(initial bool) error {
+		if ctx.Err() != nil {
+			return nil
+		}
 		operationID := nextReconcileID()
 		reconcileStart := time.Now()
 		result, observedPolicies, telemetry, err := reconcile()
 		reconcileDuration := time.Since(reconcileStart)
+		if ctx.Err() != nil {
+			return nil
+		}
 		if telemetry.valid {
 			status.recordResolutionTelemetry(telemetry.unresolvedRunningContainers)
 		}
@@ -282,6 +316,9 @@ func runNativeAgentReconciliation(ctx context.Context, dirty <-chan struct{}, st
 			return nil
 		}
 
+		if ctx.Err() != nil {
+			return nil
+		}
 		stopRetry()
 		status.markApplied(result, options.DryRun)
 		classification := status.recordClassification(telemetry.classificationObservedAt, result.PolicySet, time.Now(), options.DryRun)
@@ -290,10 +327,22 @@ func runNativeAgentReconciliation(ctx context.Context, dirty <-chan struct{}, st
 		return nil
 	}
 
+	// Cache add events are only signals that the initial full snapshot may be
+	// ready. Consume them after engine initialization and immediately before
+	// the first full snapshot so startup does not repeat the same snapshot after
+	// the fixed debounce window.
+	drainNativeAgentDirty(dirty)
 	if err := reconcileOnce(true); err != nil {
 		return err
 	}
 	for {
+		// A caller cancellation is a clean lifecycle transition. Check it
+		// before selecting alongside the status-server channel so a listener
+		// error that becomes ready at the same time cannot turn shutdown into
+		// a reported agent failure.
+		if ctx.Err() != nil {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return nil
@@ -302,7 +351,7 @@ func runNativeAgentReconciliation(ctx context.Context, dirty <-chan struct{}, st
 				statusErrors = nil
 				continue
 			}
-			return fmt.Errorf("native agent status server: %w", err)
+			return nativeAgentStatusError(ctx, err)
 		case <-dirty:
 			if !waitNativeAgentDebounce(ctx, dirty) {
 				return nil
@@ -318,6 +367,13 @@ func runNativeAgentReconciliation(ctx context.Context, dirty <-chan struct{}, st
 			}
 		}
 	}
+}
+
+func nativeAgentStatusError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return nil
+	}
+	return fmt.Errorf("native agent status server: %w", err)
 }
 
 func nextNativeAgentRetryDelay(previous time.Duration) time.Duration {
@@ -364,6 +420,19 @@ func signalNativeAgentDirty(dirty chan<- struct{}) {
 	select {
 	case dirty <- struct{}{}:
 	default:
+	}
+}
+
+func drainNativeAgentDirty(dirty <-chan struct{}) {
+	if dirty == nil {
+		return
+	}
+	for {
+		select {
+		case <-dirty:
+		default:
+			return
+		}
 	}
 }
 
@@ -579,17 +648,9 @@ func (nativeDryRunEngine) Apply(ctx context.Context, _ policy.PolicySet) error {
 func (nativeDryRunEngine) Close() error { return nil }
 
 func acquireNativeAgentLock(runDir string) (func() error, error) {
-	runDir = strings.TrimSpace(runDir)
-	if runDir == "" {
-		runDir = "/run/ztap"
-	}
-	if err := os.MkdirAll(runDir, 0o750); err != nil {
-		return nil, fmt.Errorf("create agent run directory %q: %w", runDir, err)
-	}
-	lockPath := filepath.Join(runDir, "agent.lock")
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- the lock is intentionally created beneath the explicit agent run directory.
+	file, lockPath, err := openZTAPLock(runDir, "agent.lock", "agent")
 	if err != nil {
-		return nil, fmt.Errorf("open agent lock %q: %w", lockPath, err)
+		return nil, err
 	}
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()

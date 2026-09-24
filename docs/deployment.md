@@ -6,15 +6,21 @@ ZTAP is deployed as one Linux DaemonSet. The maintained manifest is
 ## Requirements
 
 - Linux nodes with cgroup v2 and a mounted bpffs at `/sys/fs/bpf`.
-- A container runtime configured to use the systemd cgroup driver.
+- containerd configured to use the systemd cgroup driver; cgroupfs, cgroup v1,
+  Docker Engine, and CRI-O layouts are unsupported.
+- Kubernetes 1.36.x with a CNI that does not enforce NetworkPolicy. ZTAP does
+  not disable another NetworkPolicy implementation; running both produces
+  intersected enforcement and is outside the first-release support contract.
 - Kubernetes access for the agent ServiceAccount to read Nodes, Namespaces,
   Pods, and NetworkPolicies.
 - A node image with the eBPF capabilities required by the kernel and runtime.
 
-The agent does not use host networking. It mounts the host cgroup hierarchy,
-bpffs, and `/run/ztap`; it runs as UID 0 without privileged mode or privilege
-escalation, drops all capabilities first, and adds only `BPF`, `NET_ADMIN`,
-`PERFMON`, and `SYS_RESOURCE`. The root filesystem is read-only.
+The agent does not share the host network, PID, or IPC namespaces. It mounts
+the host cgroup hierarchy read-only, while bpffs and `/run/ztap` are writable
+for the engine's pinned state and process-owned runtime directory. It runs as
+UID 0 without privileged mode or privilege escalation, drops all capabilities
+first, and adds only `BPF`, `NET_ADMIN`, `PERFMON`, and `SYS_RESOURCE`. The root
+filesystem is read-only.
 
 ## Install
 
@@ -43,6 +49,57 @@ The image is built `CGO_ENABLED=0` from `scratch`. It contains the ZTAP binary
 and CA certificates only; use Kubernetes logs, probes, port forwarding, and
 node diagnostics rather than expecting a shell inside the container.
 
+For a published release, prefer the immutable digest rendered by the release
+workflow, for example:
+
+```yaml
+image: ghcr.io/saadshabir/ztap@sha256:<release-digest>
+```
+
+Do not replace it with `:latest` in a deployment under review.
+
+## Upgrade
+
+Build or pull the next released image, update the manifest to its immutable
+digest, and apply the manifest again:
+
+```sh
+kubectl apply -f deployments/kubernetes/ztap-agent.yaml
+kubectl -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
+kubectl -n ztap-system get pods -l app=ztap-agent -o wide
+```
+
+The rolling update uses `maxUnavailable: 1` and `maxSurge: 0`, but links are
+process-owned. The node being updated therefore has a measured fail-open
+interval between the old agent exiting and the replacement completing its
+first successful reconciliation. Check `/readyz` and the agent logs after the
+rollout; readiness does not prevent that interval.
+
+A SIGKILL crash has the same process-owned link behavior. The crash interval
+is measured separately from orderly restart and DaemonSet rollout; none of
+these intervals are zero-gap availability guarantees.
+
+### Measured fail-open intervals
+
+The [hosted Linux validation run](https://github.com/saadshabir/ZTAP/actions/runs/35810441612)
+on Linux `6.17.0-1022-azure` recorded these separate boundaries for the
+250-Pod/25-policy/2,500-rule fixture:
+
+| Boundary | Measurement | What was observed |
+| --- | ---: | --- |
+| Pod start to classification | 207.381 ms p95 | Newly Running Pod appeared in a synchronized fake informer cache with its cgroup already present; API-server and runtime startup are excluded. |
+| Orderly agent shutdown through replacement apply | 421.457 ms p95 | Process-owned links closed, then a new native agent applied the fixture. |
+| SIGKILL to first allowed packet | 4.672 ms p95 | A link-owning child process was killed; this measures when fail-open begins, not when Kubernetes recovers. |
+| Planned DaemonSet replacement | 2,084 ms | In kind, the selected smoke client first became allowed and was then blocked again on the same node. The replacement Pod was observed Running inside the interval and confirmed Ready. |
+
+The failed-update Linux test separately preserved the active policy on an
+already classified cgroup after an injected candidate-link failure. A newly
+created cgroup had no link and sent an allowed packet until a controlled
+retry classified it. The first allowed probe to the blocked probe after retry
+spanned 2,046.5 ms in that test. This is a probe-to-retry measurement, not a
+bound on Kubernetes watcher delay or failure recovery. A selected container
+can also send before its ID and cgroup become visible to the watcher.
+
 ## Agent flags
 
 The DaemonSet starts the equivalent of:
@@ -66,6 +123,10 @@ attaching eBPF and is intended for development diagnostics.
 - `GET /readyz` reports active enforcement readiness.
 - `GET /metrics` exposes Prometheus text metrics.
 
+These endpoints accept `GET` only; other methods receive `405 Method Not
+Allowed`. During graceful shutdown, `/readyz` changes to HTTP 503 with reason
+`stopping` before the status listener closes.
+
 The manifest annotates the Pod for a Prometheus-compatible scraper. Port
 forward the agent Pod when diagnosing a local installation:
 
@@ -73,6 +134,31 @@ forward the agent Pod when diagnosing a local installation:
 kubectl -n ztap-system port-forward pod/$POD 9090:9090
 curl http://127.0.0.1:9090/metrics
 ```
+
+Readiness is false during initial cache synchronization, dry-run, an apply
+failure, or local quarantine. A selected container can transmit before the
+watcher observes its Kubernetes status and cgroup; this Pod-start
+classification interval is measured separately from reconciliation duration.
+The process-owned links also create separate, documented fail-open intervals
+on orderly restart, SIGKILL crash, and during a rolling DaemonSet update.
+
+## Migration warning
+
+The old `ZtapNetworkPolicy` CRD and operator are not consumed by this agent.
+Export any objects that need translation before deleting the CRD: CRD deletion
+removes its stored custom resources. Stop the old operator and agent before
+starting this DaemonSet, then apply native `NetworkPolicy` objects and verify
+readiness on every node.
+
+## Troubleshooting
+
+- `unsupported cgroup layout`: verify cgroup v2 and containerd's systemd
+  cgroup driver; the agent intentionally does not guess paths.
+- `readyz` returns 503 with a quarantine reason: inspect agent logs and correct
+  or delete the rejected policy selected on that node.
+- Missing eBPF attach or bpffs errors: verify the host mount, kernel feature
+  probes, and the four capabilities in the manifest. Do not enable privileged
+  mode as a workaround.
 
 ## Removal and rollback
 

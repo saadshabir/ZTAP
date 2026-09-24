@@ -1,16 +1,20 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/saadshabir/ZTAP/internal/flow"
 )
 
 func TestFlowsCommandUsesLiveOnlySurface(t *testing.T) {
 	command := newFlowsCmd()
-	for _, name := range []string{"action", "protocol", "direction", "run-dir", "output"} {
+	for _, name := range []string{"action", "protocol", "direction", "run-dir", "bpffs-root", "output"} {
 		if command.Flags().Lookup(name) == nil {
 			t.Errorf("missing flows flag --%s", name)
 		}
@@ -52,6 +56,46 @@ func TestFlowsCommandRejectsRemovedFlags(t *testing.T) {
 	command.SetArgs([]string{"--follow"})
 	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "unknown flag") {
 		t.Fatalf("removed --follow error = %v, want unknown flag", err)
+	}
+}
+
+type startupCleanupFlowReader struct {
+	stopped bool
+	stopErr error
+}
+
+func (*startupCleanupFlowReader) Start(context.Context, chan<- flow.RawFlowEvent) error {
+	return errors.New("reader must not start")
+}
+
+func (r *startupCleanupFlowReader) Stop() error {
+	r.stopped = true
+	return r.stopErr
+}
+
+func (*startupCleanupFlowReader) Available() bool { return true }
+
+func TestStartStreamingFlowMonitorCleansReaderWhenStartupIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	reader := &startupCleanupFlowReader{}
+	_, _, err := startStreamingFlowMonitor(ctx, reader)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("startup error = %v, want context.Canceled", err)
+	}
+	if !reader.stopped {
+		t.Fatal("canceled monitor startup did not close the opened reader")
+	}
+}
+
+func TestStartStreamingFlowMonitorPreservesCleanupFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	stopErr := errors.New("reader close failed")
+	reader := &startupCleanupFlowReader{stopErr: stopErr}
+	_, _, err := startStreamingFlowMonitor(ctx, reader)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, stopErr) {
+		t.Fatalf("startup cleanup error = %v, want cancellation and close failure", err)
 	}
 }
 

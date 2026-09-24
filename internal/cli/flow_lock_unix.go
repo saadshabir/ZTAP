@@ -5,9 +5,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 
 	"golang.org/x/sys/unix"
@@ -17,17 +14,9 @@ import (
 // held by the returned file descriptor, so the operating system releases it
 // automatically if the reader process exits unexpectedly.
 func acquireFlowReaderLock(runDir string) (func() error, error) {
-	runDir = strings.TrimSpace(runDir)
-	if runDir == "" {
-		runDir = "/run/ztap"
-	}
-	if err := os.MkdirAll(runDir, 0o750); err != nil {
-		return nil, fmt.Errorf("create flow reader run directory %q: %w", runDir, err)
-	}
-	lockPath := filepath.Join(runDir, "flows.lock")
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- the lock is intentionally created beneath the explicit flow run directory.
+	file, lockPath, err := openZTAPLock(runDir, "flows.lock", "flow reader")
 	if err != nil {
-		return nil, fmt.Errorf("open flow reader lock %q: %w", lockPath, err)
+		return nil, err
 	}
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()

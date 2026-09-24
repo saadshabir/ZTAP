@@ -7,12 +7,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,6 +151,27 @@ func TestWaitForNativeAgentCacheSyncPreservesCancellation(t *testing.T) {
 	}
 }
 
+func TestWaitForNativeAgentCacheSyncRechecksCancellationAfterSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := waitForNativeAgentCacheSync(ctx, time.Minute, func() bool {
+		cancel()
+		return true
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cache sync cancellation after success = %v, want context.Canceled", err)
+	}
+}
+
+func TestWaitForNativeAgentCacheSyncRejectsMissingOrNilInformers(t *testing.T) {
+	if err := waitForNativeAgentCacheSync(context.Background(), time.Second); err == nil || !strings.Contains(err.Error(), "at least one informer") {
+		t.Fatalf("missing informer error = %v, want explicit validation", err)
+	}
+	if err := waitForNativeAgentCacheSync(context.Background(), time.Second, nil); err == nil || !strings.Contains(err.Error(), "informer 0 is nil") {
+		t.Fatalf("nil informer error = %v, want explicit validation", err)
+	}
+}
+
 func TestSignalNativeAgentDirtyCoalescesEventBurst(t *testing.T) {
 	dirty := make(chan struct{}, 1)
 	for i := 0; i < 1000; i++ {
@@ -157,6 +184,83 @@ func TestSignalNativeAgentDirtyCoalescesEventBurst(t *testing.T) {
 	signalNativeAgentDirty(dirty)
 	if got := len(dirty); got != 1 {
 		t.Fatalf("dirty queue length after next signal = %d, want one", got)
+	}
+}
+
+func TestDrainNativeAgentDirtyClearsCacheSyncSignals(t *testing.T) {
+	dirty := make(chan struct{}, 1)
+	dirty <- struct{}{}
+	drainNativeAgentDirty(dirty)
+	if got := len(dirty); got != 0 {
+		t.Fatalf("dirty queue after drain = %d, want empty", got)
+	}
+	drainNativeAgentDirty(nil)
+}
+
+func TestNativeAgentReconciliationDrainsInitialDirtySignal(t *testing.T) {
+	dirty := make(chan struct{}, 1)
+	dirty <- struct{}{}
+	entered := make(chan struct{}, 2)
+	reconcile := func() (policy.CompileResult, int, nativeSnapshotTelemetry, error) {
+		entered <- struct{}{}
+		return policy.CompileResult{}, 0, nativeSnapshotTelemetry{}, nil
+	}
+	status := &nativeAgentHTTP{reason: "starting"}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runNativeAgentReconciliation(ctx, dirty, nil, status, NativeAgentOptions{NodeName: "node-a"}, reconcile)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("initial reconciliation did not start")
+	}
+	select {
+	case <-entered:
+		t.Fatal("cache-sync dirty signal triggered a redundant reconciliation")
+	case <-time.After(2 * nativeAgentDebounce):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconciliation loop shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconciliation loop did not shut down")
+	}
+}
+
+func TestNativeAgentReconciliationDoesNotPublishReadinessAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	status := &nativeAgentHTTP{reason: "starting"}
+	reconcile := func() (policy.CompileResult, int, nativeSnapshotTelemetry, error) {
+		cancel()
+		return policy.CompileResult{}, 0, nativeSnapshotTelemetry{}, nil
+	}
+	if err := runNativeAgentReconciliation(ctx, make(chan struct{}), nil, status, NativeAgentOptions{}, reconcile); err != nil {
+		t.Fatalf("reconciliation returned error after cancellation: %v", err)
+	}
+	status.stateMu.RLock()
+	ready, enforcing, reason := status.ready, status.enforcing, status.reason
+	status.stateMu.RUnlock()
+	if ready || enforcing || reason != "starting" {
+		t.Fatalf("post-cancellation status = ready=%t enforcing=%t reason=%q, want unchanged starting state", ready, enforcing, reason)
+	}
+}
+
+func TestNativeAgentStatusErrorHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := nativeAgentStatusError(ctx, errors.New("listener stopped")); err != nil {
+		t.Fatalf("status error after cancellation = %v, want clean shutdown", err)
+	}
+
+	activeErr := nativeAgentStatusError(context.Background(), errors.New("listener failed"))
+	if activeErr == nil || !strings.Contains(activeErr.Error(), "listener failed") {
+		t.Fatalf("active status error = %v, want wrapped listener failure", activeErr)
 	}
 }
 
@@ -542,6 +646,12 @@ func TestNativeAgentHTTPHealthAndReadinessLifecycle(t *testing.T) {
 	if ready.Code != http.StatusServiceUnavailable || !strings.Contains(ready.Body.String(), "dry_run") {
 		t.Fatalf("dry-run readiness = %d %s, want 503/dry_run", ready.Code, ready.Body.String())
 	}
+	status.stateMu.RLock()
+	enforcing := status.enforcing
+	status.stateMu.RUnlock()
+	if enforcing {
+		t.Fatal("dry-run marked the native agent as enforcing")
+	}
 
 	status.markApplied(policy.CompileResult{PolicySet: policy.PolicySet{Subjects: []policy.Subject{{Quarantined: policy.DirectionIngress}}}}, false)
 	ready = request("/readyz")
@@ -597,6 +707,45 @@ func TestNativeAgentMetricsUsePrivateRegistry(t *testing.T) {
 	status.server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if !strings.Contains(recorder.Body.String(), "ztap_agent_ready 1") || !strings.Contains(recorder.Body.String(), "ztap_agent_enforcing 1") {
 		t.Fatalf("metrics body does not contain applied state: %s", recorder.Body.String())
+	}
+}
+
+func TestNativeAgentHTTPStatusEndpointsRequireGET(t *testing.T) {
+	status, err := startNativeAgentHTTP("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("start status server: %v", err)
+	}
+	defer func() {
+		if err := status.close(context.Background()); err != nil {
+			t.Errorf("close status server: %v", err)
+		}
+	}()
+
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		recorder := httptest.NewRecorder()
+		status.server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("POST %s status = %d, want 405", path, recorder.Code)
+		}
+		if recorder.Header().Get("Allow") != http.MethodGet {
+			t.Fatalf("POST %s Allow = %q, want GET", path, recorder.Header().Get("Allow"))
+		}
+	}
+}
+
+func TestNativeAgentHTTPCloseMarksStopping(t *testing.T) {
+	status, err := startNativeAgentHTTP("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("start status server: %v", err)
+	}
+	status.markApplied(policy.CompileResult{}, false)
+	if err := status.close(context.Background()); err != nil {
+		t.Fatalf("close status server: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	status.handleReady(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), `"reason":"stopping"`) {
+		t.Fatalf("closed readiness = %d %s, want 503/stopping", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -762,19 +911,67 @@ func TestRunNativeKubernetesAgentDryRunLifecycle(t *testing.T) {
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}, Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "192.0.2.10"}}}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "apps"}},
 	)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for dry-run status: %v", err)
+	}
+	address := listener.Addr().String()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		done <- runNativeKubernetesAgent(ctx, client, NativeAgentOptions{
-			NodeName:   "node-a",
-			CgroupRoot: t.TempDir(),
-			BPFFSRoot:  t.TempDir(),
-			RunDir:     t.TempDir(),
-			Listen:     "127.0.0.1:0",
-			DryRun:     true,
+			NodeName:       "node-a",
+			CgroupRoot:     t.TempDir(),
+			BPFFSRoot:      t.TempDir(),
+			RunDir:         t.TempDir(),
+			StatusListener: listener,
+			DryRun:         true,
 		})
 	}()
-	time.Sleep(250 * time.Millisecond)
+	httpClient := &http.Client{Timeout: 500 * time.Millisecond}
+	var dryRunReady nativeAgentHealthResponse
+	observedDryRun := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		response, requestErr := httpClient.Get("http://" + address + "/readyz")
+		if requestErr == nil {
+			decodeErr := json.NewDecoder(response.Body).Decode(&dryRunReady)
+			closeErr := response.Body.Close()
+			if decodeErr != nil {
+				t.Fatalf("decode dry-run readiness: %v", decodeErr)
+			}
+			if closeErr != nil {
+				t.Fatalf("close dry-run readiness response: %v", closeErr)
+			}
+			if dryRunReady.Reason == "dry_run" {
+				if response.StatusCode != http.StatusServiceUnavailable || dryRunReady.Ready || dryRunReady.Enforcing {
+					t.Fatalf("dry-run readiness = status=%d body=%+v, want 503 and not ready/enforcing", response.StatusCode, dryRunReady)
+				}
+				observedDryRun = true
+				break
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !observedDryRun {
+		t.Fatal("dry-run agent never published dry_run readiness")
+	}
+	metricsResponse, err := httpClient.Get("http://" + address + "/metrics")
+	if err != nil {
+		t.Fatalf("read dry-run metrics: %v", err)
+	}
+	metrics, readErr := io.ReadAll(metricsResponse.Body)
+	closeErr := metricsResponse.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read dry-run metrics body: %v", readErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close dry-run metrics response: %v", closeErr)
+	}
+	if metricsResponse.StatusCode != http.StatusOK || !strings.Contains(string(metrics), "ztap_agent_enforcing 0") {
+		t.Fatalf("dry-run metrics = status=%d body=%s, want HTTP 200 and ztap_agent_enforcing 0", metricsResponse.StatusCode, metrics)
+	}
 	cancel()
 	select {
 	case err := <-done:
@@ -786,7 +983,45 @@ func TestRunNativeKubernetesAgentDryRunLifecycle(t *testing.T) {
 	}
 }
 
-func TestRunNativeKubernetesAgentCancellationBeforeCacheSyncIsClean(t *testing.T) {
+func TestStartNativeAgentHTTPUsesSuppliedListener(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for supplied status listener: %v", err)
+	}
+	status, err := startNativeAgentHTTPWithListener("127.0.0.1:1", listener)
+	if err != nil {
+		_ = listener.Close()
+		t.Fatalf("start HTTP status server with supplied listener: %v", err)
+	}
+	if status.listener != listener {
+		_ = status.close(context.Background())
+		t.Fatalf("status listener = %p, want supplied listener %p", status.listener, listener)
+	}
+	if err := status.close(context.Background()); err != nil {
+		t.Fatalf("close HTTP status server: %v", err)
+	}
+}
+
+func TestRunNativeKubernetesAgentClosesSuppliedListenerOnValidationFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for validation-failure listener: %v", err)
+	}
+	address := listener.Addr().String()
+	err = runNativeKubernetesAgent(context.Background(), fake.NewSimpleClientset(), NativeAgentOptions{
+		StatusListener: listener,
+	})
+	if err == nil || !strings.Contains(err.Error(), "node name is required") {
+		t.Fatalf("validation error = %v, want missing node name", err)
+	}
+	replacement, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("supplied listener remained open after validation failure: %v", err)
+	}
+	_ = replacement.Close()
+}
+
+func TestRunNativeKubernetesAgentCancellationBeforeStartupIsClean(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := runNativeKubernetesAgent(ctx, fake.NewSimpleClientset(), NativeAgentOptions{
@@ -799,6 +1034,97 @@ func TestRunNativeKubernetesAgentCancellationBeforeCacheSyncIsClean(t *testing.T
 	})
 	if err != nil {
 		t.Fatalf("agent cancellation during cache sync = %v, want clean exit", err)
+	}
+}
+
+func TestRunNativeKubernetesAgentCancellationBeforeStartupHasNoSideEffects(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for canceled-agent listener: %v", err)
+	}
+	address := listener.Addr().String()
+	runDir := filepath.Join(t.TempDir(), "run")
+	err = runNativeKubernetesAgent(ctx, fake.NewSimpleClientset(), NativeAgentOptions{
+		NodeName:       "node-a",
+		RunDir:         runDir,
+		StatusListener: listener,
+	})
+	if err != nil {
+		t.Fatalf("canceled agent returned error: %v", err)
+	}
+	replacement, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("canceled agent retained supplied listener: %v", err)
+	}
+	_ = replacement.Close()
+	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+		t.Fatalf("canceled agent created run directory or stat failed: %v", err)
+	}
+}
+
+type observedStatusListener struct {
+	net.Listener
+	accepted chan struct{}
+	once     sync.Once
+}
+
+func (l *observedStatusListener) Accept() (net.Conn, error) {
+	l.once.Do(func() { close(l.accepted) })
+	return nil, errors.New("status listener accept observed")
+}
+
+type cancelAfterErrContext struct {
+	context.Context
+	done  chan struct{}
+	once  sync.Once
+	calls atomic.Int32
+}
+
+func newCancelAfterErrContext(parent context.Context) *cancelAfterErrContext {
+	return &cancelAfterErrContext{Context: parent, done: make(chan struct{})}
+}
+
+func (c *cancelAfterErrContext) Done() <-chan struct{} { return c.done }
+
+func (c *cancelAfterErrContext) Err() error {
+	if c.calls.Add(1) >= 2 {
+		c.once.Do(func() { close(c.done) })
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestRunNativeKubernetesAgentCancellationAfterLockHasNoHTTPStartup(t *testing.T) {
+	runDir := t.TempDir()
+	baseListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for canceled-agent startup: %v", err)
+	}
+	listener := &observedStatusListener{Listener: baseListener, accepted: make(chan struct{})}
+	ctx := newCancelAfterErrContext(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- runNativeKubernetesAgent(ctx, fake.NewSimpleClientset(), NativeAgentOptions{
+			NodeName:       "node-a",
+			RunDir:         runDir,
+			StatusListener: listener,
+			DryRun:         true,
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("canceled agent returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled agent did not exit after lock acquisition")
+	}
+	select {
+	case <-listener.accepted:
+		t.Fatal("canceled agent started the HTTP listener after lock acquisition")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

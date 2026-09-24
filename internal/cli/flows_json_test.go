@@ -40,3 +40,22 @@ func TestFormatFlowJSONIncludesEngineMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatFlowJSONEscapesStringFields(t *testing.T) {
+	event := flow.FlowEvent{
+		Timestamp: time.Unix(0, 0).UTC(),
+		Protocol:  "TCP\"\\\n",
+		Reason:    "reason\"\\\n",
+	}
+
+	var got struct {
+		Protocol string `json:"protocol"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(formatFlowJSON(event)), &got); err != nil {
+		t.Fatalf("formatFlowJSON escaped output is invalid JSON: %v", err)
+	}
+	if got.Protocol != event.Protocol || got.Reason != event.Reason {
+		t.Fatalf("escaped fields = %#v, want protocol=%q reason=%q", got, event.Protocol, event.Reason)
+	}
+}
