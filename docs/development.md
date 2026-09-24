@@ -396,7 +396,7 @@ Available kernel-memlock readings must be positive before their adjacent
 stability is compared; an unavailable reading must carry zero observed bytes
 so stale kernel metadata cannot be reused.
 It also compares three real-loopback UDP/TCP samples from one selected subject
-(10,000 UDP round trips and a 128 MiB TCP transfer per sample) with the cgroup
+(10,000 UDP round trips and a 1 GiB TCP transfer per sample) with the cgroup
 eBPF program detached and attached while the full
 250-subject/2,500-rule engine state is resident, enforcing the 10-microsecond
 UDP p99 delta and 10-percent TCP throughput regression budgets in
