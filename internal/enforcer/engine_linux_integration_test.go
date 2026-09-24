@@ -664,16 +664,73 @@ func TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receive UDP request: %v", err)
 	}
+	stateKey, originalExpiry := engineConnectionStateForPorts(t, engine, cgroupID, flow.DirectionIngress, serverPort, uint16(client.Port))
 	if _, err := server.WriteToUDP([]byte("reply"), client); err != nil {
 		t.Fatalf("send UDP reply: %v", err)
 	}
 	event = readFlowEvent(t, reader, uint16(client.Port), flow.ProtocolUDP, flow.DirectionIngress, 2*time.Second)
 	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonConnection, 1, cgroupID)
+	if _, got := engineConnectionStateForPorts(t, engine, cgroupID, flow.DirectionIngress, serverPort, uint16(client.Port)); got != originalExpiry {
+		t.Fatalf("fresh connection expiry changed from %d to %d", originalExpiry, got)
+	}
 	if got := readEngineReplyResult(t, statusReader); got != '1' {
 		t.Fatalf("helper did not receive allowed reply: status %q", got)
 	}
 	if err := child.Wait(); err != nil {
 		t.Fatalf("reply helper failed: %v", err)
+	}
+	_ = statusReader.Close()
+
+	// A connection due for its periodic expiry refresh must refresh both
+	// directions before accepting the reply; the fresh entry above skips writes.
+	child2, statusReader2 := startUDPRequestReplyHelper(t, cgroup, fmt.Sprintf("127.0.0.1:%d", serverPort))
+	defer func() {
+		if child2.ProcessState == nil {
+			_ = child2.Process.Kill()
+			_ = child2.Wait()
+		}
+		_ = statusReader2.Close()
+	}()
+	event = readFlowEvent(t, reader, serverPort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonRule, 1, cgroupID)
+	if err := server.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set second server read deadline: %v", err)
+	}
+	_, client, err = server.ReadFromUDP(make([]byte, 16))
+	if err != nil {
+		t.Fatalf("receive second UDP request: %v", err)
+	}
+	stateKey, _ = engineConnectionStateForPorts(t, engine, cgroupID, flow.DirectionIngress, serverPort, uint16(client.Port))
+	now, err := monotonicNowNS()
+	if err != nil {
+		t.Fatalf("read monotonic clock before expiry refresh: %v", err)
+	}
+	nearRefresh := now + uint64(30*time.Second-time.Second-time.Second/2)
+	if err := engine.store.maps["conn_state"].Update(&stateKey, &nearRefresh, ebpf.UpdateAny); err != nil {
+		t.Fatalf("age connection state toward expiry: %v", err)
+	}
+	if _, err := server.WriteToUDP([]byte("reply"), client); err != nil {
+		t.Fatalf("send second UDP reply: %v", err)
+	}
+	event = readFlowEvent(t, reader, uint16(client.Port), flow.ProtocolUDP, flow.DirectionIngress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonConnection, 1, cgroupID)
+	_, refreshedExpiry := engineConnectionStateForPorts(t, engine, cgroupID, flow.DirectionIngress, serverPort, uint16(client.Port))
+	now, err = monotonicNowNS()
+	if err != nil {
+		t.Fatalf("read monotonic clock after expiry refresh: %v", err)
+	}
+	if refreshedExpiry <= now+uint64(20*time.Second) {
+		t.Fatalf("near-expiry connection was not refreshed: expiry=%d now=%d", refreshedExpiry, now)
+	}
+	_, reverseExpiry := engineConnectionStateForPorts(t, engine, cgroupID, flow.DirectionEgress, uint16(client.Port), serverPort)
+	if reverseExpiry != refreshedExpiry {
+		t.Fatalf("reverse connection expiry = %d, want %d", reverseExpiry, refreshedExpiry)
+	}
+	if got := readEngineReplyResult(t, statusReader2); got != '1' {
+		t.Fatalf("second helper did not receive allowed reply: status %q", got)
+	}
+	if err := child2.Wait(); err != nil {
+		t.Fatalf("second reply helper failed: %v", err)
 	}
 }
 
@@ -1668,6 +1725,24 @@ func engineHasConnectionEpoch(engine *LinuxEngine, epoch uint64) bool {
 		}
 	}
 	return false
+}
+
+func engineConnectionStateForPorts(t *testing.T, engine *LinuxEngine, cgroupID uint64, direction uint8, sourcePort, destinationPort uint16) (bpfConnectionKey, uint64) {
+	t.Helper()
+	iterator := engine.store.maps["conn_state"].Iterate()
+	var key bpfConnectionKey
+	var expires uint64
+	for iterator.Next(&key, &expires) {
+		if key.PolicyEpoch == 1 && key.CgroupID == cgroupID && key.Direction == direction &&
+			key.Protocol == uint8(flow.ProtocolUDP) && key.SourcePort == sourcePort && key.DestinationPort == destinationPort {
+			return key, expires
+		}
+	}
+	if err := iterator.Err(); err != nil {
+		t.Fatalf("iterate connection state: %v", err)
+	}
+	t.Fatalf("connection state not found for cgroup %d direction %d ports %d->%d", cgroupID, direction, sourcePort, destinationPort)
+	return bpfConnectionKey{}, 0
 }
 
 func startUDPRequestReplyHelper(t *testing.T, cgroup, addr string) (*exec.Cmd, *os.File) {
