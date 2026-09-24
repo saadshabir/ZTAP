@@ -27,8 +27,8 @@ const (
 	phase5PacketSamples = 3
 	// Keep roughly 100 observations in the tail used for each p99 estimate.
 	phase5PacketRoundTrips = 10_000
-	// A long transfer makes TCP throughput less sensitive to short runner pauses.
-	phase5TCPBytes = 1 << 30
+	// Multi-second transfers make TCP throughput less sensitive to short runner pauses.
+	phase5TCPBytes = 8 << 30
 )
 
 type phase5PacketEvidence struct {

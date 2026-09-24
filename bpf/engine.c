@@ -389,6 +389,8 @@ struct {
 #define NS_PER_SECOND 1000000000ULL
 #define TCP_IDLE_NS (24ULL * 60 * 60 * NS_PER_SECOND)
 #define UDP_IDLE_NS (30ULL * NS_PER_SECOND)
+/* Coalesce expiry writes to roughly once per second per active connection. */
+#define CONNECTION_REFRESH_INTERVAL_NS NS_PER_SECOND
 #define IPV4_MORE_FRAGMENTS 0x2000
 #define IPV4_FRAGMENT_OFFSET 0x1fff
 
@@ -671,8 +673,14 @@ static __always_inline void remember_reverse_connection(struct connection_key pa
         return;
     }
 
+    const __u64 idle_ns = packet_key.protocol == IPPROTO_TCP ? TCP_IDLE_NS : UDP_IDLE_NS;
+    struct connection_value *existing = bpf_map_lookup_elem(&conn_state, &reverse);
+    if (existing && existing->expires_at_ns > now &&
+        existing->expires_at_ns - now > idle_ns - CONNECTION_REFRESH_INTERVAL_NS)
+        return;
+
     struct connection_value value = {
-        .expires_at_ns = now + (packet_key.protocol == IPPROTO_TCP ? TCP_IDLE_NS : UDP_IDLE_NS),
+        .expires_at_ns = now + idle_ns,
     };
     bpf_map_update_elem(&conn_state, &reverse, &value, 0);
 }
@@ -680,21 +688,27 @@ static __always_inline void remember_reverse_connection(struct connection_key pa
 static __always_inline int allow_connection_state(struct connection_key key,
                                                   __u64 now, __u8 tcp_reset)
 {
+    /* The reverse tuple seeds state on the first allowed packet. */
+    struct connection_key reverse = reverse_connection_key(key);
     struct connection_value *value = bpf_map_lookup_elem(&conn_state, &key);
+    if (!value)
+        value = bpf_map_lookup_elem(&conn_state, &reverse);
     if (!value || value->expires_at_ns <= now)
         return 0;
 
     if (tcp_reset) {
-        struct connection_key reverse = reverse_connection_key(key);
         bpf_map_delete_elem(&conn_state, &key);
         bpf_map_delete_elem(&conn_state, &reverse);
         return 1;
     }
 
+    const __u64 idle_ns = key.protocol == IPPROTO_TCP ? TCP_IDLE_NS : UDP_IDLE_NS;
+    if (value->expires_at_ns - now > idle_ns - CONNECTION_REFRESH_INTERVAL_NS)
+        return 1;
+
     struct connection_value refreshed = {
-        .expires_at_ns = now + (key.protocol == IPPROTO_TCP ? TCP_IDLE_NS : UDP_IDLE_NS),
+        .expires_at_ns = now + idle_ns,
     };
-    struct connection_key reverse = reverse_connection_key(key);
     bpf_map_update_elem(&conn_state, &key, &refreshed, 0);
     bpf_map_update_elem(&conn_state, &reverse, &refreshed, 0);
     return 1;

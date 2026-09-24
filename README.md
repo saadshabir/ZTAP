@@ -108,8 +108,8 @@ passed the checked-in verifier together with same-run hosted eBPF and
 capability-agent evidence. These pre-release workflow artifacts have limited
 retention and are not the tagged release's provenance archive; the release
 workflow must produce and attach that archive before these claims are final.
-The follow-up used the earlier 128 MiB TCP sample; the release gate now uses
-1 GiB transfers so each throughput measurement runs longer.
+The follow-up used the earlier 128 MiB TCP sample; the current release gate
+uses 8 GiB transfers to reduce timing noise in each throughput measurement.
 
 The DaemonSet mounts the host cgroup v2 hierarchy and bpffs, requests only the
 capabilities needed by the eBPF engine, and exposes health, readiness, and
