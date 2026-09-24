@@ -688,12 +688,15 @@ static __always_inline void remember_reverse_connection(struct connection_key pa
 static __always_inline int allow_connection_state(struct connection_key key,
                                                   __u64 now, __u8 tcp_reset)
 {
+    /* The reverse tuple seeds state on the first allowed packet. */
+    struct connection_key reverse = reverse_connection_key(key);
     struct connection_value *value = bpf_map_lookup_elem(&conn_state, &key);
+    if (!value)
+        value = bpf_map_lookup_elem(&conn_state, &reverse);
     if (!value || value->expires_at_ns <= now)
         return 0;
 
     if (tcp_reset) {
-        struct connection_key reverse = reverse_connection_key(key);
         bpf_map_delete_elem(&conn_state, &key);
         bpf_map_delete_elem(&conn_state, &reverse);
         return 1;
@@ -706,7 +709,6 @@ static __always_inline int allow_connection_state(struct connection_key key,
     struct connection_value refreshed = {
         .expires_at_ns = now + idle_ns,
     };
-    struct connection_key reverse = reverse_connection_key(key);
     bpf_map_update_elem(&conn_state, &key, &refreshed, 0);
     bpf_map_update_elem(&conn_state, &reverse, &refreshed, 0);
     return 1;

@@ -646,7 +646,7 @@ func TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reader.Close() })
 
-	child, statusReader := startUDPRequestReplyHelper(t, cgroup, fmt.Sprintf("127.0.0.1:%d", serverPort))
+	child, statusReader := startUDPRequestReplyHelper(t, cgroup, fmt.Sprintf("127.0.0.1:%d", serverPort), true)
 	defer func() {
 		if child.ProcessState == nil {
 			_ = child.Process.Kill()
@@ -673,8 +673,28 @@ func TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch(t *testing.T) {
 	if _, got := engineConnectionStateForPorts(t, engine, cgroupID, flow.DirectionIngress, serverPort, uint16(client.Port)); got != originalExpiry {
 		t.Fatalf("fresh connection expiry changed from %d to %d", originalExpiry, got)
 	}
-	if got := readEngineReplyResult(t, statusReader); got != '1' {
-		t.Fatalf("helper did not receive allowed reply: status %q", got)
+	if got := readEngineReplyResult(t, statusReader); got != 's' {
+		t.Fatalf("helper did not send the established-flow request: status %q", got)
+	}
+	event = readFlowEvent(t, reader, serverPort, flow.ProtocolUDP, flow.DirectionEgress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonConnection, 1, cgroupID)
+	if err := server.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set second server read deadline: %v", err)
+	}
+	_, secondClient, err := server.ReadFromUDP(make([]byte, 16))
+	if err != nil {
+		t.Fatalf("receive established-flow request: %v", err)
+	}
+	if secondClient.Port != client.Port || !secondClient.IP.Equal(client.IP) {
+		t.Fatalf("established-flow tuple changed from %s to %s", client, secondClient)
+	}
+	if _, err := server.WriteToUDP([]byte("reply2"), secondClient); err != nil {
+		t.Fatalf("send established-flow reply: %v", err)
+	}
+	event = readFlowEvent(t, reader, uint16(client.Port), flow.ProtocolUDP, flow.DirectionIngress, 2*time.Second)
+	assertEngineDecision(t, event, flow.ActionAllowed, flow.ReasonConnection, 1, cgroupID)
+	if got := readEngineReplyResult(t, statusReader); got != '2' {
+		t.Fatalf("helper did not receive second allowed reply: status %q", got)
 	}
 	if err := child.Wait(); err != nil {
 		t.Fatalf("reply helper failed: %v", err)
@@ -683,7 +703,7 @@ func TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch(t *testing.T) {
 
 	// A connection due for its periodic expiry refresh must refresh both
 	// directions before accepting the reply; the fresh entry above skips writes.
-	child2, statusReader2 := startUDPRequestReplyHelper(t, cgroup, fmt.Sprintf("127.0.0.1:%d", serverPort))
+	child2, statusReader2 := startUDPRequestReplyHelper(t, cgroup, fmt.Sprintf("127.0.0.1:%d", serverPort), false)
 	defer func() {
 		if child2.ProcessState == nil {
 			_ = child2.Process.Kill()
@@ -809,7 +829,7 @@ func TestLinuxEngineReplyStateExpiresAcrossReusedSlot(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reader.Close() })
 
-	child, statusReader := startUDPRequestReplyHelper(t, cgroup, fmt.Sprintf("127.0.0.1:%d", serverPort))
+	child, statusReader := startUDPRequestReplyHelper(t, cgroup, fmt.Sprintf("127.0.0.1:%d", serverPort), false)
 	defer func() {
 		if child.ProcessState == nil {
 			_ = child.Process.Kill()
@@ -1230,6 +1250,23 @@ func TestCgroupUDPRequestReplyHelper(t *testing.T) {
 	_ = conn.SetReadDeadline(time.Now().Add(4 * time.Second))
 	_, err = conn.Read(make([]byte, 16))
 	if err == nil {
+		if os.Getenv("ZTAP_UDP_REPEAT_REQUEST") == "true" {
+			if _, err := conn.Write([]byte("second")); err != nil {
+				t.Fatalf("send established-flow UDP request: %v", err)
+			}
+			if _, err := status.Write([]byte{'s'}); err != nil {
+				t.Fatalf("signal established-flow request sent: %v", err)
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(4 * time.Second))
+			if _, err := conn.Read(make([]byte, 16)); err != nil {
+				_, _ = status.Write([]byte{'0'})
+				t.Fatalf("read established-flow UDP reply: %v", err)
+			}
+			if _, err := status.Write([]byte{'2'}); err != nil {
+				t.Fatalf("signal established-flow reply received: %v", err)
+			}
+			return
+		}
 		_, _ = status.Write([]byte{'1'})
 		return
 	}
@@ -1745,7 +1782,7 @@ func engineConnectionStateForPorts(t *testing.T, engine *LinuxEngine, cgroupID u
 	return bpfConnectionKey{}, 0
 }
 
-func startUDPRequestReplyHelper(t *testing.T, cgroup, addr string) (*exec.Cmd, *os.File) {
+func startUDPRequestReplyHelper(t *testing.T, cgroup, addr string, repeatRequest bool) (*exec.Cmd, *os.File) {
 	t.Helper()
 	startReader, startWriter, err := os.Pipe()
 	if err != nil {
@@ -1758,7 +1795,7 @@ func startUDPRequestReplyHelper(t *testing.T, cgroup, addr string) (*exec.Cmd, *
 		t.Fatalf("create helper status pipe: %v", err)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "^TestCgroupUDPRequestReplyHelper$", "-test.v")
-	cmd.Env = append(os.Environ(), "ZTAP_CGROUP_REPLY_HELPER=1", "ZTAP_UDP_ADDR="+addr)
+	cmd.Env = append(os.Environ(), "ZTAP_CGROUP_REPLY_HELPER=1", "ZTAP_UDP_ADDR="+addr, "ZTAP_UDP_REPEAT_REQUEST="+strconv.FormatBool(repeatRequest))
 	cmd.ExtraFiles = []*os.File{startReader, statusWriter}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
