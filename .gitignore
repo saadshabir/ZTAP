@@ -82,3 +82,4 @@ yarn-error.log*
 .cache/
 .mypy_cache/
 .pytest_cache/
+/STREAMLINING_PLAN.md
