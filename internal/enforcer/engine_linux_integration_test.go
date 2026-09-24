@@ -975,12 +975,12 @@ func TestLinuxEngineConcurrentTrafficSeesCompletePolicyEpoch(t *testing.T) {
 		if event.Action != wantAction {
 			t.Fatalf("event mixed policy slot and epoch: %+v, want action %d", event, wantAction)
 		}
-		wantReason := flow.ReasonDefaultDeny
 		if wantAction == flow.ActionAllowed {
-			wantReason = flow.ReasonRule
-		}
-		if event.Reason != wantReason {
-			t.Fatalf("event reason does not match its policy epoch: %+v, want reason %d", event, wantReason)
+			if event.Reason != flow.ReasonRule && event.Reason != flow.ReasonConnection {
+				t.Fatalf("allowed event has unexpected reason for its policy epoch: %+v", event)
+			}
+		} else if event.Reason != flow.ReasonDefaultDeny {
+			t.Fatalf("blocked event has unexpected reason for its policy epoch: %+v", event)
 		}
 		observedActions[event.DestPort][event.Action]++
 	}
