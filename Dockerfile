@@ -1,5 +1,7 @@
-# Use Docker's official ECR mirror to avoid Docker Hub pull quotas in CI.
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26.10-alpine AS go-builder
+# Default to Docker's official ECR mirror; CI may select Docker Hub with
+# a BuildKit registry mirror when the ECR anonymous quota is exhausted.
+ARG GO_BUILDER_IMAGE=public.ecr.aws/docker/library/golang:1.26.10-alpine
+FROM --platform=$BUILDPLATFORM ${GO_BUILDER_IMAGE} AS go-builder
 
 WORKDIR /src
 
