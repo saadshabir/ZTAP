@@ -1,0 +1,57 @@
+[
+    {
+        "Id": "sha256:4d02bb5bdbe52725a9defd7b8a55c3e5d14611c08ea7389d283b5656f57a695a",
+        "RepoTags": [
+            "ztap:dev"
+        ],
+        "RepoDigests": [
+            "ztap@sha256:4d02bb5bdbe52725a9defd7b8a55c3e5d14611c08ea7389d283b5656f57a695a"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-10-10T01:20:40.189163077-04:00",
+        "Config": {
+            "ExposedPorts": {
+                "9090/tcp": {}
+            },
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ],
+            "Entrypoint": [
+                "/ztap"
+            ],
+            "WorkingDir": "/",
+            "Labels": {
+                "org.opencontainers.image.description": "Linux eBPF enforcement for Kubernetes NetworkPolicy",
+                "org.opencontainers.image.licenses": "MIT",
+                "org.opencontainers.image.source": "https://github.com/saadshabir/ZTAP",
+                "org.opencontainers.image.title": "ZTAP"
+            }
+        },
+        "Architecture": "arm64",
+        "Os": "linux",
+        "Size": 12362414,
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:9df623c5a7b23dfa12dda335485b848eb53f74a1223d0ea32b24a091e39ba75c",
+                "sha256:feb328fefc49e848e025115801c1d4f41ff38de055b8b14e8c495d29cea15770"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "2026-10-10T05:20:41.036671915Z"
+        },
+        "Descriptor": {
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "digest": "sha256:4d02bb5bdbe52725a9defd7b8a55c3e5d14611c08ea7389d283b5656f57a695a",
+            "size": 855
+        },
+        "Identity": {
+            "Build": [
+                {
+                    "Ref": "8b3djpyhpwygv06vwq3k04chm",
+                    "CreatedAt": "2026-10-10T01:20:41.164785392-04:00"
+                }
+            ]
+        }
+    }
+]

@@ -1,0 +1,32 @@
+package main
+
+import (
+ "encoding/binary"
+ "fmt"
+ "github.com/cilium/ebpf"
+)
+
+func main() {
+ for _, spec := range []*ebpf.MapSpec{
+  {Name:"ztap_probe_hash", Type:ebpf.Hash, KeySize:8, ValueSize:1, MaxEntries:2},
+  {Name:"ztap_probe_lpm", Type:ebpf.LPMTrie, KeySize:24, ValueSize:1, MaxEntries:2, Flags:1},
+  {Name:"ztap_partial", Type:ebpf.Hash, KeySize:8, ValueSize:1, MaxEntries:1},
+ } {
+  m, err := ebpf.NewMap(spec)
+  if err != nil { panic(err) }
+  keys := []uint64{1,2}
+  values := []uint8{1,1}
+  var count int
+  if spec.Type == ebpf.LPMTrie {
+   lpmKeys := make([][24]byte,2)
+   for i := range lpmKeys { binary.LittleEndian.PutUint32(lpmKeys[i][:4],160); lpmKeys[i][4]=uint8(i+1) }
+   count, err = m.BatchUpdate(lpmKeys,values,nil)
+  } else { count, err = m.BatchUpdate(keys,values,nil) }
+  fmt.Printf("type=%s capacity=%d submitted=2 completed=%d error=%v\n",spec.Type,spec.MaxEntries,count,err)
+  if spec.Type == ebpf.Hash && spec.MaxEntries == 1 {
+   var value uint8
+   fmt.Printf("partial_first_key_lookup=%v value=%d\n",m.Lookup(keys[0], &value),value)
+  }
+  if err := m.Close(); err != nil { panic(err) }
+ }
+}

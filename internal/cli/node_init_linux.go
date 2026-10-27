@@ -23,7 +23,6 @@ import (
 	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
@@ -55,7 +54,7 @@ func nodeBootID() (string, error) {
 // The host-network initializer uses authenticated API facts and its own exact
 // kernel cgroup membership. A network namespace name or namespace label never
 // grants a workload the bootstrap exception.
-func initializeNodeBootstrap(ctx context.Context, client kubernetes.Interface, config *rest.Config, nodeName, cgroupRoot, runDir string) error {
+func initializeNodeBootstrap(ctx context.Context, client nativeCoreClient, config *rest.Config, nodeName, cgroupRoot, runDir string) error {
 	if config == nil || config.Insecure {
 		return errors.New("node initialization requires verified Kubernetes TLS")
 	}

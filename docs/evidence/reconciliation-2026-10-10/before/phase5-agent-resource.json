@@ -1,0 +1,30 @@
+{
+  "timestamp_utc": "2026-10-10T19:45:26.626795792Z",
+  "run_id": "optimization-final-before",
+  "go_version": "go1.26.9",
+  "goos": "linux",
+  "goarch": "arm64",
+  "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "cpus": 2,
+  "subjects": 250,
+  "policies": 25,
+  "rules": 2500,
+  "samples": 3,
+  "quiet_seconds": 5,
+  "process_clock_ticks_per_second": 100,
+  "cpu_core_samples": [
+    0,
+    0.0009976012802913156,
+    0
+  ],
+  "rss_mib_samples": [
+    55.5078125,
+    54.125,
+    51.9921875
+  ],
+  "max_cpu_cores": 0.0009976012802913156,
+  "max_rss_mib": 55.5078125,
+  "cpu_budget_cores": 0.1,
+  "rss_budget_mib": 200,
+  "scope": "dedicated helper process running the native agent with a fake Kubernetes client and the 250-Pod/25-policy/2,500-rule fixture; kernel-map memory is excluded"
+}

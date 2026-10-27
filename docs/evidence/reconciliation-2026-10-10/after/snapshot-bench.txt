@@ -1,0 +1,24 @@
+goos: linux
+goarch: arm64
+pkg: github.com/saadshabir/ZTAP/internal/cli
+BenchmarkNativeSnapshotReconciliation/unchanged-2         	     337	   1612123 ns/op	 1204808 B/op	    7909 allocs/op
+BenchmarkNativeSnapshotReconciliation/unchanged-2         	     356	   1624345 ns/op	 1203984 B/op	    7908 allocs/op
+BenchmarkNativeSnapshotReconciliation/unchanged-2         	     362	   1624576 ns/op	 1194802 B/op	    7908 allocs/op
+BenchmarkNativeSnapshotReconciliation/unchanged-2         	     361	   1608436 ns/op	 1204055 B/op	    7908 allocs/op
+BenchmarkNativeSnapshotReconciliation/unchanged-2         	     364	   1770551 ns/op	 1195102 B/op	    7908 allocs/op
+BenchmarkNativeSnapshotReconciliation/policy-change-2     	     351	   1647883 ns/op	 1206609 B/op	    7931 allocs/op
+BenchmarkNativeSnapshotReconciliation/policy-change-2     	     358	   1684041 ns/op	 1205386 B/op	    7930 allocs/op
+BenchmarkNativeSnapshotReconciliation/policy-change-2     	     357	   1687963 ns/op	 1206135 B/op	    7930 allocs/op
+BenchmarkNativeSnapshotReconciliation/policy-change-2     	     367	   1689198 ns/op	 1204416 B/op	    7930 allocs/op
+BenchmarkNativeSnapshotReconciliation/policy-change-2     	     361	   1669937 ns/op	 1205365 B/op	    7930 allocs/op
+BenchmarkNativeSnapshotReconciliation/pod-churn-2         	     354	   1643951 ns/op	 1206875 B/op	    7925 allocs/op
+BenchmarkNativeSnapshotReconciliation/pod-churn-2         	     385	   1634658 ns/op	 1197782 B/op	    7925 allocs/op
+BenchmarkNativeSnapshotReconciliation/pod-churn-2         	     346	   1512500 ns/op	 1207153 B/op	    7925 allocs/op
+BenchmarkNativeSnapshotReconciliation/pod-churn-2         	     402	   1539145 ns/op	 1209038 B/op	    7926 allocs/op
+BenchmarkNativeSnapshotReconciliation/pod-churn-2         	     392	   1507641 ns/op	 1198315 B/op	    7925 allocs/op
+BenchmarkNativeSnapshotReconciliation/selectors-2         	     169	   3343970 ns/op	 2036977 B/op	   24885 allocs/op
+BenchmarkNativeSnapshotReconciliation/selectors-2         	     176	   3473192 ns/op	 2028426 B/op	   24885 allocs/op
+BenchmarkNativeSnapshotReconciliation/selectors-2         	     178	   3434524 ns/op	 2028760 B/op	   24885 allocs/op
+BenchmarkNativeSnapshotReconciliation/selectors-2         	     176	   3540258 ns/op	 2029473 B/op	   24885 allocs/op
+BenchmarkNativeSnapshotReconciliation/selectors-2         	     175	   3605279 ns/op	 2028424 B/op	   24885 allocs/op
+PASS

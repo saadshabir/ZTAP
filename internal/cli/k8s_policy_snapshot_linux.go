@@ -23,6 +23,20 @@ import (
 // view; this method does not issue independent API reads that could mix
 // resource versions. Cgroup paths are retained separately for Engine links.
 func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *corev1.Node, namespaces []corev1.Namespace, pods []corev1.Pod) (policy.ResolutionInput, error) {
+	namespaceRefs := make([]*corev1.Namespace, len(namespaces))
+	for i := range namespaces {
+		namespaceRefs[i] = &namespaces[i]
+	}
+	podRefs := make([]*corev1.Pod, len(pods))
+	for i := range pods {
+		podRefs[i] = &pods[i]
+	}
+	return r.buildResolutionSnapshot(nodeName, node, namespaceRefs, podRefs)
+}
+
+// Informer objects are immutable. Read this cache view directly and copy only
+// compiler facts into ResolutionInput; never clone full Kubernetes objects.
+func (r *k8sSubjectResolver) buildResolutionSnapshot(nodeName string, node *corev1.Node, namespaces []*corev1.Namespace, pods []*corev1.Pod) (policy.ResolutionInput, error) {
 	nodeName = strings.TrimSpace(nodeName)
 	if nodeName == "" {
 		return policy.ResolutionInput{}, errors.New("node name is required to resolve the local policy snapshot")
@@ -40,7 +54,7 @@ func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *core
 		Pods:       make([]policy.ResolvedPod, 0, len(pods)),
 	}
 	for i := range namespaces {
-		ns := &namespaces[i]
+		ns := namespaces[i]
 		input.Namespaces = append(input.Namespaces, policy.ResolvedNamespace{
 			Name:   ns.Name,
 			Labels: copyStringMap(ns.Labels),
@@ -55,7 +69,7 @@ func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *core
 	unresolvedRunning := 0
 	observedAt := time.Now()
 	for i := range pods {
-		pod := &pods[i]
+		pod := pods[i]
 		// Terminal Pods retain their labels and IPs in the API even after the
 		// runtime releases those addresses. They must never authorize a new
 		// workload that subsequently receives the same IP.
@@ -115,9 +129,10 @@ func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *core
 
 	// Drop cache entries for containers no longer present in this immutable
 	// snapshot. Entries that remain are still identity-checked on every use.
-	r.pruneCgroupCache(cgroupPaths)
+	if err := r.publishWorkloadSnapshot(cgroupPaths, activeContainers); err != nil {
+		return policy.ResolutionInput{}, err
+	}
 	r.pruneRunningObservations(activeContainers)
-	r.replaceCgroupPaths(cgroupPaths)
 	r.setUnresolvedRunning(unresolvedRunning)
 	return input, nil
 }
@@ -172,16 +187,8 @@ func (r *k8sSubjectResolver) ResolveWorkloadIdentity(ctx context.Context, id uin
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for key, cached := range r.cgroupCache {
-		if cached.value.ID != id {
-			continue
-		}
-		relative, err := filepath.Rel(r.cgroupRoot, cached.value.Path)
-		if err != nil {
-			return enforcer.WorkloadIdentity{}, err
-		}
-		return enforcer.WorkloadIdentity{CgroupID: id, Device: cached.identity.device,
-			PodUID: key.podUID, ContainerID: key.containerID, Path: relative}, nil
+	if identity, ok := r.workloadIdentities[id]; ok {
+		return identity, nil
 	}
 	return enforcer.WorkloadIdentity{}, fmt.Errorf("no complete running identity for cgroup %d in candidate snapshot", id)
 }
@@ -202,14 +209,36 @@ type resolvedPodCgroup struct {
 	Path string
 }
 
-func (r *k8sSubjectResolver) replaceCgroupPaths(paths map[uint64]string) {
-	copyPaths := make(map[uint64]string, len(paths))
-	for id, path := range paths {
-		copyPaths[id] = filepath.Clean(path)
-	}
+// Publish paths and complete identities together, only after conflict checks.
+// Cache entries absent from the candidate cannot authorize recovered ownership.
+func (r *k8sSubjectResolver) publishWorkloadSnapshot(paths map[uint64]string, active map[cgroupCacheKey]struct{}) error {
 	r.mu.Lock()
-	r.cgroupPath = copyPaths
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	identities := make(map[uint64]enforcer.WorkloadIdentity, len(paths))
+	for key := range active {
+		cached, ok := r.cgroupCache[key]
+		if !ok || paths[cached.value.ID] != cached.value.Path {
+			continue
+		}
+		relative, err := filepath.Rel(r.cgroupRoot, cached.value.Path)
+		if err != nil {
+			return err
+		}
+		identity := enforcer.WorkloadIdentity{CgroupID: cached.value.ID, Device: cached.identity.device,
+			PodUID: key.podUID, ContainerID: key.containerID, Path: relative}
+		if previous, exists := identities[identity.CgroupID]; exists && previous != identity {
+			return fmt.Errorf("cgroup ID %d resolved to conflicting workload identities", identity.CgroupID)
+		}
+		identities[identity.CgroupID] = identity
+	}
+	for key, cached := range r.cgroupCache {
+		if _, ok := active[key]; !ok || paths[cached.value.ID] != cached.value.Path {
+			delete(r.cgroupCache, key)
+		}
+	}
+	r.cgroupPath = paths
+	r.workloadIdentities = identities
+	return nil
 }
 
 func nodeStatusIPs(node *corev1.Node) []netip.Addr {

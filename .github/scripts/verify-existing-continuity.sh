@@ -40,7 +40,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH="${ZTAP_TEST_ARCH:-amd64}" go build -o "$RUNNER_
 probe_pids=()
 paused=0
 lock_held=0
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 cleanup_continuity() {
   if [ "$paused" -eq 1 ]; then docker exec "$kind_node" kill -CONT "$agent_pid" || true; fi
   if [ "$lock_held" -eq 1 ]; then docker exec "$kind_node" sh -c 'kill "$(cat /run/ztap/restart-proof-lock.pid)"; rm -f /run/ztap/restart-proof-lock.pid' || true; fi

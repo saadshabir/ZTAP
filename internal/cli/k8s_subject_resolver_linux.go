@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/saadshabir/ZTAP/internal/enforcer"
 	"github.com/saadshabir/ZTAP/internal/policy"
 )
 
@@ -23,6 +24,7 @@ type k8sSubjectResolver struct {
 	cgroupRoot                  string
 	mu                          sync.RWMutex
 	cgroupPath                  map[uint64]string
+	workloadIdentities          map[uint64]enforcer.WorkloadIdentity
 	cgroupCache                 map[cgroupCacheKey]cachedPodCgroup
 	runningObservedAt           map[cgroupCacheKey]time.Time
 	unresolvedRunningContainers int
@@ -341,15 +343,4 @@ func (r *k8sSubjectResolver) deleteCachedCgroup(key cgroupCacheKey) {
 	r.mu.Lock()
 	delete(r.cgroupCache, key)
 	r.mu.Unlock()
-}
-
-func (r *k8sSubjectResolver) pruneCgroupCache(paths map[uint64]string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for key, cached := range r.cgroupCache {
-		path, ok := paths[cached.value.ID]
-		if !ok || filepath.Clean(path) != cached.value.Path {
-			delete(r.cgroupCache, key)
-		}
-	}
 }

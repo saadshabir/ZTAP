@@ -136,6 +136,49 @@ The fixture remains 250 Pods, 25 policies, and 2,500 ordinary rules. This
 comparison measures the Go compiler only; Linux reconciliation, packet,
 resource, and availability results require a fresh Linux measurement run.
 
+### Reconciliation and build comparison
+
+The Linux snapshot benchmark keeps 250 local Pods, 25 policies, and 2,500
+compiled rules in each scenario: unchanged snapshots, changing policies, Pod
+IP churn, and namespace/Pod selectors with match expressions. Pods also carry
+unconsumed annotations and environment variables to exercise object-copy cost.
+It measures cache reads, filesystem identity checks and compilation with a
+no-op engine; it excludes kernel map writes, watch delivery and debounce.
+
+```sh
+GOMAXPROCS=2 go test ./internal/cli -run '^$' \
+  -bench '^BenchmarkNativeSnapshotReconciliation$' -benchmem -count=5
+```
+
+On a disposable privileged Linux host, with bpffs mounted, collect cold build
+samples, package/module graphs, binary size, the snapshot benchmarks, and the
+existing real-engine reconciliation, event and quiet-helper RSS measurements:
+
+```sh
+sudo --preserve-env=PATH,GOCACHE,GOMODCACHE,GOFLAGS \
+  bash tools/measure-reconciliation.sh .cache/reconciliation-before
+```
+
+Repeat into a new `reconciliation-after` directory at the same Go version,
+CPU affinity, `GOMAXPROCS`, architecture and environment, sequentially after
+other builds/tests finish. The script records source changes and added files,
+uses a private empty build cache for each cold sample, and retains raw outputs.
+Copy the same benchmark file into the baseline checkout before building its
+test binary. Install `/usr/bin/time` for build measurements. Set
+`ZTAP_MEASUREMENT_IMAGE` to a freshly built image tag to record its identity
+and size; retain the Docker build log separately because Docker's layer cache
+makes its build duration different from the cold Go build measurement.
+
+The [October 10 local comparison](evidence/reconciliation-2026-10-10/README.md)
+retains matched before/after measurements and validation transcripts.
+
+The real-engine outputs use the existing fake Kubernetes client and exact
+containerd cgroup fixture. The resource output is helper RSS, excluding kernel
+maps, rather than the shipped DaemonSet's cgroup memory. Reconciliation/event
+p95 is the maximum of three retained samples. This comparison bundle is
+separate from the complete hosted acceptance evidence and does not update
+historical packet, resource, or availability claims.
+
 ### Linux performance harness
 
 Use a disposable Linux host with cgroup v2, mounted bpffs, and the privileges

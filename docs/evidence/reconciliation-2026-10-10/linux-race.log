@@ -1,0 +1,11 @@
+?   	github.com/saadshabir/ZTAP/cmd/ztap	[no test files]
+ok  	github.com/saadshabir/ZTAP/deployments/kubernetes	(cached)
+ok  	github.com/saadshabir/ZTAP/internal/cli	9.241s
+ok  	github.com/saadshabir/ZTAP/internal/enforcer	(cached)
+ok  	github.com/saadshabir/ZTAP/internal/flow	(cached)
+ok  	github.com/saadshabir/ZTAP/internal/policy	(cached)
+ok  	github.com/saadshabir/ZTAP/internal/restartproof	(cached)
+?   	github.com/saadshabir/ZTAP/tools/bpfgen	[no test files]
+ok  	github.com/saadshabir/ZTAP/tools/phase5probe	(cached)
+ok  	github.com/saadshabir/ZTAP/tools/phase5verify	(cached)
+?   	github.com/saadshabir/ZTAP/tools/restartinspect	[no test files]

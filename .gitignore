@@ -38,6 +38,8 @@ $RECYCLE.BIN/
 
 # Logs and databases
 *.log
+# Retained validation transcripts belong in evidence commits.
+!/docs/evidence/**/*.log
 *.db
 *.sqlite
 *.sqlite3
@@ -45,6 +47,10 @@ $RECYCLE.BIN/
 
 # Local build output
 dist/
+# This module boundary excludes retained source snapshots from Go checks.
+!/dist/
+/dist/*
+!/dist/go.mod
 build/
 
 # eBPF compiled objects

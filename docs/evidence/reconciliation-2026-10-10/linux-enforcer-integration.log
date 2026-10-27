@@ -1,0 +1,498 @@
+=== RUN   TestLinuxExplicitCleanupRetriesAndPreservesForeignObjects
+--- PASS: TestLinuxExplicitCleanupRetriesAndPreservesForeignObjects (0.12s)
+=== RUN   TestEngineApplyPublishesCompleteCandidateAndDetachesRemovedSubjectsAfterFlip
+--- PASS: TestEngineApplyPublishesCompleteCandidateAndDetachesRemovedSubjectsAfterFlip (0.00s)
+=== RUN   TestEngineApplyRollsBackPartialPopulationAndLinkAttachment
+--- PASS: TestEngineApplyRollsBackPartialPopulationAndLinkAttachment (0.00s)
+=== RUN   TestEngineApplyCancellationAfterPopulationClearsCandidate
+--- PASS: TestEngineApplyCancellationAfterPopulationClearsCandidate (0.00s)
+=== RUN   TestEngineApplyCancellationWhileWaitingForLifecycleLock
+--- PASS: TestEngineApplyCancellationWhileWaitingForLifecycleLock (0.01s)
+=== RUN   TestEngineApplyFlipFailureClosesOnlyNewLinks
+--- PASS: TestEngineApplyFlipFailureClosesOnlyNewLinks (0.00s)
+=== RUN   TestEngineApplySurfacesLifecycleStatusFailureAfterCommit
+--- PASS: TestEngineApplySurfacesLifecycleStatusFailureAfterCommit (0.00s)
+=== RUN   TestEngineClosePublishesStoppingBeforeDetachingLinks
+--- PASS: TestEngineClosePublishesStoppingBeforeDetachingLinks (0.00s)
+=== RUN   TestEngineApplyRetriesDeferredSlotCleanupBeforeReuse
+2026/10/10 05:17:44 WARN policy slot cleanup deferred until packet readers quiesce slot=1 error="packet readers did not quiesce"
+--- PASS: TestEngineApplyRetriesDeferredSlotCleanupBeforeReuse (0.00s)
+=== RUN   TestEngineUnchangedPolicyPreservesEpochAndMapContents
+--- PASS: TestEngineUnchangedPolicyPreservesEpochAndMapContents (0.00s)
+=== RUN   TestEngineUnchangedPolicyRetriesLifecyclePublication
+--- PASS: TestEngineUnchangedPolicyRetriesLifecyclePublication (0.00s)
+=== RUN   TestEngineApplyDefersInactiveSlotCleanupFailure
+--- PASS: TestEngineApplyDefersInactiveSlotCleanupFailure (0.00s)
+=== RUN   TestEngineApplyRejectsInvalidInputAndEpochWrapBeforeMutation
+--- PASS: TestEngineApplyRejectsInvalidInputAndEpochWrapBeforeMutation (0.00s)
+=== RUN   TestEngineCloseIsIdempotentAndClosesOwnedResources
+--- PASS: TestEngineCloseIsIdempotentAndClosesOwnedResources (0.00s)
+=== RUN   TestEngineApplyRetriesCleanupOfPartialAttachBeforeNextCandidate
+--- PASS: TestEngineApplyRetriesCleanupOfPartialAttachBeforeNextCandidate (0.00s)
+=== RUN   TestEngineReattachesAfterRemovedLinkCloseFailure
+2026/10/10 05:17:44 WARN failed to detach removed subject cgroup cgroup_id=10 error="injected detach failure"
+--- PASS: TestEngineReattachesAfterRemovedLinkCloseFailure (0.00s)
+=== RUN   TestEngineCloseRetriesStoreCloseFailure
+--- PASS: TestEngineCloseRetriesStoreCloseFailure (0.00s)
+=== RUN   TestEncodePolicySetSerializesDirectionalSlotKeys
+--- PASS: TestEncodePolicySetSerializesDirectionalSlotKeys (0.00s)
+=== RUN   TestEngineMapKeyLayoutsMatchBPF
+--- PASS: TestEngineMapKeyLayoutsMatchBPF (0.00s)
+=== RUN   TestGeneratedEngineSpecContainsExpectedOwnedMaps
+--- PASS: TestGeneratedEngineSpecContainsExpectedOwnedMaps (0.01s)
+=== RUN   TestCgroupUDPSendHelper
+    engine_linux_integration_helpers_test.go:26: helper
+--- SKIP: TestCgroupUDPSendHelper (0.00s)
+=== RUN   TestCgroupICMPSendHelper
+    engine_linux_integration_helpers_test.go:52: helper
+--- SKIP: TestCgroupICMPSendHelper (0.00s)
+=== RUN   TestCgroupRawIPv4SendHelper
+    engine_linux_integration_helpers_test.go:86: helper
+--- SKIP: TestCgroupRawIPv4SendHelper (0.00s)
+=== RUN   TestCgroupRawIPv4IngressHelper
+    engine_linux_integration_helpers_test.go:135: helper
+--- SKIP: TestCgroupRawIPv4IngressHelper (0.00s)
+=== RUN   TestCgroupUDPReceiveHelper
+    engine_linux_integration_helpers_test.go:228: helper
+--- SKIP: TestCgroupUDPReceiveHelper (0.00s)
+=== RUN   TestCgroupUDP6SendHelper
+    engine_linux_integration_helpers_test.go:269: helper
+--- SKIP: TestCgroupUDP6SendHelper (0.00s)
+=== RUN   TestLinuxEngineRejectsIncompatibleCgroupProgram
+--- PASS: TestLinuxEngineRejectsIncompatibleCgroupProgram (0.07s)
+=== RUN   TestLinuxEnginePublishesLifecycleStatus
+--- PASS: TestLinuxEnginePublishesLifecycleStatus (0.06s)
+=== RUN   TestLinuxEnginePublishesStoppingLifecycleStatus
+--- PASS: TestLinuxEnginePublishesStoppingLifecycleStatus (0.06s)
+=== RUN   TestLinuxEngineMetricsSnapshotReadsStableCounters
+--- PASS: TestLinuxEngineMetricsSnapshotReadsStableCounters (0.06s)
+=== RUN   TestLinuxEngineDirectionAndBypassSemantics
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPReceiveHelper
+--- PASS: TestCgroupUDPReceiveHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+--- PASS: TestLinuxEngineDirectionAndBypassSemantics (9.76s)
+=== RUN   TestLinuxEnginePolicyDeletionRemovesSelectedContribution
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+--- PASS: TestLinuxEnginePolicyDeletionRemovesSelectedContribution (2.14s)
+=== RUN   TestLinuxEnginePolicyDeletionPreservesRemainingContribution
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+--- PASS: TestLinuxEnginePolicyDeletionPreservesRemainingContribution (4.66s)
+=== RUN   TestLinuxEngineIngressDirectionSpecificDeny
+=== RUN   TestCgroupUDPReceiveHelper
+--- PASS: TestCgroupUDPReceiveHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPReceiveHelper
+--- PASS: TestCgroupUDPReceiveHelper (1.20s)
+PASS
+=== RUN   TestCgroupUDPReceiveHelper
+--- PASS: TestCgroupUDPReceiveHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPReceiveHelper
+--- PASS: TestCgroupUDPReceiveHelper (1.20s)
+PASS
+--- PASS: TestLinuxEngineIngressDirectionSpecificDeny (6.56s)
+=== RUN   TestLinuxEngineRejectsIPv6ForIsolatedSubject
+=== RUN   TestCgroupUDP6SendHelper
+--- PASS: TestCgroupUDP6SendHelper (0.00s)
+PASS
+--- PASS: TestLinuxEngineRejectsIPv6ForIsolatedSubject (1.09s)
+=== RUN   TestLinuxEngineRejectsUnsupportedProtocolBeforeNodeAndSelfBypass
+=== RUN   TestCgroupICMPSendHelper
+--- PASS: TestCgroupICMPSendHelper (0.00s)
+PASS
+--- PASS: TestLinuxEngineRejectsUnsupportedProtocolBeforeNodeAndSelfBypass (1.09s)
+=== RUN   TestLinuxEngineRejectsUnsupportedProtocolOnIngress
+=== RUN   TestCgroupRawIPv4IngressHelper
+--- PASS: TestCgroupRawIPv4IngressHelper (1.20s)
+PASS
+--- PASS: TestLinuxEngineRejectsUnsupportedProtocolOnIngress (2.31s)
+=== RUN   TestLinuxEngineRejectsIPv4FragmentsForIsolatedSubject
+=== RUN   TestCgroupRawIPv4SendHelper
+    engine_linux_integration_helpers_test.go:127: send raw IPv4 fragment packet returned: operation not permitted
+--- PASS: TestCgroupRawIPv4SendHelper (0.00s)
+PASS
+    engine_linux_integration_test.go:531: fragment decision counter=1; event drops=[{Reason:rate_limited Count:0} {Reason:ring_full Count:0}]
+--- PASS: TestLinuxEngineRejectsIPv4FragmentsForIsolatedSubject (1.09s)
+=== RUN   TestLinuxEngineRejectsMalformedIPv4ForIsolatedSubject
+=== RUN   TestCgroupRawIPv4SendHelper
+    engine_linux_integration_helpers_test.go:127: send raw IPv4 malformed packet returned: operation not permitted
+--- PASS: TestCgroupRawIPv4SendHelper (0.00s)
+PASS
+--- PASS: TestLinuxEngineRejectsMalformedIPv4ForIsolatedSubject (1.10s)
+=== RUN   TestLinuxEngineFlowEventRateLimitPersistsAcrossPolicyEpochs
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+--- PASS: TestLinuxEngineFlowEventRateLimitPersistsAcrossPolicyEpochs (1.09s)
+=== RUN   TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch
+=== RUN   TestCgroupUDPRequestReplyHelper
+--- PASS: TestCgroupUDPRequestReplyHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPRequestReplyHelper
+--- PASS: TestCgroupUDPRequestReplyHelper (0.00s)
+PASS
+--- PASS: TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch (2.13s)
+=== RUN   TestLinuxEngineAllowsTCPReplyTrafficWithoutReverseRule
+=== RUN   TestCgroupTCPRequestReplyHelper
+--- PASS: TestCgroupTCPRequestReplyHelper (0.00s)
+PASS
+--- PASS: TestLinuxEngineAllowsTCPReplyTrafficWithoutReverseRule (1.11s)
+=== RUN   TestLinuxEngineReplyStateExpiresAcrossReusedSlot
+=== RUN   TestCgroupUDPRequestReplyHelper
+--- PASS: TestCgroupUDPRequestReplyHelper (4.00s)
+PASS
+--- PASS: TestLinuxEngineReplyStateExpiresAcrossReusedSlot (5.10s)
+=== RUN   TestLinuxEngineConcurrentTrafficSeesCompletePolicyEpoch
+--- PASS: TestLinuxEngineConcurrentTrafficSeesCompletePolicyEpoch (0.45s)
+=== RUN   TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+    engine_linux_integration_test.go:1107: unobserved_replacement_probe_to_retry_ms=2039.661; scope=real cgroup and UDP packets, injected candidate-link failure followed by controlled retry
+--- PASS: TestLinuxEngineRealCandidateAttachFailurePreservesActivePolicy (5.17s)
+=== RUN   TestLinuxEngineKernelMapWriteFailurePreservesActivePackets
+=== RUN   TestLinuxEngineKernelMapWriteFailurePreservesActivePackets/candidate_population
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestLinuxEngineKernelMapWriteFailurePreservesActivePackets/configuration_flip
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+--- PASS: TestLinuxEngineKernelMapWriteFailurePreservesActivePackets (5.25s)
+    --- PASS: TestLinuxEngineKernelMapWriteFailurePreservesActivePackets/candidate_population (2.62s)
+    --- PASS: TestLinuxEngineKernelMapWriteFailurePreservesActivePackets/configuration_flip (2.63s)
+=== RUN   TestLinuxEngineRetiredSlotQuiescenceIgnoresCurrentTraffic
+--- PASS: TestLinuxEngineRetiredSlotQuiescenceIgnoresCurrentTraffic (0.09s)
+=== RUN   TestLinuxEngineRepeatedApplyCloseReleasesOwnedResources
+--- PASS: TestLinuxEngineRepeatedApplyCloseReleasesOwnedResources (0.20s)
+=== RUN   TestCgroupUDPRequestReplyHelper
+    engine_linux_integration_test.go:1239: helper
+--- SKIP: TestCgroupUDPRequestReplyHelper (0.00s)
+=== RUN   TestCgroupTCPRequestReplyHelper
+    engine_linux_integration_test.go:1300: helper
+--- SKIP: TestCgroupTCPRequestReplyHelper (0.00s)
+=== RUN   TestCgroupUDPLoopHelper
+    engine_linux_integration_test.go:1344: helper
+--- SKIP: TestCgroupUDPLoopHelper (0.00s)
+=== RUN   TestPhase5PacketAndTCPPerformance
+    engine_linux_packet_performance_test.go:65: set ZTAP_PHASE5_PERFORMANCE=1 to run the real-packet performance harness
+--- SKIP: TestPhase5PacketAndTCPPerformance (0.00s)
+=== RUN   TestCgroupPhase5UDPLatencyHelper
+    engine_linux_packet_performance_test.go:302: helper
+--- SKIP: TestCgroupPhase5UDPLatencyHelper (0.00s)
+=== RUN   TestCgroupPhase5TCPThroughputHelper
+    engine_linux_packet_performance_test.go:399: helper
+--- SKIP: TestCgroupPhase5TCPThroughputHelper (0.00s)
+=== RUN   TestPhase5ReferenceFixtureApply
+    engine_linux_performance_test.go:114: set ZTAP_PHASE5_PERFORMANCE=1 to run the real-cgroup performance harness
+--- SKIP: TestPhase5ReferenceFixtureApply (0.00s)
+=== RUN   TestPhase5FlowAccounting
+    engine_linux_performance_test.go:279: set ZTAP_PHASE5_PERFORMANCE=1 to run the real-cgroup performance harness
+--- SKIP: TestPhase5FlowAccounting (0.00s)
+=== RUN   TestLinuxEngineStoreRejectsNilPopulateContext
+--- PASS: TestLinuxEngineStoreRejectsNilPopulateContext (0.00s)
+=== RUN   TestLockEngineMutexHonorsCancellation
+--- PASS: TestLockEngineMutexHonorsCancellation (0.01s)
+=== RUN   TestLinuxSubjectLinkerRejectsNilAndCancelledContext
+--- PASS: TestLinuxSubjectLinkerRejectsNilAndCancelledContext (0.00s)
+=== RUN   TestValidateCgroupTargetRequiresDirectoryInsideRoot
+--- PASS: TestValidateCgroupTargetRequiresDirectoryInsideRoot (0.00s)
+=== RUN   TestValidateCgroupTargetRejectsOutsideRootAndIdentityMismatch
+--- PASS: TestValidateCgroupTargetRejectsOutsideRootAndIdentityMismatch (0.00s)
+=== RUN   TestOpenValidatedCgroupReturnsDescriptorForValidatedDirectory
+--- PASS: TestOpenValidatedCgroupReturnsDescriptorForValidatedDirectory (0.00s)
+=== RUN   TestOpenValidatedCgroupRejectsTargetEscapingRoot
+--- PASS: TestOpenValidatedCgroupRejectsTargetEscapingRoot (0.00s)
+=== RUN   TestRemoveStalePinsRemovesOnlyOwnedMaps
+--- PASS: TestRemoveStalePinsRemovesOnlyOwnedMaps (0.00s)
+=== RUN   TestRemoveStalePinsRejectsOwnedDirectory
+--- PASS: TestRemoveStalePinsRejectsOwnedDirectory (0.00s)
+=== RUN   TestRemoveStalePinsRejectsSymlinkedDirectory
+--- PASS: TestRemoveStalePinsRejectsSymlinkedDirectory (0.00s)
+=== RUN   TestRemoveOwnedEnginePinUnlinksSymlinkWithoutFollowingTarget
+--- PASS: TestRemoveOwnedEnginePinUnlinksSymlinkWithoutFollowingTarget (0.00s)
+=== RUN   TestRemoveOwnedEnginePinRejectsSymlinkedParent
+--- PASS: TestRemoveOwnedEnginePinRejectsSymlinkedParent (0.00s)
+=== RUN   TestRemoveOwnedEnginePinRejectsSymlinkedParentComponent
+--- PASS: TestRemoveOwnedEnginePinRejectsSymlinkedParentComponent (0.00s)
+=== RUN   TestEnsureEnginePinDirectoryCreatesDirectory
+--- PASS: TestEnsureEnginePinDirectoryCreatesDirectory (0.00s)
+=== RUN   TestOpenEnginePinDirectoryRetainsValidatedDirectory
+--- PASS: TestOpenEnginePinDirectoryRetainsValidatedDirectory (0.00s)
+=== RUN   TestEnginePinPathAtRejectsInvalidName
+--- PASS: TestEnginePinPathAtRejectsInvalidName (0.00s)
+=== RUN   TestEnsureEnginePinDirectoryRejectsSymlink
+--- PASS: TestEnsureEnginePinDirectoryRejectsSymlink (0.00s)
+=== RUN   TestOpenEngineDirectoryNoFollowRejectsSymlinkComponent
+--- PASS: TestOpenEngineDirectoryNoFollowRejectsSymlinkComponent (0.00s)
+=== RUN   TestEnsureEnginePinDirectoryRejectsSymlinkedRootComponent
+--- PASS: TestEnsureEnginePinDirectoryRejectsSymlinkedRootComponent (0.00s)
+=== RUN   TestTryLegacyCgroupAttachFallsBackToOverride
+=== RUN   TestTryLegacyCgroupAttachFallsBackToOverride/not_supported
+=== RUN   TestTryLegacyCgroupAttachFallsBackToOverride/multi_attach:_invalid_argument
+=== RUN   TestTryLegacyCgroupAttachFallsBackToOverride/multi_attach:_operation_not_supported
+--- PASS: TestTryLegacyCgroupAttachFallsBackToOverride (0.00s)
+    --- PASS: TestTryLegacyCgroupAttachFallsBackToOverride/not_supported (0.00s)
+    --- PASS: TestTryLegacyCgroupAttachFallsBackToOverride/multi_attach:_invalid_argument (0.00s)
+    --- PASS: TestTryLegacyCgroupAttachFallsBackToOverride/multi_attach:_operation_not_supported (0.00s)
+=== RUN   TestTryLegacyCgroupAttachDoesNotMaskOtherErrors
+--- PASS: TestTryLegacyCgroupAttachDoesNotMaskOtherErrors (0.00s)
+=== RUN   TestLinuxEngineAgentStatusWriteSerializesLifecycleChanges
+--- PASS: TestLinuxEngineAgentStatusWriteSerializesLifecycleChanges (0.06s)
+=== RUN   TestPacketConnectionLifecycle
+--- PASS: TestPacketConnectionLifecycle (0.69s)
+=== RUN   TestGeneratedEngineSpecPassesRuntimeValidation
+--- PASS: TestGeneratedEngineSpecPassesRuntimeValidation (0.01s)
+=== RUN   TestEngineSpecValidationRejectsABIWidthDrift
+--- PASS: TestEngineSpecValidationRejectsABIWidthDrift (0.01s)
+=== RUN   TestEngineSpecValidationRejectsActiveConfigABIWidthDrift
+--- PASS: TestEngineSpecValidationRejectsActiveConfigABIWidthDrift (0.01s)
+=== RUN   TestEngineSpecValidationRejectsActiveConfigFlagDrift
+--- PASS: TestEngineSpecValidationRejectsActiveConfigFlagDrift (0.01s)
+=== RUN   TestEngineSpecValidationRejectsActiveConfigInnerFlagDrift
+--- PASS: TestEngineSpecValidationRejectsActiveConfigInnerFlagDrift (0.01s)
+=== RUN   TestEngineSpecValidationRejectsPolicyRuleMapFlagDrift
+--- PASS: TestEngineSpecValidationRejectsPolicyRuleMapFlagDrift (0.01s)
+=== RUN   TestInheritedGuardOwnerHelper
+    guard_feasibility_linux_integration_test.go:52: helper
+--- SKIP: TestInheritedGuardOwnerHelper (0.00s)
+=== RUN   TestLinuxInheritedGuardUsesDescendantSocketIdentity
+=== RUN   TestLinuxInheritedGuardUsesDescendantSocketIdentity/kubepods.slice
+    guard_feasibility_linux_integration_test.go:219: guard-feasibility-v1 layout=kubepods.slice parent=49481 descendant=49511 outage=2.006914342s ingress_unknown=0 egress_unknown=0 ingress_classified=50 egress_classified=50
+=== RUN   TestLinuxInheritedGuardUsesDescendantSocketIdentity/kubelet.slice/kubelet-kubepods.slice
+    guard_feasibility_linux_integration_test.go:219: guard-feasibility-v1 layout=kubelet.slice/kubelet-kubepods.slice parent=49591 descendant=49621 outage=2.003927427s ingress_unknown=0 egress_unknown=0 ingress_classified=50 egress_classified=50
+--- PASS: TestLinuxInheritedGuardUsesDescendantSocketIdentity (4.70s)
+    --- PASS: TestLinuxInheritedGuardUsesDescendantSocketIdentity/kubepods.slice (2.35s)
+    --- PASS: TestLinuxInheritedGuardUsesDescendantSocketIdentity/kubelet.slice/kubelet-kubepods.slice (2.36s)
+=== RUN   TestProductionGuardOwnerHelper
+    guard_linux_integration_test.go:56: helper
+--- SKIP: TestProductionGuardOwnerHelper (0.00s)
+=== RUN   TestLinuxGuardCompatibleUpgradeCheckpointRecovery
+=== RUN   TestLinuxGuardCompatibleUpgradeCheckpointRecovery/ztap_socket_namespace-updated
+    guard_linux_integration_test.go:186: guard-checkpoint-v2 checkpoint=ztap_socket_namespace-updated outage_ms=1500 ingress_unknown=0 egress_unknown=0
+=== RUN   TestLinuxGuardCompatibleUpgradeCheckpointRecovery/ztap_guard_egress-updated
+    guard_linux_integration_test.go:186: guard-checkpoint-v2 checkpoint=ztap_guard_egress-updated outage_ms=1500 ingress_unknown=0 egress_unknown=0
+=== RUN   TestLinuxGuardCompatibleUpgradeCheckpointRecovery/ztap_guard_ingress-updated
+    guard_linux_integration_test.go:186: guard-checkpoint-v2 checkpoint=ztap_guard_ingress-updated outage_ms=1500 ingress_unknown=0 egress_unknown=0
+--- PASS: TestLinuxGuardCompatibleUpgradeCheckpointRecovery (5.93s)
+    --- PASS: TestLinuxGuardCompatibleUpgradeCheckpointRecovery/ztap_socket_namespace-updated (2.01s)
+    --- PASS: TestLinuxGuardCompatibleUpgradeCheckpointRecovery/ztap_guard_egress-updated (1.96s)
+    --- PASS: TestLinuxGuardCompatibleUpgradeCheckpointRecovery/ztap_guard_ingress-updated (1.96s)
+=== RUN   TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss
+=== RUN   TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss/SIGTERM
+PASS
+    guard_linux_integration_test.go:293: production-guard-v2 mode=SIGTERM cgroup=50111 outage_ms=1500 ingress_unknown=0 egress_unknown=0 ingress_classified=40 egress_classified=40
+=== RUN   TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss/SIGKILL
+    guard_linux_integration_test.go:293: production-guard-v2 mode=SIGKILL cgroup=50221 outage_ms=1500 ingress_unknown=0 egress_unknown=0 ingress_classified=40 egress_classified=40
+=== RUN   TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss/SIGSTOP
+    guard_linux_integration_test.go:293: production-guard-v2 mode=SIGSTOP cgroup=50331 outage_ms=1500 ingress_unknown=0 egress_unknown=0 ingress_classified=40 egress_classified=40
+--- PASS: TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss (8.31s)
+    --- PASS: TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss/SIGTERM (3.43s)
+    --- PASS: TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss/SIGKILL (2.44s)
+    --- PASS: TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss/SIGSTOP (2.44s)
+=== RUN   TestReconcileNativePolicySnapshotCompilesAndAppliesCompleteSet
+--- PASS: TestReconcileNativePolicySnapshotCompilesAndAppliesCompleteSet (0.00s)
+=== RUN   TestReconcileNativePolicySnapshotDoesNotApplyIncompleteResolution
+--- PASS: TestReconcileNativePolicySnapshotDoesNotApplyIncompleteResolution (0.00s)
+=== RUN   TestReconcileNativePolicySnapshotReturnsCandidateWhenApplyFails
+--- PASS: TestReconcileNativePolicySnapshotReturnsCandidateWhenApplyFails (0.00s)
+=== RUN   TestReconcileNativePolicySnapshotRejectsMissingInputs
+--- PASS: TestReconcileNativePolicySnapshotRejectsMissingInputs (0.00s)
+=== RUN   TestRestartEngineOwnerHelper
+    persistence_linux_integration_test.go:93: helper
+--- SKIP: TestRestartEngineOwnerHelper (0.00s)
+=== RUN   TestRestartTrafficHelper
+    traffic_linux.go:181: helper
+--- SKIP: TestRestartTrafficHelper (0.00s)
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/SIGTERM
+PASS
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=SIGTERM outage=3.103890643s cgroup=50346 epoch=1 ingress_allowed=360 egress_allowed=360 established_replies=360 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/SIGKILL
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=SIGKILL outage=2.086971691s cgroup=50446 epoch=1 ingress_allowed=258 egress_allowed=258 established_replies=258 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/SIGSTOP
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=SIGSTOP outage=2.091875771s cgroup=50546 epoch=1 ingress_allowed=259 egress_allowed=259 established_replies=259 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/inactive-slot-partial
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=inactive-slot-partial outage=2.094863811s cgroup=50646 epoch=1 ingress_allowed=259 egress_allowed=259 established_replies=259 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/inactive-slot-populated
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=inactive-slot-populated outage=2.084931443s cgroup=50746 epoch=1 ingress_allowed=258 egress_allowed=258 established_replies=258 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/egress-link-pinned
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=egress-link-pinned outage=2.098295558s cgroup=50846 epoch=1 ingress_allowed=259 egress_allowed=260 established_replies=259 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/ingress-link-pinned
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=ingress-link-pinned outage=2.056718633s cgroup=50946 epoch=1 ingress_allowed=255 egress_allowed=255 established_replies=255 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/candidate-links-pinned
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=candidate-links-pinned outage=2.086153401s cgroup=51046 epoch=1 ingress_allowed=258 egress_allowed=258 established_replies=258 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/active-config-committed
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=active-config-committed outage=2.095664643s cgroup=51146 epoch=2 ingress_allowed=259 egress_allowed=259 established_replies=259 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/obsolete-egress-removed
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=obsolete-egress-removed outage=2.093711895s cgroup=51246 epoch=2 ingress_allowed=259 egress_allowed=259 established_replies=259 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/obsolete-ingress-removed
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=obsolete-ingress-removed outage=2.08605115s cgroup=51346 epoch=2 ingress_allowed=258 egress_allowed=258 established_replies=258 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/slot-subjects-cleared
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=slot-subjects-cleared outage=2.065804334s cgroup=51446 epoch=2 ingress_allowed=256 egress_allowed=256 established_replies=256 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/retired-slot-cleanup-started
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=retired-slot-cleanup-started outage=2.067841457s cgroup=51546 epoch=2 ingress_allowed=257 egress_allowed=257 established_replies=256 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/retired-slot-cleared
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=retired-slot-cleared outage=2.095865226s cgroup=51646 epoch=2 ingress_allowed=259 egress_allowed=259 established_replies=259 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/programs-pinned
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=programs-pinned outage=2.160665964s cgroup=51746 epoch=1 ingress_allowed=265 egress_allowed=266 established_replies=266 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/ztap_egress-updated
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=ztap_egress-updated outage=2.155090761s cgroup=51846 epoch=1 ingress_allowed=265 egress_allowed=265 established_replies=265 ingress_prohibited=0 egress_prohibited=0
+=== RUN   TestLinuxPinnedEnforcementSurvivesOwnerLoss/ztap_ingress-updated
+    persistence_linux_integration_test.go:375: restart-proof-v1 mode=ztap_ingress-updated outage=2.159326882s cgroup=51946 epoch=1 ingress_allowed=265 egress_allowed=265 established_replies=265 ingress_prohibited=0 egress_prohibited=0
+--- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss (47.04s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/SIGTERM (3.72s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/SIGKILL (2.71s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/SIGSTOP (2.71s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/inactive-slot-partial (2.71s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/inactive-slot-populated (2.70s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/egress-link-pinned (2.72s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/ingress-link-pinned (2.64s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/candidate-links-pinned (2.70s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/active-config-committed (2.71s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/obsolete-egress-removed (2.72s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/obsolete-ingress-removed (2.70s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/slot-subjects-cleared (2.66s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/retired-slot-cleanup-started (2.66s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/retired-slot-cleared (2.70s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/programs-pinned (2.77s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/ztap_egress-updated (2.76s)
+    --- PASS: TestLinuxPinnedEnforcementSurvivesOwnerLoss/ztap_ingress-updated (2.76s)
+=== RUN   TestPhase5CounterDeltaRejectsReset
+--- PASS: TestPhase5CounterDeltaRejectsReset (0.00s)
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/allowed_tuple
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/blocked_tuple
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/previous_epoch_is_ignored
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_schema_fails_closed
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/other_cgroup_fails_closed
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/other_tuple_fails_closed
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_protocol_fails_closed
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_direction_fails_closed
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_family_fails_closed
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_destination_fails_closed
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_source_fails_closed
+=== RUN   TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_action_fails_closed
+--- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/allowed_tuple (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/blocked_tuple (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/previous_epoch_is_ignored (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_schema_fails_closed (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/other_cgroup_fails_closed (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/other_tuple_fails_closed (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_protocol_fails_closed (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_direction_fails_closed (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_family_fails_closed (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_destination_fails_closed (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_source_fails_closed (0.00s)
+    --- PASS: TestPhase5FlowEventMatchBindsSelectedTraffic/wrong_action_fails_closed (0.00s)
+=== RUN   TestSumCounterValuesRejectsPerCPUOverflow
+--- PASS: TestSumCounterValuesRejectsPerCPUOverflow (0.00s)
+=== RUN   TestPhase5DecisionDeltaRejectsMaskedCounterReset
+--- PASS: TestPhase5DecisionDeltaRejectsMaskedCounterReset (0.00s)
+=== RUN   TestPhase5DropDeltaRejectsCounterReset
+--- PASS: TestPhase5DropDeltaRejectsCounterReset (0.00s)
+=== RUN   TestPhase5DecisionDeltaRejectsCounterShapeDrift
+--- PASS: TestPhase5DecisionDeltaRejectsCounterShapeDrift (0.00s)
+=== RUN   TestPhase5EvidenceFileCreationIsExclusive
+--- PASS: TestPhase5EvidenceFileCreationIsExclusive (0.00s)
+=== RUN   TestPhase5MapCapacityBytes
+=== RUN   TestPhase5MapCapacityBytes/bounded_hash
+=== RUN   TestPhase5MapCapacityBytes/per_CPU_array
+=== RUN   TestPhase5MapCapacityBytes/ring_buffer
+=== RUN   TestPhase5MapCapacityBytes/unbounded_cgroup_storage
+=== RUN   TestPhase5MapCapacityBytes/invalid_CPU_count
+=== RUN   TestPhase5MapCapacityBytes/byte_overflow
+=== RUN   TestPhase5MapCapacityBytes/unknown_map_type
+=== RUN   TestPhase5MapCapacityBytes/bounded_cgroup_storage
+--- PASS: TestPhase5MapCapacityBytes (0.00s)
+    --- PASS: TestPhase5MapCapacityBytes/bounded_hash (0.00s)
+    --- PASS: TestPhase5MapCapacityBytes/per_CPU_array (0.00s)
+    --- PASS: TestPhase5MapCapacityBytes/ring_buffer (0.00s)
+    --- PASS: TestPhase5MapCapacityBytes/unbounded_cgroup_storage (0.00s)
+    --- PASS: TestPhase5MapCapacityBytes/invalid_CPU_count (0.00s)
+    --- PASS: TestPhase5MapCapacityBytes/byte_overflow (0.00s)
+    --- PASS: TestPhase5MapCapacityBytes/unknown_map_type (0.00s)
+    --- PASS: TestPhase5MapCapacityBytes/bounded_cgroup_storage (0.00s)
+=== RUN   TestLinuxRecoveryPreservesLiveSubjectDuringIdentityUncertainty
+--- PASS: TestLinuxRecoveryPreservesLiveSubjectDuringIdentityUncertainty (0.11s)
+=== RUN   TestLinuxRecoveryRejectsForeignMapWithoutRemovingProtection
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+=== RUN   TestCgroupUDPSendHelper
+--- PASS: TestCgroupUDPSendHelper (0.00s)
+PASS
+--- PASS: TestLinuxRecoveryRejectsForeignMapWithoutRemovingProtection (2.64s)
+=== RUN   TestLinuxRecoveryAllowsConfirmedCgroupReplacement
+--- PASS: TestLinuxRecoveryAllowsConfirmedCgroupReplacement (0.13s)
+=== RUN   TestRecoveredEnginePreservesEpochForIdenticalSnapshot
+--- PASS: TestRecoveredEnginePreservesEpochForIdenticalSnapshot (0.00s)
+=== RUN   TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain
+=== RUN   TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain/container-id-missing
+=== RUN   TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain/container-pending
+=== RUN   TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain/pod-missing
+=== RUN   TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain/identity-inconsistent
+--- PASS: TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain (0.00s)
+    --- PASS: TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain/container-id-missing (0.00s)
+    --- PASS: TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain/container-pending (0.00s)
+    --- PASS: TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain/pod-missing (0.00s)
+    --- PASS: TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain/identity-inconsistent (0.00s)
+=== RUN   TestRecoveredEngineWaitsForRetiredReadersBeforeMutation
+--- PASS: TestRecoveredEngineWaitsForRetiredReadersBeforeMutation (0.00s)
+=== RUN   TestRecoveryRejectsMissingCommittedLinkWithoutMutation
+--- PASS: TestRecoveryRejectsMissingCommittedLinkWithoutMutation (0.00s)
+PASS
