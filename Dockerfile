@@ -1,5 +1,5 @@
-# Use Docker's official ECR mirror to avoid Docker Hub pull quotas in CI.
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26.9-alpine AS go-builder
+# Use the Docker Official Image; CI configures a Docker Hub cache mirror.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.10-alpine AS go-builder
 
 WORKDIR /src
 

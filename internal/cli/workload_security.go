@@ -12,8 +12,15 @@ import (
 // Host-network Pods are outside the enforcement contract; terminal Pods no
 // longer own their network namespaces or peer addresses.
 func validatePacketSocketIsolation(pods []corev1.Pod) error {
+	refs := make([]*corev1.Pod, len(pods))
 	for i := range pods {
-		pod := &pods[i]
+		refs[i] = &pods[i]
+	}
+	return validatePacketSocketIsolationRefs(refs)
+}
+
+func validatePacketSocketIsolationRefs(pods []*corev1.Pod) error {
+	for _, pod := range pods {
 		if pod.Spec.HostNetwork || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			continue
 		}

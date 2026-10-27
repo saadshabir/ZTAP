@@ -1,0 +1,20 @@
+{
+  "timestamp_utc": "2026-10-10T19:45:45.846341309Z",
+  "run_id": "optimization-final-after",
+  "go_version": "go1.26.9",
+  "goos": "linux",
+  "goarch": "arm64",
+  "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "cpus": 2,
+  "subjects": 250,
+  "policies": 25,
+  "rules": 2500,
+  "event_samples_ms": [
+    105.409371,
+    105.761704,
+    103.067706
+  ],
+  "event_p95_ms": 105.761704,
+  "event_budget_ms": 3000,
+  "scope": "synchronized fake Kubernetes informer event, fixed debounce, native compilation, and real engine apply"
+}

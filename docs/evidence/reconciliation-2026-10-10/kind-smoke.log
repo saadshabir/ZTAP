@@ -1,0 +1,74 @@
+kindnet_networkpolicy_controller=disabled
+deployment.apps/coredns patched
+Waiting for deployment spec update to be observed...
+Waiting for deployment "coredns" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "coredns" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "coredns" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "coredns" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "coredns" rollout to finish: 1 old replicas are pending termination...
+deployment "coredns" successfully rolled out
+deployment.apps/local-path-provisioner patched
+Waiting for deployment "local-path-provisioner" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "local-path-provisioner" rollout to finish: 1 old replicas are pending termination...
+deployment "local-path-provisioner" successfully rolled out
+validatingadmissionpolicy.admissionregistration.k8s.io/ztap-packet-socket-isolation created
+validatingadmissionpolicybinding.admissionregistration.k8s.io/ztap-packet-socket-isolation created
+namespace/ztap-system created
+serviceaccount/ztap-agent created
+clusterrole.rbac.authorization.k8s.io/ztap-agent created
+clusterrolebinding.rbac.authorization.k8s.io/ztap-agent created
+daemonset.apps/ztap-node-init created
+role.rbac.authorization.k8s.io/ztap-bootstrap-api created
+rolebinding.rbac.authorization.k8s.io/ztap-bootstrap-api created
+daemonset.apps/ztap-agent created
+Waiting for daemon set "ztap-node-init" rollout to finish: 0 of 1 updated pods are available...
+daemon set "ztap-node-init" successfully rolled out
+Waiting for daemon set "ztap-agent" rollout to finish: 0 of 1 updated pods are available...
+daemon set "ztap-agent" successfully rolled out
+pod/ztap-guard-check created
+pod/ztap-guard-check condition met
+admission guard rejected unsafe regular, init, and ephemeral containers and accepted safe workloads
+pod "ztap-guard-check" deleted
+namespace/ztap-smoke created
+pod/smoke-server created
+service/smoke-server created
+pod/smoke-control created
+pod/smoke-client created
+networkpolicy.networking.k8s.io/smoke-client-deny-egress created
+pod/smoke-server condition met
+pod/smoke-control condition met
+pod/smoke-client condition met
+Warning: v1 Endpoints is deprecated in v1.33+; use discovery.k8s.io/v1 EndpointSlice
+service_cluster_ip=10.96.156.62
+service_backend_pod_ip=10.244.0.10
+--- agent security context ---
+host namespace isolation and read-only cgroup mount verified
+agent_security_context_json={"allowPrivilegeEscalation":false,"capabilities":{"add":["BPF","NET_ADMIN","PERFMON","SYS_RESOURCE"],"drop":["ALL"]},"privileged":false,"readOnlyRootFilesystem":true,"runAsGroup":0,"runAsUser":0,"seccompProfile":{"type":"RuntimeDefault"}}
+
+privileged=false allowPrivilegeEscalation=false seccompProfile=RuntimeDefault drop=ALL
+capability[BPF]=BPF
+capability[NET_ADMIN]=NET_ADMIN
+capability[PERFMON]=PERFMON
+capability[SYS_RESOURCE]=SYS_RESOURCE
+status_endpoints=passed
+--- unselected control must reach the server ---
+--- selected client must be blocked ---
+wget: download timed out
+command terminated with exit code 1
+packet_decisions_blocked_default_deny=3
+--- selector peer permits only the backend PodIP, not the Service frontend ---
+networkpolicy.networking.k8s.io/smoke-client-deny-egress configured
+selector_peer_policy_epoch=6
+selector_peer_direct_podip=allowed
+wget: download timed out
+command terminated with exit code 1
+selector_peer_service_clusterip=blocked
+--- explicit ClusterIP ipBlock permits the Service frontend, not the backend PodIP ---
+networkpolicy.networking.k8s.io/smoke-client-deny-egress configured
+explicit_clusterip_policy_epoch=7
+explicit_clusterip_ipblock_cidr=10.96.156.62/32
+explicit_clusterip_ipblock_service=allowed
+wget: download timed out
+command terminated with exit code 1
+explicit_clusterip_ipblock_podip=blocked
+capability-only DaemonSet attached and enforced the smoke policy

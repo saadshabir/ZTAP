@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "kernel": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "containerd": "containerd github.com/containerd/containerd/v2 v2.3.4 db8809540e1a7a9da5d518876894933ff55692ab",
+  "competing_agent_refused": true,
+  "daemonset_deletion_preserved_both_directions": true,
+  "explicit_cleanup_removed_enforcement": true,
+  "cleanup_retry_passed": true
+}

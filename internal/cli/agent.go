@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -59,7 +58,7 @@ func newAgentCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load kubernetes config: %w", err)
 			}
-			clientset, err := kubernetes.NewForConfig(config)
+			clientset, err := newNativeKubernetesClient(config)
 			if err != nil {
 				return fmt.Errorf("create kubernetes client: %w", err)
 			}

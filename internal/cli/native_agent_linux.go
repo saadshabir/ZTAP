@@ -17,11 +17,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	networkinglisters "k8s.io/client-go/listers/networking/v1"
 	"k8s.io/client-go/tools/cache"
@@ -46,9 +43,9 @@ type nativeSnapshotTelemetry struct {
 type nativeAgentReconcileFunc func() (policy.CompileResult, int, nativeSnapshotTelemetry, error)
 
 // runNativeKubernetesAgent owns one informer-cache snapshot and one
-// instance-owned engine for the life of the process. Every event causes a
+// instance-owned engine for the life of the process. Every relevant event causes a
 // complete candidate to be compiled before it is handed to Engine.Apply.
-func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, options NativeAgentOptions) (returnErr error) {
+func runNativeKubernetesAgent(ctx context.Context, client nativeKubernetesClient, options NativeAgentOptions) (returnErr error) {
 	if ctx == nil {
 		return errors.New("native agent context is nil")
 	}
@@ -148,47 +145,36 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 		defer stopMetrics()
 	}
 
-	factory := informers.NewSharedInformerFactory(client, 0)
-	// Keep the cluster-wide policy, Pod, and Namespace views, but constrain the
-	// Node informer to the one object this agent can reconcile. This avoids
-	// retaining unrelated node state while preserving relist-driven updates.
-	nodeFactory := informers.NewSharedInformerFactoryWithOptions(client, 0, informers.WithTweakListOptions(func(listOptions *metav1.ListOptions) {
-		listOptions.FieldSelector = fields.OneTermEqualSelector("metadata.name", strings.TrimSpace(options.NodeName)).String()
-	}))
+	informers := newNativeAgentInformers(client, strings.TrimSpace(options.NodeName))
 	informerCtx, stopInformers := context.WithCancel(ctx)
+	var informerWorkers sync.WaitGroup
 	defer func() {
-		// Shutdown waits for every informer goroutine. A startup error or cache
-		// sync timeout does not cancel the caller's context, so stop our own
-		// informer context before waiting for those goroutines to exit.
 		stopInformers()
-		nodeFactory.Shutdown()
-		factory.Shutdown()
+		informerWorkers.Wait()
 	}()
-	policyInformer := factory.Networking().V1().NetworkPolicies()
-	podInformer := factory.Core().V1().Pods()
-	namespaceInformer := factory.Core().V1().Namespaces()
-	nodeInformer := nodeFactory.Core().V1().Nodes()
+	policyInformer, podInformer, namespaceInformer, nodeInformer := informers[0], informers[1], informers[2], informers[3]
 	dirty := make(chan struct{}, 1)
 	// The informer callbacks never block cache workers, even during a slow
 	// apply; bursts collapse into one pending reconciliation.
 	for name, informer := range map[string]cache.SharedIndexInformer{
-		"network policy": policyInformer.Informer(),
-		"pod":            podInformer.Informer(),
-		"namespace":      namespaceInformer.Informer(),
-		"node":           nodeInformer.Informer(),
+		"network policy": policyInformer,
+		"pod":            podInformer,
+		"namespace":      namespaceInformer,
+		"node":           nodeInformer,
 	} {
 		if err := replaceNativeAgentHandler(informer, dirty); err != nil {
 			return fmt.Errorf("register %s dirty signal: %w", name, err)
 		}
 	}
 
-	factory.Start(informerCtx.Done())
-	nodeFactory.Start(informerCtx.Done())
+	for _, informer := range informers {
+		informerWorkers.Go(func() { informer.Run(informerCtx.Done()) })
+	}
 	if err := waitForNativeAgentCacheSync(ctx, nativeAgentCacheSyncMax,
-		policyInformer.Informer().HasSynced,
-		podInformer.Informer().HasSynced,
-		namespaceInformer.Informer().HasSynced,
-		nodeInformer.Informer().HasSynced,
+		policyInformer.HasSynced,
+		podInformer.HasSynced,
+		namespaceInformer.HasSynced,
+		nodeInformer.HasSynced,
 	); err != nil {
 		if err := ctx.Err(); err != nil {
 			return nil
@@ -197,7 +183,7 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, 
 	}
 
 	reconcile := func() (policy.CompileResult, int, nativeSnapshotTelemetry, error) {
-		policies, input, telemetry, err := nativePolicySnapshot(options.NodeName, policyInformer.Lister(), podInformer.Lister(), namespaceInformer.Lister(), nodeInformer.Lister(), resolver)
+		policies, input, telemetry, err := nativePolicySnapshot(options.NodeName, networkinglisters.NewNetworkPolicyLister(policyInformer.GetIndexer()), corelisters.NewPodLister(podInformer.GetIndexer()), corelisters.NewNamespaceLister(namespaceInformer.GetIndexer()), corelisters.NewNodeLister(nodeInformer.GetIndexer()), resolver)
 		if err != nil {
 			return policy.CompileResult{}, 0, telemetry, err
 		}
@@ -419,8 +405,12 @@ func waitNativeAgentDebounce(ctx context.Context, dirty <-chan struct{}) bool {
 // bounded channel is attached directly to each informer.
 func replaceNativeAgentHandler(informer cache.SharedIndexInformer, dirty chan<- struct{}) error {
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(any) { signalNativeAgentDirty(dirty) },
-		UpdateFunc: func(any, any) { signalNativeAgentDirty(dirty) },
+		AddFunc: func(any) { signalNativeAgentDirty(dirty) },
+		UpdateFunc: func(old, current any) {
+			if nativeObjectChanged(old, current) {
+				signalNativeAgentDirty(dirty)
+			}
+		},
 		DeleteFunc: func(any) { signalNativeAgentDirty(dirty) },
 	})
 	return err
@@ -485,19 +475,10 @@ func nativePolicySnapshot(nodeName string, policyLister networkinglisters.Networ
 		return left.Name < right.Name
 	})
 
-	nodeCopy := *node.DeepCopy()
-	namespaceCopies := make([]corev1.Namespace, 0, len(namespaces))
-	for _, object := range namespaces {
-		namespaceCopies = append(namespaceCopies, *object.DeepCopy())
-	}
-	podCopies := make([]corev1.Pod, 0, len(pods))
-	for _, object := range pods {
-		podCopies = append(podCopies, *object.DeepCopy())
-	}
-	if err := validatePacketSocketIsolation(podCopies); err != nil {
+	if err := validatePacketSocketIsolationRefs(pods); err != nil {
 		return nil, policy.ResolutionInput{}, nativeSnapshotTelemetry{}, err
 	}
-	input, err := resolver.BuildResolutionSnapshot(nodeName, &nodeCopy, namespaceCopies, podCopies)
+	input, err := resolver.buildResolutionSnapshot(nodeName, node, namespaces, pods)
 	if err != nil {
 		return nil, policy.ResolutionInput{}, nativeSnapshotTelemetry{}, fmt.Errorf("build Kubernetes resolution snapshot: %w", err)
 	}

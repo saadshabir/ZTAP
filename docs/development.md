@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Go `1.26.9` or a compatible newer toolchain with current security patches is
+Go `1.26.10` or a compatible newer toolchain with current security patches is
 required. Linux is required for privileged eBPF and Kubernetes acceptance
 tests; a non-Linux checkout is suitable for the non-privileged unit tests.
 
@@ -52,8 +52,18 @@ make integration      # privileged Linux engine and agent tests
 make performance      # real-cgroup performance and agent evidence (Linux only)
 make verify-performance # validate retained performance evidence
 make docker           # scratch runtime image
-make clean            # remove bin/, dist/, .cache/, and local build artifacts
+make clean-build-cache # remove Go build cache; keep module downloads/evidence
+make clean-tools      # remove bin/tools only
+make clean-test-outputs # remove disposable outputs in .cache/test-output
+make clean            # clean local binaries and caches; keep dist/ and evidence
 ```
+
+`make clean` preserves evidence in `dist/` and `.cache/`. Remove retained
+evidence explicitly after deciding what to archive; tool binaries, Go build
+cache, and disposable test outputs have independent cleanup targets.
+Keep the tracked `dist/go.mod` marker when removing evidence: its module
+boundary excludes archived Go source snapshots from `./...` package checks.
+Validation logs under `docs/evidence/` are eligible for normal Git commits.
 
 The build writes executables below `bin/`; it does not create generated
 executables in the repository root. `make check-generated` requires the

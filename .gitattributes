@@ -5,3 +5,6 @@
 # handwritten source.
 internal/enforcer/engine_bpfeb.go linguist-generated=true
 internal/enforcer/engine_bpfel.go linguist-generated=true
+
+# Retained patches contain whitespace-significant diff context.
+/docs/evidence/**/*.patch -whitespace

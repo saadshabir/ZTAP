@@ -92,7 +92,6 @@ YAML
 
 for mode in pause term kill api; do
   snapshot="$(agent_snapshot)"
-  agent_pod="$(jq -r '.metadata.name' <<< "$snapshot")"
   old_container="$(jq -r '.status.containerStatuses[0].containerID | sub("containerd://"; "")' <<< "$snapshot")"
   agent_pid="$(docker exec "$kind_node" crictl inspect "$old_container" | jq -r '.info.pid')"
   test "$agent_pid" -gt 1

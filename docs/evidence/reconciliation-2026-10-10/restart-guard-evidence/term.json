@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "mode": "term",
+  "kernel": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "containerd": "containerd github.com/containerd/containerd/v2 v2.3.4 db8809540e1a7a9da5d518876894933ff55692ab",
+  "pod_uid": "e05d748c-098b-4600-b40f-ce18c68560ef",
+  "container_id": "92a3f08e0fe7f2951bae1ffb944445a3133bd74e18a332f15bc3404e029ab33f",
+  "cgroup_id": 55271,
+  "cgroup_path": "/sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pode05d748c_098b_4600_b40f_ce18c68560ef.slice/cri-containerd-92a3f08e0fe7f2951bae1ffb944445a3133bd74e18a332f15bc3404e029ab33f.scope",
+  "observation_started_ns": 1791609804047058000,
+  "observation_finished_ns": 1791609807124497000,
+  "kernel_evidence": {
+    "schema_version": 2,
+    "cgroup_id": 55271,
+    "policy_epoch": 14,
+    "blocked_ingress": 136,
+    "blocked_egress": 144
+  },
+  "replacement_uid": "ab27b73a-135d-4975-b464-25f13cca6557",
+  "old_controller_container_id": "8b83b0b8bb477cade654f3b3fa21065f898c07abe7bc3d6a31747a9b98eabcf8",
+  "replacement_container_id": "441f3d9249bfb288313752d9723db1b2b2e34b3a249cf589a90fb60a98086c69"
+}

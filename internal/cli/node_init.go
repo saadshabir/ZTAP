@@ -7,7 +7,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/kubernetes"
+	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 func newNodeInitCmd() *cobra.Command {
@@ -22,13 +22,13 @@ func newNodeInitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client, err := kubernetes.NewForConfig(config)
+			client, err := coreclient.NewForConfig(config)
 			if err != nil {
 				return err
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			if err := initializeNodeBootstrap(ctx, client, config, node, root, runDir); err != nil {
+			if err := initializeNodeBootstrap(ctx, &nativeClients{core: client}, config, node, root, runDir); err != nil {
 				return err
 			}
 			if stay {

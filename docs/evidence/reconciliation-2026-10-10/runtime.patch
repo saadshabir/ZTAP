@@ -1,0 +1,415 @@
+diff --git a/internal/cli/agent.go b/internal/cli/agent.go
+index 0970b4f..6536ef0 100644
+--- a/internal/cli/agent.go
++++ b/internal/cli/agent.go
+@@ -9,7 +9,6 @@ import (
+ 	"syscall"
+ 
+ 	"github.com/spf13/cobra"
+-	"k8s.io/client-go/kubernetes"
+ 	"k8s.io/client-go/rest"
+ 	"k8s.io/client-go/tools/clientcmd"
+ )
+@@ -59,7 +58,7 @@ func newAgentCmd() *cobra.Command {
+ 			if err != nil {
+ 				return fmt.Errorf("load kubernetes config: %w", err)
+ 			}
+-			clientset, err := kubernetes.NewForConfig(config)
++			clientset, err := newNativeKubernetesClient(config)
+ 			if err != nil {
+ 				return fmt.Errorf("create kubernetes client: %w", err)
+ 			}
+diff --git a/internal/cli/k8s_policy_snapshot_linux.go b/internal/cli/k8s_policy_snapshot_linux.go
+index 4c298fb..889f23c 100644
+--- a/internal/cli/k8s_policy_snapshot_linux.go
++++ b/internal/cli/k8s_policy_snapshot_linux.go
+@@ -23,6 +23,20 @@ import (
+ // view; this method does not issue independent API reads that could mix
+ // resource versions. Cgroup paths are retained separately for Engine links.
+ func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *corev1.Node, namespaces []corev1.Namespace, pods []corev1.Pod) (policy.ResolutionInput, error) {
++	namespaceRefs := make([]*corev1.Namespace, len(namespaces))
++	for i := range namespaces {
++		namespaceRefs[i] = &namespaces[i]
++	}
++	podRefs := make([]*corev1.Pod, len(pods))
++	for i := range pods {
++		podRefs[i] = &pods[i]
++	}
++	return r.buildResolutionSnapshot(nodeName, node, namespaceRefs, podRefs)
++}
++
++// Informer objects are immutable. Read this cache view directly and copy only
++// compiler facts into ResolutionInput; never clone full Kubernetes objects.
++func (r *k8sSubjectResolver) buildResolutionSnapshot(nodeName string, node *corev1.Node, namespaces []*corev1.Namespace, pods []*corev1.Pod) (policy.ResolutionInput, error) {
+ 	nodeName = strings.TrimSpace(nodeName)
+ 	if nodeName == "" {
+ 		return policy.ResolutionInput{}, errors.New("node name is required to resolve the local policy snapshot")
+@@ -40,7 +54,7 @@ func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *core
+ 		Pods:       make([]policy.ResolvedPod, 0, len(pods)),
+ 	}
+ 	for i := range namespaces {
+-		ns := &namespaces[i]
++		ns := namespaces[i]
+ 		input.Namespaces = append(input.Namespaces, policy.ResolvedNamespace{
+ 			Name:   ns.Name,
+ 			Labels: copyStringMap(ns.Labels),
+@@ -55,7 +69,7 @@ func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *core
+ 	unresolvedRunning := 0
+ 	observedAt := time.Now()
+ 	for i := range pods {
+-		pod := &pods[i]
++		pod := pods[i]
+ 		// Terminal Pods retain their labels and IPs in the API even after the
+ 		// runtime releases those addresses. They must never authorize a new
+ 		// workload that subsequently receives the same IP.
+@@ -115,9 +129,10 @@ func (r *k8sSubjectResolver) BuildResolutionSnapshot(nodeName string, node *core
+ 
+ 	// Drop cache entries for containers no longer present in this immutable
+ 	// snapshot. Entries that remain are still identity-checked on every use.
+-	r.pruneCgroupCache(cgroupPaths)
++	if err := r.publishWorkloadSnapshot(cgroupPaths, activeContainers); err != nil {
++		return policy.ResolutionInput{}, err
++	}
+ 	r.pruneRunningObservations(activeContainers)
+-	r.replaceCgroupPaths(cgroupPaths)
+ 	r.setUnresolvedRunning(unresolvedRunning)
+ 	return input, nil
+ }
+@@ -172,16 +187,8 @@ func (r *k8sSubjectResolver) ResolveWorkloadIdentity(ctx context.Context, id uin
+ 	}
+ 	r.mu.RLock()
+ 	defer r.mu.RUnlock()
+-	for key, cached := range r.cgroupCache {
+-		if cached.value.ID != id {
+-			continue
+-		}
+-		relative, err := filepath.Rel(r.cgroupRoot, cached.value.Path)
+-		if err != nil {
+-			return enforcer.WorkloadIdentity{}, err
+-		}
+-		return enforcer.WorkloadIdentity{CgroupID: id, Device: cached.identity.device,
+-			PodUID: key.podUID, ContainerID: key.containerID, Path: relative}, nil
++	if identity, ok := r.workloadIdentities[id]; ok {
++		return identity, nil
+ 	}
+ 	return enforcer.WorkloadIdentity{}, fmt.Errorf("no complete running identity for cgroup %d in candidate snapshot", id)
+ }
+@@ -202,14 +209,36 @@ type resolvedPodCgroup struct {
+ 	Path string
+ }
+ 
+-func (r *k8sSubjectResolver) replaceCgroupPaths(paths map[uint64]string) {
+-	copyPaths := make(map[uint64]string, len(paths))
+-	for id, path := range paths {
+-		copyPaths[id] = filepath.Clean(path)
+-	}
++// Publish paths and complete identities together, only after conflict checks.
++// Cache entries absent from the candidate cannot authorize recovered ownership.
++func (r *k8sSubjectResolver) publishWorkloadSnapshot(paths map[uint64]string, active map[cgroupCacheKey]struct{}) error {
+ 	r.mu.Lock()
+-	r.cgroupPath = copyPaths
+-	r.mu.Unlock()
++	defer r.mu.Unlock()
++	identities := make(map[uint64]enforcer.WorkloadIdentity, len(paths))
++	for key := range active {
++		cached, ok := r.cgroupCache[key]
++		if !ok || paths[cached.value.ID] != cached.value.Path {
++			continue
++		}
++		relative, err := filepath.Rel(r.cgroupRoot, cached.value.Path)
++		if err != nil {
++			return err
++		}
++		identity := enforcer.WorkloadIdentity{CgroupID: cached.value.ID, Device: cached.identity.device,
++			PodUID: key.podUID, ContainerID: key.containerID, Path: relative}
++		if previous, exists := identities[identity.CgroupID]; exists && previous != identity {
++			return fmt.Errorf("cgroup ID %d resolved to conflicting workload identities", identity.CgroupID)
++		}
++		identities[identity.CgroupID] = identity
++	}
++	for key, cached := range r.cgroupCache {
++		if _, ok := active[key]; !ok || paths[cached.value.ID] != cached.value.Path {
++			delete(r.cgroupCache, key)
++		}
++	}
++	r.cgroupPath = paths
++	r.workloadIdentities = identities
++	return nil
+ }
+ 
+ func nodeStatusIPs(node *corev1.Node) []netip.Addr {
+diff --git a/internal/cli/k8s_subject_resolver_linux.go b/internal/cli/k8s_subject_resolver_linux.go
+index 9d63aac..8bf16ac 100644
+--- a/internal/cli/k8s_subject_resolver_linux.go
++++ b/internal/cli/k8s_subject_resolver_linux.go
+@@ -16,6 +16,7 @@ import (
+ 
+ 	corev1 "k8s.io/api/core/v1"
+ 
++	"github.com/saadshabir/ZTAP/internal/enforcer"
+ 	"github.com/saadshabir/ZTAP/internal/policy"
+ )
+ 
+@@ -23,6 +24,7 @@ type k8sSubjectResolver struct {
+ 	cgroupRoot                  string
+ 	mu                          sync.RWMutex
+ 	cgroupPath                  map[uint64]string
++	workloadIdentities          map[uint64]enforcer.WorkloadIdentity
+ 	cgroupCache                 map[cgroupCacheKey]cachedPodCgroup
+ 	runningObservedAt           map[cgroupCacheKey]time.Time
+ 	unresolvedRunningContainers int
+@@ -342,14 +344,3 @@ func (r *k8sSubjectResolver) deleteCachedCgroup(key cgroupCacheKey) {
+ 	delete(r.cgroupCache, key)
+ 	r.mu.Unlock()
+ }
+-
+-func (r *k8sSubjectResolver) pruneCgroupCache(paths map[uint64]string) {
+-	r.mu.Lock()
+-	defer r.mu.Unlock()
+-	for key, cached := range r.cgroupCache {
+-		path, ok := paths[cached.value.ID]
+-		if !ok || filepath.Clean(path) != cached.value.Path {
+-			delete(r.cgroupCache, key)
+-		}
+-	}
+-}
+diff --git a/internal/cli/native_agent_linux.go b/internal/cli/native_agent_linux.go
+index d5a1be0..3236622 100644
+--- a/internal/cli/native_agent_linux.go
++++ b/internal/cli/native_agent_linux.go
+@@ -17,11 +17,8 @@ import (
+ 	corev1 "k8s.io/api/core/v1"
+ 	networkingv1 "k8s.io/api/networking/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+-	"k8s.io/apimachinery/pkg/fields"
+ 	"k8s.io/apimachinery/pkg/labels"
+ 	"k8s.io/apimachinery/pkg/util/intstr"
+-	"k8s.io/client-go/informers"
+-	"k8s.io/client-go/kubernetes"
+ 	corelisters "k8s.io/client-go/listers/core/v1"
+ 	networkinglisters "k8s.io/client-go/listers/networking/v1"
+ 	"k8s.io/client-go/tools/cache"
+@@ -46,9 +43,9 @@ type nativeSnapshotTelemetry struct {
+ type nativeAgentReconcileFunc func() (policy.CompileResult, int, nativeSnapshotTelemetry, error)
+ 
+ // runNativeKubernetesAgent owns one informer-cache snapshot and one
+-// instance-owned engine for the life of the process. Every event causes a
++// instance-owned engine for the life of the process. Every relevant event causes a
+ // complete candidate to be compiled before it is handed to Engine.Apply.
+-func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface, options NativeAgentOptions) (returnErr error) {
++func runNativeKubernetesAgent(ctx context.Context, client nativeKubernetesClient, options NativeAgentOptions) (returnErr error) {
+ 	if ctx == nil {
+ 		return errors.New("native agent context is nil")
+ 	}
+@@ -148,47 +145,36 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface,
+ 		defer stopMetrics()
+ 	}
+ 
+-	factory := informers.NewSharedInformerFactory(client, 0)
+-	// Keep the cluster-wide policy, Pod, and Namespace views, but constrain the
+-	// Node informer to the one object this agent can reconcile. This avoids
+-	// retaining unrelated node state while preserving relist-driven updates.
+-	nodeFactory := informers.NewSharedInformerFactoryWithOptions(client, 0, informers.WithTweakListOptions(func(listOptions *metav1.ListOptions) {
+-		listOptions.FieldSelector = fields.OneTermEqualSelector("metadata.name", strings.TrimSpace(options.NodeName)).String()
+-	}))
++	informers := newNativeAgentInformers(client, strings.TrimSpace(options.NodeName))
+ 	informerCtx, stopInformers := context.WithCancel(ctx)
++	var informerWorkers sync.WaitGroup
+ 	defer func() {
+-		// Shutdown waits for every informer goroutine. A startup error or cache
+-		// sync timeout does not cancel the caller's context, so stop our own
+-		// informer context before waiting for those goroutines to exit.
+ 		stopInformers()
+-		nodeFactory.Shutdown()
+-		factory.Shutdown()
++		informerWorkers.Wait()
+ 	}()
+-	policyInformer := factory.Networking().V1().NetworkPolicies()
+-	podInformer := factory.Core().V1().Pods()
+-	namespaceInformer := factory.Core().V1().Namespaces()
+-	nodeInformer := nodeFactory.Core().V1().Nodes()
++	policyInformer, podInformer, namespaceInformer, nodeInformer := informers[0], informers[1], informers[2], informers[3]
+ 	dirty := make(chan struct{}, 1)
+ 	// The informer callbacks never block cache workers, even during a slow
+ 	// apply; bursts collapse into one pending reconciliation.
+ 	for name, informer := range map[string]cache.SharedIndexInformer{
+-		"network policy": policyInformer.Informer(),
+-		"pod":            podInformer.Informer(),
+-		"namespace":      namespaceInformer.Informer(),
+-		"node":           nodeInformer.Informer(),
++		"network policy": policyInformer,
++		"pod":            podInformer,
++		"namespace":      namespaceInformer,
++		"node":           nodeInformer,
+ 	} {
+ 		if err := replaceNativeAgentHandler(informer, dirty); err != nil {
+ 			return fmt.Errorf("register %s dirty signal: %w", name, err)
+ 		}
+ 	}
+ 
+-	factory.Start(informerCtx.Done())
+-	nodeFactory.Start(informerCtx.Done())
++	for _, informer := range informers {
++		informerWorkers.Go(func() { informer.Run(informerCtx.Done()) })
++	}
+ 	if err := waitForNativeAgentCacheSync(ctx, nativeAgentCacheSyncMax,
+-		policyInformer.Informer().HasSynced,
+-		podInformer.Informer().HasSynced,
+-		namespaceInformer.Informer().HasSynced,
+-		nodeInformer.Informer().HasSynced,
++		policyInformer.HasSynced,
++		podInformer.HasSynced,
++		namespaceInformer.HasSynced,
++		nodeInformer.HasSynced,
+ 	); err != nil {
+ 		if err := ctx.Err(); err != nil {
+ 			return nil
+@@ -197,7 +183,7 @@ func runNativeKubernetesAgent(ctx context.Context, client kubernetes.Interface,
+ 	}
+ 
+ 	reconcile := func() (policy.CompileResult, int, nativeSnapshotTelemetry, error) {
+-		policies, input, telemetry, err := nativePolicySnapshot(options.NodeName, policyInformer.Lister(), podInformer.Lister(), namespaceInformer.Lister(), nodeInformer.Lister(), resolver)
++		policies, input, telemetry, err := nativePolicySnapshot(options.NodeName, networkinglisters.NewNetworkPolicyLister(policyInformer.GetIndexer()), corelisters.NewPodLister(podInformer.GetIndexer()), corelisters.NewNamespaceLister(namespaceInformer.GetIndexer()), corelisters.NewNodeLister(nodeInformer.GetIndexer()), resolver)
+ 		if err != nil {
+ 			return policy.CompileResult{}, 0, telemetry, err
+ 		}
+@@ -419,8 +405,12 @@ func waitNativeAgentDebounce(ctx context.Context, dirty <-chan struct{}) bool {
+ // bounded channel is attached directly to each informer.
+ func replaceNativeAgentHandler(informer cache.SharedIndexInformer, dirty chan<- struct{}) error {
+ 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+-		AddFunc:    func(any) { signalNativeAgentDirty(dirty) },
+-		UpdateFunc: func(any, any) { signalNativeAgentDirty(dirty) },
++		AddFunc: func(any) { signalNativeAgentDirty(dirty) },
++		UpdateFunc: func(old, current any) {
++			if nativeObjectChanged(old, current) {
++				signalNativeAgentDirty(dirty)
++			}
++		},
+ 		DeleteFunc: func(any) { signalNativeAgentDirty(dirty) },
+ 	})
+ 	return err
+@@ -485,19 +475,10 @@ func nativePolicySnapshot(nodeName string, policyLister networkinglisters.Networ
+ 		return left.Name < right.Name
+ 	})
+ 
+-	nodeCopy := *node.DeepCopy()
+-	namespaceCopies := make([]corev1.Namespace, 0, len(namespaces))
+-	for _, object := range namespaces {
+-		namespaceCopies = append(namespaceCopies, *object.DeepCopy())
+-	}
+-	podCopies := make([]corev1.Pod, 0, len(pods))
+-	for _, object := range pods {
+-		podCopies = append(podCopies, *object.DeepCopy())
+-	}
+-	if err := validatePacketSocketIsolation(podCopies); err != nil {
++	if err := validatePacketSocketIsolationRefs(pods); err != nil {
+ 		return nil, policy.ResolutionInput{}, nativeSnapshotTelemetry{}, err
+ 	}
+-	input, err := resolver.BuildResolutionSnapshot(nodeName, &nodeCopy, namespaceCopies, podCopies)
++	input, err := resolver.buildResolutionSnapshot(nodeName, node, namespaces, pods)
+ 	if err != nil {
+ 		return nil, policy.ResolutionInput{}, nativeSnapshotTelemetry{}, fmt.Errorf("build Kubernetes resolution snapshot: %w", err)
+ 	}
+diff --git a/internal/cli/native_agent_other.go b/internal/cli/native_agent_other.go
+index af11f9f..23132a1 100644
+--- a/internal/cli/native_agent_other.go
++++ b/internal/cli/native_agent_other.go
+@@ -5,10 +5,8 @@ package cli
+ import (
+ 	"context"
+ 	"errors"
+-
+-	"k8s.io/client-go/kubernetes"
+ )
+ 
+-func runNativeKubernetesAgent(context.Context, kubernetes.Interface, NativeAgentOptions) error {
++func runNativeKubernetesAgent(context.Context, nativeKubernetesClient, NativeAgentOptions) error {
+ 	return errors.New("the native Kubernetes node agent requires Linux")
+ }
+diff --git a/internal/cli/node_init.go b/internal/cli/node_init.go
+index 61d7190..74d5dd7 100644
+--- a/internal/cli/node_init.go
++++ b/internal/cli/node_init.go
+@@ -7,7 +7,7 @@ import (
+ 	"syscall"
+ 
+ 	"github.com/spf13/cobra"
+-	"k8s.io/client-go/kubernetes"
++	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
+ )
+ 
+ func newNodeInitCmd() *cobra.Command {
+@@ -22,13 +22,13 @@ func newNodeInitCmd() *cobra.Command {
+ 			if err != nil {
+ 				return err
+ 			}
+-			client, err := kubernetes.NewForConfig(config)
++			client, err := coreclient.NewForConfig(config)
+ 			if err != nil {
+ 				return err
+ 			}
+ 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+ 			defer stop()
+-			if err := initializeNodeBootstrap(ctx, client, config, node, root, runDir); err != nil {
++			if err := initializeNodeBootstrap(ctx, &nativeClients{core: client}, config, node, root, runDir); err != nil {
+ 				return err
+ 			}
+ 			if stay {
+diff --git a/internal/cli/node_init_linux.go b/internal/cli/node_init_linux.go
+index 64e0d92..edaf7da 100644
+--- a/internal/cli/node_init_linux.go
++++ b/internal/cli/node_init_linux.go
+@@ -23,7 +23,6 @@ import (
+ 	"golang.org/x/sys/unix"
+ 	corev1 "k8s.io/api/core/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+-	"k8s.io/client-go/kubernetes"
+ 	"k8s.io/client-go/rest"
+ )
+ 
+@@ -55,7 +54,7 @@ func nodeBootID() (string, error) {
+ // The host-network initializer uses authenticated API facts and its own exact
+ // kernel cgroup membership. A network namespace name or namespace label never
+ // grants a workload the bootstrap exception.
+-func initializeNodeBootstrap(ctx context.Context, client kubernetes.Interface, config *rest.Config, nodeName, cgroupRoot, runDir string) error {
++func initializeNodeBootstrap(ctx context.Context, client nativeCoreClient, config *rest.Config, nodeName, cgroupRoot, runDir string) error {
+ 	if config == nil || config.Insecure {
+ 		return errors.New("node initialization requires verified Kubernetes TLS")
+ 	}
+diff --git a/internal/cli/node_init_other.go b/internal/cli/node_init_other.go
+index e721dcd..d0e0871 100644
+--- a/internal/cli/node_init_other.go
++++ b/internal/cli/node_init_other.go
+@@ -6,10 +6,9 @@ import (
+ 	"context"
+ 	"errors"
+ 
+-	"k8s.io/client-go/kubernetes"
+ 	"k8s.io/client-go/rest"
+ )
+ 
+-func initializeNodeBootstrap(context.Context, kubernetes.Interface, *rest.Config, string, string, string) error {
++func initializeNodeBootstrap(context.Context, nativeCoreClient, *rest.Config, string, string, string) error {
+ 	return errors.New("node guard initialization requires Linux")
+ }
+diff --git a/internal/cli/workload_security.go b/internal/cli/workload_security.go
+index f822e15..616e906 100644
+--- a/internal/cli/workload_security.go
++++ b/internal/cli/workload_security.go
+@@ -12,8 +12,15 @@ import (
+ // Host-network Pods are outside the enforcement contract; terminal Pods no
+ // longer own their network namespaces or peer addresses.
+ func validatePacketSocketIsolation(pods []corev1.Pod) error {
++	refs := make([]*corev1.Pod, len(pods))
+ 	for i := range pods {
+-		pod := &pods[i]
++		refs[i] = &pods[i]
++	}
++	return validatePacketSocketIsolationRefs(refs)
++}
++
++func validatePacketSocketIsolationRefs(pods []*corev1.Pod) error {
++	for _, pod := range pods {
+ 		if pod.Spec.HostNetwork || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+ 			continue
+ 		}

@@ -30,13 +30,11 @@ ACTIONLINT_VERSION := v1.7.12
 ACTIONLINT := $(TOOLS_DIR)/actionlint
 GOVULNCHECK_VERSION := v1.1.4
 GOVULNCHECK := $(TOOLS_DIR)/govulncheck
-GO_FILES := $(shell find . -type f -name '*.go' \
-	-not -path './vendor/*' \
-	-not -path './.cache/*' \
-	-not -path './bin/*' \
-	-not -path './dist/*')
+GO_FILES := $(shell find . \( -path './vendor' -o -path './.cache' \
+	-o -path './bin' -o -path './dist' -o -path './.git' \) -prune \
+	-o -type f -name '*.go' -print)
 
-.PHONY: build test vet fmt-check actionlint lint vulncheck check generate check-generated integration performance verify-performance docker clean
+.PHONY: build test vet fmt-check actionlint lint vulncheck check generate check-generated integration performance verify-performance docker clean clean-build-cache clean-tools clean-test-outputs
 
 build:
 	@mkdir -p "$(BIN_DIR)"
@@ -139,8 +137,19 @@ verify-performance:
 docker:
 	docker build -t ztap:dev .
 
-clean:
-	@if [ -d ./.cache ]; then chmod -R u+w ./.cache; fi
+clean-build-cache:
+	GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) clean -cache
+
+clean-tools:
+	rm -rf -- "$(TOOLS_DIR)"
+
+# Evidence in dist and .cache is retained, including the dist/go.mod boundary
+# that excludes archived sources from Go package discovery. New disposable
+# test output belongs in .cache/test-output.
+clean-test-outputs:
 	rm -f -- ./ztap ./bpfgen ./*.exe ./*.test ./coverage*.out ./coverage.html
-	rm -rf -- ./bin ./dist ./.cache ./.pytest_cache ./.ruff_cache
+	rm -rf -- ./.cache/test-output ./.pytest_cache ./.ruff_cache
+
+clean: clean-build-cache clean-tools clean-test-outputs
+	rm -f -- "$(BIN_DIR)/ztap"
 	$(MAKE) -C bpf clean

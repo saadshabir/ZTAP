@@ -1,0 +1,21 @@
+{
+  "timestamp_utc": "2026-10-10T19:45:44.745862261Z",
+  "run_id": "optimization-final-after",
+  "go_version": "go1.26.9",
+  "goos": "linux",
+  "goarch": "arm64",
+  "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "cpus": 2,
+  "subjects": 250,
+  "policies": 25,
+  "rules": 2500,
+  "samples": 3,
+  "reconcile_samples_ms": [
+    87.579427,
+    14.513988,
+    19.526233
+  ],
+  "reconcile_p95_ms": 87.579427,
+  "reconcile_budget_ms": 2000,
+  "scope": "actual native agent compile-and-apply reconciliation after synchronized fake informer cache sync; excludes Kubernetes list latency and fixed dirty-event debounce"
+}

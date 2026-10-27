@@ -1,0 +1,229 @@
+{
+  "date": "2026-10-10",
+  "baseline_commit": "3657d9fa485c0d510734cf0f52d6b85f75cebce2",
+  "candidate": "working tree; runtime.patch and runtime-added.tar bind source changes",
+  "go_version": "go1.26.9",
+  "goos": "linux",
+  "goarch": "arm64",
+  "kernel": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "cpus": "0,1",
+  "gomaxprocs": 2,
+  "benchmark_samples": 5,
+  "benchmark_benchtime": "500ms",
+  "cold_build_samples": 3,
+  "kernel_samples": 3,
+  "results": {
+    "before": {
+      "cold_build_seconds": [
+        42.35,
+        39.81,
+        38.75
+      ],
+      "cold_build_median_seconds": 39.81,
+      "binary_bytes": 57278626,
+      "docker_inspect_size_bytes": 14824750,
+      "image_id": "sha256:b00099eb249ded80f2e86883a479fc8654b36dbe76e205a4ae32a9051d8aaea4",
+      "dependency_packages": 776,
+      "snapshot_medians": {
+        "unchanged": {
+          "ns_per_op": 1915393,
+          "bytes_per_op": 1874406,
+          "allocations_per_op": 10913
+        },
+        "policy-change": {
+          "ns_per_op": 1761324,
+          "bytes_per_op": 1876457,
+          "allocations_per_op": 10935
+        },
+        "pod-churn": {
+          "ns_per_op": 1702700,
+          "bytes_per_op": 1878764,
+          "allocations_per_op": 10930
+        },
+        "selectors": {
+          "ns_per_op": 3604695,
+          "bytes_per_op": 2697927,
+          "allocations_per_op": 27889
+        }
+      },
+      "phase5-agent-reconcile": {
+        "timestamp_utc": "2026-10-10T19:44:54.332808632Z",
+        "run_id": "optimization-final-before",
+        "go_version": "go1.26.9",
+        "goos": "linux",
+        "goarch": "arm64",
+        "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+        "cpus": 2,
+        "subjects": 250,
+        "policies": 25,
+        "rules": 2500,
+        "samples": 3,
+        "reconcile_samples_ms": [
+          89.714301,
+          19.755984,
+          24.781355
+        ],
+        "reconcile_p95_ms": 89.714301,
+        "reconcile_budget_ms": 2000,
+        "scope": "actual native agent compile-and-apply reconciliation after synchronized fake informer cache sync; excludes Kubernetes list latency and fixed dirty-event debounce"
+      },
+      "phase5-agent-event": {
+        "timestamp_utc": "2026-10-10T19:44:55.441130298Z",
+        "run_id": "optimization-final-before",
+        "go_version": "go1.26.9",
+        "goos": "linux",
+        "goarch": "arm64",
+        "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+        "cpus": 2,
+        "subjects": 250,
+        "policies": 25,
+        "rules": 2500,
+        "event_samples_ms": [
+          103.112748,
+          104.505663,
+          102.823915
+        ],
+        "event_p95_ms": 104.505663,
+        "event_budget_ms": 3000,
+        "scope": "synchronized fake Kubernetes informer event, fixed debounce, native compilation, and real engine apply"
+      },
+      "phase5-agent-resource": {
+        "timestamp_utc": "2026-10-10T19:45:26.626795792Z",
+        "run_id": "optimization-final-before",
+        "go_version": "go1.26.9",
+        "goos": "linux",
+        "goarch": "arm64",
+        "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+        "cpus": 2,
+        "subjects": 250,
+        "policies": 25,
+        "rules": 2500,
+        "samples": 3,
+        "quiet_seconds": 5,
+        "process_clock_ticks_per_second": 100,
+        "cpu_core_samples": [
+          0,
+          0.0009976012802913156,
+          0
+        ],
+        "rss_mib_samples": [
+          55.5078125,
+          54.125,
+          51.9921875
+        ],
+        "max_cpu_cores": 0.0009976012802913156,
+        "max_rss_mib": 55.5078125,
+        "cpu_budget_cores": 0.1,
+        "rss_budget_mib": 200,
+        "scope": "dedicated helper process running the native agent with a fake Kubernetes client and the 250-Pod/25-policy/2,500-rule fixture; kernel-map memory is excluded"
+      },
+      "binary_sha256": "f238070c5178956be358cf863a3cdf21d4ec77518154db3f56b4f0d41a247b74"
+    },
+    "after": {
+      "cold_build_seconds": [
+        24.69,
+        24.66,
+        27.37
+      ],
+      "cold_build_median_seconds": 24.69,
+      "binary_bytes": 40173730,
+      "docker_inspect_size_bytes": 12362414,
+      "image_id": "sha256:4d02bb5bdbe52725a9defd7b8a55c3e5d14611c08ea7389d283b5656f57a695a",
+      "dependency_packages": 553,
+      "snapshot_medians": {
+        "unchanged": {
+          "ns_per_op": 1624345,
+          "bytes_per_op": 1203984,
+          "allocations_per_op": 7908
+        },
+        "policy-change": {
+          "ns_per_op": 1684041,
+          "bytes_per_op": 1205386,
+          "allocations_per_op": 7930
+        },
+        "pod-churn": {
+          "ns_per_op": 1539145,
+          "bytes_per_op": 1206875,
+          "allocations_per_op": 7925
+        },
+        "selectors": {
+          "ns_per_op": 3473192,
+          "bytes_per_op": 2028760,
+          "allocations_per_op": 24885
+        }
+      },
+      "phase5-agent-reconcile": {
+        "timestamp_utc": "2026-10-10T19:45:44.745862261Z",
+        "run_id": "optimization-final-after",
+        "go_version": "go1.26.9",
+        "goos": "linux",
+        "goarch": "arm64",
+        "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+        "cpus": 2,
+        "subjects": 250,
+        "policies": 25,
+        "rules": 2500,
+        "samples": 3,
+        "reconcile_samples_ms": [
+          87.579427,
+          14.513988,
+          19.526233
+        ],
+        "reconcile_p95_ms": 87.579427,
+        "reconcile_budget_ms": 2000,
+        "scope": "actual native agent compile-and-apply reconciliation after synchronized fake informer cache sync; excludes Kubernetes list latency and fixed dirty-event debounce"
+      },
+      "phase5-agent-event": {
+        "timestamp_utc": "2026-10-10T19:45:45.846341309Z",
+        "run_id": "optimization-final-after",
+        "go_version": "go1.26.9",
+        "goos": "linux",
+        "goarch": "arm64",
+        "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+        "cpus": 2,
+        "subjects": 250,
+        "policies": 25,
+        "rules": 2500,
+        "event_samples_ms": [
+          105.409371,
+          105.761704,
+          103.067706
+        ],
+        "event_p95_ms": 105.761704,
+        "event_budget_ms": 3000,
+        "scope": "synchronized fake Kubernetes informer event, fixed debounce, native compilation, and real engine apply"
+      },
+      "phase5-agent-resource": {
+        "timestamp_utc": "2026-10-10T19:46:16.979409679Z",
+        "run_id": "optimization-final-after",
+        "go_version": "go1.26.9",
+        "goos": "linux",
+        "goarch": "arm64",
+        "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+        "cpus": 2,
+        "subjects": 250,
+        "policies": 25,
+        "rules": 2500,
+        "samples": 3,
+        "quiet_seconds": 5,
+        "process_clock_ticks_per_second": 100,
+        "cpu_core_samples": [
+          0,
+          0.0009974952688315613,
+          0
+        ],
+        "rss_mib_samples": [
+          52.8046875,
+          47.7109375,
+          47.30859375
+        ],
+        "max_cpu_cores": 0.0009974952688315613,
+        "max_rss_mib": 52.8046875,
+        "cpu_budget_cores": 0.1,
+        "rss_budget_mib": 200,
+        "scope": "dedicated helper process running the native agent with a fake Kubernetes client and the 250-Pod/25-policy/2,500-rule fixture; kernel-map memory is excluded"
+      },
+      "binary_sha256": "fc09261ff54595fd32755d2c908c3ba9a0910ffd77085aef4a268ae7fd20e213"
+    }
+  }
+}

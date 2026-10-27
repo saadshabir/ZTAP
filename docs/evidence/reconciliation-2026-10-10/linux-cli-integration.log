@@ -1,0 +1,626 @@
+=== RUN   TestAgentRequiresNodeName
+Error: --node-name is required
+Usage:
+  agent [flags]
+
+Flags:
+      --bpffs-root string    Mounted bpffs root used for stable engine maps (default "/sys/fs/bpf")
+      --cgroup-root string   Mounted cgroup v2 root used for subject attachment (default "/sys/fs/cgroup")
+      --dry-run              Compile snapshots without loading or attaching eBPF
+  -h, --help                 help for agent
+      --kubeconfig string    Path to kubeconfig; empty uses in-cluster credentials
+      --listen string        Local health, readiness, and metrics listen address (default ":9090")
+      --node-name string     Kubernetes node name to reconcile (required)
+      --run-dir string       Directory containing the node-agent lock (default "/run/ztap")
+
+--- PASS: TestAgentRequiresNodeName (0.00s)
+=== RUN   TestAgentRegistersNativeFlags
+--- PASS: TestAgentRegistersNativeFlags (0.00s)
+=== RUN   TestAgentRejectsInvalidRootLogLevelBeforeKubeconfig
+--- PASS: TestAgentRejectsInvalidRootLogLevelBeforeKubeconfig (0.00s)
+=== RUN   TestCleanupRefusesCompetingNodeAgent
+--- PASS: TestCleanupRefusesCompetingNodeAgent (0.00s)
+=== RUN   TestAcquireFlowReaderLockIsExclusiveAndReleases
+--- PASS: TestAcquireFlowReaderLockIsExclusiveAndReleases (0.00s)
+=== RUN   TestFormatFlowJSONIncludesEngineMetadata
+--- PASS: TestFormatFlowJSONIncludesEngineMetadata (0.00s)
+=== RUN   TestFormatFlowJSONEscapesStringFields
+--- PASS: TestFormatFlowJSONEscapesStringFields (0.00s)
+=== RUN   TestMapOwningReaderStartRejectsCanceledContextBeforeOwnershipChecks
+--- PASS: TestMapOwningReaderStartRejectsCanceledContextBeforeOwnershipChecks (0.00s)
+=== RUN   TestMapOwningReaderStartRechecksCancellationAfterWaitingForLock
+--- PASS: TestMapOwningReaderStartRechecksCancellationAfterWaitingForLock (0.00s)
+=== RUN   TestStreamFlowsRejectsCanceledContextBeforeLockOrPinnedMapOpen
+--- PASS: TestStreamFlowsRejectsCanceledContextBeforeLockOrPinnedMapOpen (0.00s)
+=== RUN   TestMonitorPinnedAgentStatusRejectsCanceledContextBeforeMapLookup
+--- PASS: TestMonitorPinnedAgentStatusRejectsCanceledContextBeforeMapLookup (0.00s)
+=== RUN   TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures
+=== RUN   TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/reader_and_status_errors
+=== RUN   TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/status_error_after_clean_reader_exit
+=== RUN   TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/stop_error
+=== RUN   TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/internal_cancellation_is_suppressed
+=== RUN   TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/caller_cancellation_wins
+--- PASS: TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures (0.00s)
+    --- PASS: TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/reader_and_status_errors (0.00s)
+    --- PASS: TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/status_error_after_clean_reader_exit (0.00s)
+    --- PASS: TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/stop_error (0.00s)
+    --- PASS: TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/internal_cancellation_is_suppressed (0.00s)
+    --- PASS: TestJoinPinnedFlowReaderErrorsPreservesTerminalStatusFailures/caller_cancellation_wins (0.00s)
+=== RUN   TestValidatePinnedAgentStatus
+=== RUN   TestValidatePinnedAgentStatus/schema
+=== RUN   TestValidatePinnedAgentStatus/lifecycle
+=== RUN   TestValidatePinnedAgentStatus/epoch
+=== RUN   TestValidatePinnedAgentStatus/missing_heartbeat
+=== RUN   TestValidatePinnedAgentStatus/future_heartbeat
+=== RUN   TestValidatePinnedAgentStatus/heartbeat
+--- PASS: TestValidatePinnedAgentStatus (0.00s)
+    --- PASS: TestValidatePinnedAgentStatus/schema (0.00s)
+    --- PASS: TestValidatePinnedAgentStatus/lifecycle (0.00s)
+    --- PASS: TestValidatePinnedAgentStatus/epoch (0.00s)
+    --- PASS: TestValidatePinnedAgentStatus/missing_heartbeat (0.00s)
+    --- PASS: TestValidatePinnedAgentStatus/future_heartbeat (0.00s)
+    --- PASS: TestValidatePinnedAgentStatus/heartbeat (0.00s)
+=== RUN   TestOpenPinnedFlowReaderRejectsRelativeRoot
+--- PASS: TestOpenPinnedFlowReaderRejectsRelativeRoot (0.00s)
+=== RUN   TestOpenPinnedFlowReaderRejectsSymlinkedRootComponent
+--- PASS: TestOpenPinnedFlowReaderRejectsSymlinkedRootComponent (0.00s)
+=== RUN   TestLoadPinnedFlowMapAtRejectsPathNames
+=== RUN   TestLoadPinnedFlowMapAtRejectsPathNames/#00
+=== RUN   TestLoadPinnedFlowMapAtRejectsPathNames/.
+=== RUN   TestLoadPinnedFlowMapAtRejectsPathNames/..
+=== RUN   TestLoadPinnedFlowMapAtRejectsPathNames/../flow_events
+=== RUN   TestLoadPinnedFlowMapAtRejectsPathNames/nested/flow_events
+--- PASS: TestLoadPinnedFlowMapAtRejectsPathNames (0.00s)
+    --- PASS: TestLoadPinnedFlowMapAtRejectsPathNames/#00 (0.00s)
+    --- PASS: TestLoadPinnedFlowMapAtRejectsPathNames/. (0.00s)
+    --- PASS: TestLoadPinnedFlowMapAtRejectsPathNames/.. (0.00s)
+    --- PASS: TestLoadPinnedFlowMapAtRejectsPathNames/../flow_events (0.00s)
+    --- PASS: TestLoadPinnedFlowMapAtRejectsPathNames/nested/flow_events (0.00s)
+=== RUN   TestOpenPinnedFlowReaderRejectsSymlinkedPaths
+=== RUN   TestOpenPinnedFlowReaderRejectsSymlinkedPaths/root
+=== RUN   TestOpenPinnedFlowReaderRejectsSymlinkedPaths/pin_directory
+=== RUN   TestOpenPinnedFlowReaderRejectsSymlinkedPaths/flow_pin
+--- PASS: TestOpenPinnedFlowReaderRejectsSymlinkedPaths (0.00s)
+    --- PASS: TestOpenPinnedFlowReaderRejectsSymlinkedPaths/root (0.00s)
+    --- PASS: TestOpenPinnedFlowReaderRejectsSymlinkedPaths/pin_directory (0.00s)
+    --- PASS: TestOpenPinnedFlowReaderRejectsSymlinkedPaths/flow_pin (0.00s)
+=== RUN   TestFlowReaderDetectsRecoveredAgentEpochOnSamePinnedMap
+--- PASS: TestFlowReaderDetectsRecoveredAgentEpochOnSamePinnedMap (0.11s)
+=== RUN   TestFlowsCommandUsesLiveOnlySurface
+--- PASS: TestFlowsCommandUsesLiveOnlySurface (0.00s)
+=== RUN   TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader
+=== RUN   TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader/action
+Error: invalid --action "dropped": want allowed or blocked
+Usage:
+  flows [flags]
+
+Flags:
+      --action string       Filter by action (allowed, blocked)
+      --bpffs-root string   Mounted bpffs root containing the agent's pinned maps (default "/sys/fs/bpf")
+      --direction string    Filter by direction (egress, ingress)
+  -h, --help                help for flows
+      --output string       Output format (table, json) (default "table")
+      --protocol string     Filter by protocol (TCP, UDP)
+      --run-dir string      Directory containing the flow-reader lock (default "/run/ztap")
+
+=== RUN   TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader/protocol
+Error: invalid --protocol "ICMP": want TCP or UDP
+Usage:
+  flows [flags]
+
+Flags:
+      --action string       Filter by action (allowed, blocked)
+      --bpffs-root string   Mounted bpffs root containing the agent's pinned maps (default "/sys/fs/bpf")
+      --direction string    Filter by direction (egress, ingress)
+  -h, --help                help for flows
+      --output string       Output format (table, json) (default "table")
+      --protocol string     Filter by protocol (TCP, UDP)
+      --run-dir string      Directory containing the flow-reader lock (default "/run/ztap")
+
+=== RUN   TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader/direction
+Error: invalid --direction "sideways": want egress or ingress
+Usage:
+  flows [flags]
+
+Flags:
+      --action string       Filter by action (allowed, blocked)
+      --bpffs-root string   Mounted bpffs root containing the agent's pinned maps (default "/sys/fs/bpf")
+      --direction string    Filter by direction (egress, ingress)
+  -h, --help                help for flows
+      --output string       Output format (table, json) (default "table")
+      --protocol string     Filter by protocol (TCP, UDP)
+      --run-dir string      Directory containing the flow-reader lock (default "/run/ztap")
+
+=== RUN   TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader/output
+Error: invalid --output "yaml": want table or json
+Usage:
+  flows [flags]
+
+Flags:
+      --action string       Filter by action (allowed, blocked)
+      --bpffs-root string   Mounted bpffs root containing the agent's pinned maps (default "/sys/fs/bpf")
+      --direction string    Filter by direction (egress, ingress)
+  -h, --help                help for flows
+      --output string       Output format (table, json) (default "table")
+      --protocol string     Filter by protocol (TCP, UDP)
+      --run-dir string      Directory containing the flow-reader lock (default "/run/ztap")
+
+--- PASS: TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader (0.00s)
+    --- PASS: TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader/action (0.00s)
+    --- PASS: TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader/protocol (0.00s)
+    --- PASS: TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader/direction (0.00s)
+    --- PASS: TestRunFlowsRejectsUnsupportedFiltersBeforeOpeningReader/output (0.00s)
+=== RUN   TestFlowsCommandRejectsRemovedFlags
+Error: unknown flag: --follow
+Usage:
+  flows [flags]
+
+Flags:
+      --action string       Filter by action (allowed, blocked)
+      --bpffs-root string   Mounted bpffs root containing the agent's pinned maps (default "/sys/fs/bpf")
+      --direction string    Filter by direction (egress, ingress)
+  -h, --help                help for flows
+      --output string       Output format (table, json) (default "table")
+      --protocol string     Filter by protocol (TCP, UDP)
+      --run-dir string      Directory containing the flow-reader lock (default "/run/ztap")
+
+--- PASS: TestFlowsCommandRejectsRemovedFlags (0.00s)
+=== RUN   TestStartStreamingFlowMonitorCleansReaderWhenStartupIsCanceled
+--- PASS: TestStartStreamingFlowMonitorCleansReaderWhenStartupIsCanceled (0.00s)
+=== RUN   TestStartStreamingFlowMonitorPreservesCleanupFailure
+--- PASS: TestStartStreamingFlowMonitorPreservesCleanupFailure (0.00s)
+=== RUN   TestFlowsCommandRejectsUnsupportedPlatformBeforeCreatingLock
+    flows_test.go:104: Linux supports live flow streaming
+--- SKIP: TestFlowsCommandRejectsUnsupportedPlatformBeforeCreatingLock (0.00s)
+=== RUN   TestNativePolicySnapshotConvergesAcrossPolicyPodNamespaceAndNodeChanges
+--- PASS: TestNativePolicySnapshotConvergesAcrossPolicyPodNamespaceAndNodeChanges (0.00s)
+=== RUN   TestNativePolicySnapshotCorrectsAndDeletesRejectedPolicyWithoutRestart
+--- PASS: TestNativePolicySnapshotCorrectsAndDeletesRejectedPolicyWithoutRestart (0.00s)
+=== RUN   TestNativeAgentInformerRelistSignalsDirtyQueue
+--- PASS: TestNativeAgentInformerRelistSignalsDirtyQueue (1.64s)
+=== RUN   TestNativeAgentRelistReconcilesUpdatedPodSnapshot
+--- PASS: TestNativeAgentRelistReconcilesUpdatedPodSnapshot (1.67s)
+=== RUN   TestNativeAgentPolicyInformerConvergesAddUpdateDeleteRelist
+--- PASS: TestNativeAgentPolicyInformerConvergesAddUpdateDeleteRelist (1.61s)
+=== RUN   TestBuildResolutionSnapshotProducesCompilerFactsAndCgroupPaths
+--- PASS: TestBuildResolutionSnapshotProducesCompilerFactsAndCgroupPaths (0.00s)
+=== RUN   TestBuildResolutionSnapshotRequiresMatchingLocalNode
+--- PASS: TestBuildResolutionSnapshotRequiresMatchingLocalNode (0.00s)
+=== RUN   TestBuildResolutionSnapshotMarksUnresolvedRunningContainerAndBlocksApply
+--- PASS: TestBuildResolutionSnapshotMarksUnresolvedRunningContainerAndBlocksApply (0.00s)
+=== RUN   TestBuildResolutionSnapshotTreatsRunningContainerWithoutIDAsPending
+--- PASS: TestBuildResolutionSnapshotTreatsRunningContainerWithoutIDAsPending (0.00s)
+=== RUN   TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers
+=== RUN   TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/short
+=== RUN   TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/docker
+=== RUN   TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/non-hex
+=== RUN   TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/bare_ID
+=== RUN   TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/whitespace
+--- PASS: TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers (0.00s)
+    --- PASS: TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/short (0.00s)
+    --- PASS: TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/docker (0.00s)
+    --- PASS: TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/non-hex (0.00s)
+    --- PASS: TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/bare_ID (0.00s)
+    --- PASS: TestExtractRunningContainerdIDsIsStrictAndIgnoresCompletedContainers/whitespace (0.00s)
+=== RUN   TestExtractRunningContainerdIDsRejectsNilPod
+--- PASS: TestExtractRunningContainerdIDsRejectsNilPod (0.00s)
+=== RUN   TestFindContainerCgroupPathRequiresExactContainerdSystemdLayout
+--- PASS: TestFindContainerCgroupPathRequiresExactContainerdSystemdLayout (0.00s)
+=== RUN   TestFindContainerCgroupPathRejectsIncompletePodIdentity
+--- PASS: TestFindContainerCgroupPathRejectsIncompletePodIdentity (0.00s)
+=== RUN   TestTerminalPeersCannotAuthorizeReusedIPs
+=== RUN   TestTerminalPeersCannotAuthorizeReusedIPs/Succeeded
+=== RUN   TestTerminalPeersCannotAuthorizeReusedIPs/Failed
+--- PASS: TestTerminalPeersCannotAuthorizeReusedIPs (0.00s)
+    --- PASS: TestTerminalPeersCannotAuthorizeReusedIPs/Succeeded (0.00s)
+    --- PASS: TestTerminalPeersCannotAuthorizeReusedIPs/Failed (0.00s)
+=== RUN   TestNewK8sSubjectResolver_LinuxDefaults
+--- PASS: TestNewK8sSubjectResolver_LinuxDefaults (0.00s)
+=== RUN   TestCgroupFilesystemIdentityRejectsNonDirectory
+--- PASS: TestCgroupFilesystemIdentityRejectsNonDirectory (0.00s)
+=== RUN   TestLockCrashHelper
+--- PASS: TestLockCrashHelper (0.00s)
+=== RUN   TestNativeAgentLockReleasesAfterSIGKILL
+--- PASS: TestNativeAgentLockReleasesAfterSIGKILL (0.05s)
+=== RUN   TestFlowReaderLockReleasesAfterSIGKILL
+--- PASS: TestFlowReaderLockReleasesAfterSIGKILL (0.03s)
+=== RUN   TestZTAPLocksRejectSymlinkedRunDirectories
+=== RUN   TestZTAPLocksRejectSymlinkedRunDirectories/agent
+=== RUN   TestZTAPLocksRejectSymlinkedRunDirectories/flow_reader
+--- PASS: TestZTAPLocksRejectSymlinkedRunDirectories (0.00s)
+    --- PASS: TestZTAPLocksRejectSymlinkedRunDirectories/agent (0.00s)
+    --- PASS: TestZTAPLocksRejectSymlinkedRunDirectories/flow_reader (0.00s)
+=== RUN   TestZTAPDirectoryOpenRejectsRelativePaths
+--- PASS: TestZTAPDirectoryOpenRejectsRelativePaths (0.00s)
+=== RUN   TestZTAPLocksRejectSymlinkedLockFiles
+=== RUN   TestZTAPLocksRejectSymlinkedLockFiles/agent
+=== RUN   TestZTAPLocksRejectSymlinkedLockFiles/flow_reader
+--- PASS: TestZTAPLocksRejectSymlinkedLockFiles (0.00s)
+    --- PASS: TestZTAPLocksRejectSymlinkedLockFiles/agent (0.00s)
+    --- PASS: TestZTAPLocksRejectSymlinkedLockFiles/flow_reader (0.00s)
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/writable-directory
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/writable-parent
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/readable-file
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/writable-file
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/hard-link
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/fifo
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/writable-directory
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/writable-parent
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/readable-file
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/writable-file
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/hard-link
+=== RUN   TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/fifo
+--- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/writable-directory (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/writable-parent (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/readable-file (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/writable-file (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/hard-link (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/agent/fifo (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/writable-directory (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/writable-parent (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/readable-file (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/writable-file (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/hard-link (0.00s)
+    --- PASS: TestZTAPLocksRejectUnsafeDirectoriesAndFiles/flows/fifo (0.00s)
+=== RUN   TestZTAPLockAllowsProtectedDirectoryUnderStickyParent
+--- PASS: TestZTAPLockAllowsProtectedDirectoryUnderStickyParent (0.00s)
+=== RUN   TestZTAPLocksRejectForeignOwnership
+=== RUN   TestZTAPLocksRejectForeignOwnership/directory
+=== RUN   TestZTAPLocksRejectForeignOwnership/file
+--- PASS: TestZTAPLocksRejectForeignOwnership (0.00s)
+    --- PASS: TestZTAPLocksRejectForeignOwnership/directory (0.00s)
+    --- PASS: TestZTAPLocksRejectForeignOwnership/file (0.00s)
+=== RUN   TestNativeNetworkPolicyFromKubePreservesSupportedFields
+--- PASS: TestNativeNetworkPolicyFromKubePreservesSupportedFields (0.00s)
+=== RUN   TestNativePolicySnapshotRejectsNilResolver
+--- PASS: TestNativePolicySnapshotRejectsNilResolver (0.00s)
+=== RUN   TestAcquireNativeAgentLockIsExclusiveAndReleases
+--- PASS: TestAcquireNativeAgentLockIsExclusiveAndReleases (0.00s)
+=== RUN   TestNextNativeAgentRetryDelayUsesCappedExponentialBackoff
+--- PASS: TestNextNativeAgentRetryDelayUsesCappedExponentialBackoff (0.00s)
+=== RUN   TestWaitForNativeAgentCacheSyncTimesOut
+--- PASS: TestWaitForNativeAgentCacheSyncTimesOut (0.01s)
+=== RUN   TestWaitForNativeAgentCacheSyncPreservesCancellation
+--- PASS: TestWaitForNativeAgentCacheSyncPreservesCancellation (0.00s)
+=== RUN   TestWaitForNativeAgentCacheSyncRechecksCancellationAfterSuccess
+--- PASS: TestWaitForNativeAgentCacheSyncRechecksCancellationAfterSuccess (0.00s)
+=== RUN   TestWaitForNativeAgentCacheSyncRejectsMissingOrNilInformers
+--- PASS: TestWaitForNativeAgentCacheSyncRejectsMissingOrNilInformers (0.00s)
+=== RUN   TestSignalNativeAgentDirtyCoalescesEventBurst
+--- PASS: TestSignalNativeAgentDirtyCoalescesEventBurst (0.00s)
+=== RUN   TestDrainNativeAgentDirtyClearsCacheSyncSignals
+--- PASS: TestDrainNativeAgentDirtyClearsCacheSyncSignals (0.00s)
+=== RUN   TestNativeAgentReconciliationDrainsInitialDirtySignal
+2026/10/10 05:19:51 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=0 accepted_policies=0 rejected_policies=0 subjects=0 quarantined_cgroups=0 rules=0 duration_seconds=3e-06 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+--- PASS: TestNativeAgentReconciliationDrainsInitialDirtySignal (0.10s)
+=== RUN   TestNativeAgentReconciliationDoesNotPublishReadinessAfterCancellation
+--- PASS: TestNativeAgentReconciliationDoesNotPublishReadinessAfterCancellation (0.00s)
+=== RUN   TestNativeAgentStatusErrorHonorsCancellation
+--- PASS: TestNativeAgentStatusErrorHonorsCancellation (0.00s)
+=== RUN   TestWaitNativeAgentDebounceConvergesDuringContinuousEvents
+--- PASS: TestWaitNativeAgentDebounceConvergesDuringContinuousEvents (0.05s)
+=== RUN   TestNativeAgentReconciliationLoopClearsQuarantineAfterCorrection
+2026/10/10 05:19:51 WARN native policy rejected operation_id=reconcile-1 node=node-a document=0 namespace=apps name=bad generation=1 field="" message=""
+2026/10/10 05:19:51 WARN native policy snapshot applied with quarantined policies operation_id=reconcile-1 node=node-a observed_policies=2 accepted_policies=1 rejected_policies=1 subjects=2 quarantined_cgroups=1 rules=0 duration_seconds=4.5291e-05 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+2026/10/10 05:19:51 INFO native policy snapshot applied operation_id=reconcile-2 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=2 quarantined_cgroups=0 rules=0 duration_seconds=0.000145167 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+--- PASS: TestNativeAgentReconciliationLoopClearsQuarantineAfterCorrection (0.11s)
+=== RUN   TestNativeAgentReconciliationRetainsLastKnownGoodAfterApplyFailure
+2026/10/10 05:19:51 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=1 quarantined_cgroups=0 rules=0 duration_seconds=0.000418958 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+2026/10/10 05:19:51 WARN native policy reconciliation failed; retaining the last applied candidate operation_id=reconcile-2 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=1 quarantined_cgroups=0 rules=0 duration_seconds=0.000378375 dry_run=false unresolved_running_containers=0 error="apply native policy snapshot: injected kernel apply failure"
+2026/10/10 05:19:51 INFO native policy snapshot applied operation_id=reconcile-3 node=node-a observed_policies=0 accepted_policies=0 rejected_policies=0 subjects=0 quarantined_cgroups=0 rules=0 duration_seconds=0.000117959 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+--- PASS: TestNativeAgentReconciliationRetainsLastKnownGoodAfterApplyFailure (0.13s)
+=== RUN   TestNativeAgentReconciliationRetriesTransientFailureWithoutDirtyEvent
+2026/10/10 05:19:51 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=0 accepted_policies=0 rejected_policies=0 subjects=0 quarantined_cgroups=0 rules=0 duration_seconds=2.584e-06 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+2026/10/10 05:19:51 WARN native policy reconciliation failed; retaining the last applied candidate operation_id=reconcile-2 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=0 quarantined_cgroups=0 rules=0 duration_seconds=1.6625e-05 dry_run=false unresolved_running_containers=0 error="transient kernel apply failure"
+2026/10/10 05:19:52 INFO native policy snapshot applied operation_id=reconcile-3 node=node-a observed_policies=0 accepted_policies=0 rejected_policies=0 subjects=0 quarantined_cgroups=0 rules=0 duration_seconds=5.416e-06 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+--- PASS: TestNativeAgentReconciliationRetriesTransientFailureWithoutDirtyEvent (1.06s)
+=== RUN   TestNativeAgentRetriesInitialUncertainIdentity
+2026/10/10 05:19:52 WARN native policy reconciliation failed; retaining the last applied candidate operation_id=reconcile-1 node=node-a observed_policies=0 accepted_policies=0 rejected_policies=0 subjects=0 quarantined_cgroups=0 rules=0 duration_seconds=1.4917e-05 dry_run=false unresolved_running_containers=0 error="committed workload identity is uncertain"
+2026/10/10 05:19:53 INFO native policy snapshot applied operation_id=reconcile-2 node=node-a observed_policies=0 accepted_policies=0 rejected_policies=0 subjects=0 quarantined_cgroups=0 rules=0 duration_seconds=2.225e-05 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+--- PASS: TestNativeAgentRetriesInitialUncertainIdentity (1.01s)
+=== RUN   TestNativeDryRunEngineHonorsCancellation
+--- PASS: TestNativeDryRunEngineHonorsCancellation (0.00s)
+=== RUN   TestNativeAgentHTTPHealthAndReadinessLifecycle
+--- PASS: TestNativeAgentHTTPHealthAndReadinessLifecycle (0.00s)
+=== RUN   TestNativeAgentMetricsUsePrivateRegistry
+--- PASS: TestNativeAgentMetricsUsePrivateRegistry (0.02s)
+=== RUN   TestNativeAgentHTTPStatusEndpointsRequireGET
+--- PASS: TestNativeAgentHTTPStatusEndpointsRequireGET (0.00s)
+=== RUN   TestNativeAgentHTTPCloseMarksStopping
+--- PASS: TestNativeAgentHTTPCloseMarksStopping (0.00s)
+=== RUN   TestNativeAgentPublishesReconciliationAndEngineMetrics
+--- PASS: TestNativeAgentPublishesReconciliationAndEngineMetrics (0.00s)
+=== RUN   TestNativeAgentReportsClassificationDelayAndUnresolvedContainers
+--- PASS: TestNativeAgentReportsClassificationDelayAndUnresolvedContainers (0.00s)
+=== RUN   TestNativeAgentLogsRejectedPolicyOncePerGeneration
+--- PASS: TestNativeAgentLogsRejectedPolicyOncePerGeneration (0.00s)
+=== RUN   TestRunNativeKubernetesAgentDryRunLifecycle
+--- PASS: TestRunNativeKubernetesAgentDryRunLifecycle (0.14s)
+=== RUN   TestStartNativeAgentHTTPUsesSuppliedListener
+--- PASS: TestStartNativeAgentHTTPUsesSuppliedListener (0.00s)
+=== RUN   TestRunNativeKubernetesAgentClosesSuppliedListenerOnValidationFailure
+--- PASS: TestRunNativeKubernetesAgentClosesSuppliedListenerOnValidationFailure (0.00s)
+=== RUN   TestRunNativeKubernetesAgentCancellationBeforeStartupIsClean
+--- PASS: TestRunNativeKubernetesAgentCancellationBeforeStartupIsClean (0.00s)
+=== RUN   TestRunNativeKubernetesAgentCancellationBeforeStartupHasNoSideEffects
+--- PASS: TestRunNativeKubernetesAgentCancellationBeforeStartupHasNoSideEffects (0.00s)
+=== RUN   TestRunNativeKubernetesAgentCancellationAfterLockHasNoHTTPStartup
+--- PASS: TestRunNativeKubernetesAgentCancellationAfterLockHasNoHTTPStartup (0.10s)
+=== RUN   TestRunNativeKubernetesAgentInitialFailureStopsInformers
+--- PASS: TestRunNativeKubernetesAgentInitialFailureStopsInformers (0.11s)
+=== RUN   TestRunNativeKubernetesAgentFiltersLocalNodeList
+--- PASS: TestRunNativeKubernetesAgentFiltersLocalNodeList (0.26s)
+=== RUN   TestConcurrentEngineMetricsRefreshPreservesCounterOrder
+--- PASS: TestConcurrentEngineMetricsRefreshPreservesCounterOrder (0.10s)
+=== RUN   TestPhase5AgentActivation
+    native_agent_performance_test.go:203: set ZTAP_PHASE5_PERFORMANCE=1 to run the real-cgroup agent harness
+--- SKIP: TestPhase5AgentActivation (0.00s)
+=== RUN   TestPhase5AgentReconciliation
+    native_agent_performance_test.go:252: set ZTAP_PHASE5_PERFORMANCE=1 to run the real-cgroup agent harness
+--- SKIP: TestPhase5AgentReconciliation (0.00s)
+=== RUN   TestPhase5AgentEventActivation
+    native_agent_performance_test.go:321: set ZTAP_PHASE5_PERFORMANCE=1 to run the real-cgroup agent harness
+--- SKIP: TestPhase5AgentEventActivation (0.00s)
+=== RUN   TestPhase5AgentPodStartClassification
+    native_agent_performance_test.go:394: set ZTAP_PHASE5_PERFORMANCE=1 to run the real-cgroup agent harness
+--- SKIP: TestPhase5AgentPodStartClassification (0.00s)
+=== RUN   TestPhase5AgentResourceUsage
+    native_agent_performance_test.go:476: set ZTAP_PHASE5_PERFORMANCE=1 to run the real-cgroup agent harness
+--- SKIP: TestPhase5AgentResourceUsage (0.00s)
+=== RUN   TestPhase5AgentResourceHelper
+    native_agent_performance_test.go:535: helper
+--- SKIP: TestPhase5AgentResourceHelper (0.00s)
+=== RUN   TestPhase5AgentCPUCoreUsage
+=== RUN   TestPhase5AgentCPUCoreUsage/decreasing_ticks
+=== RUN   TestPhase5AgentCPUCoreUsage/zero_clock
+=== RUN   TestPhase5AgentCPUCoreUsage/zero_elapsed
+--- PASS: TestPhase5AgentCPUCoreUsage (0.00s)
+    --- PASS: TestPhase5AgentCPUCoreUsage/decreasing_ticks (0.00s)
+    --- PASS: TestPhase5AgentCPUCoreUsage/zero_clock (0.00s)
+    --- PASS: TestPhase5AgentCPUCoreUsage/zero_elapsed (0.00s)
+=== RUN   TestPhase5AgentMetricPredicatesRequireExactFixtureState
+--- PASS: TestPhase5AgentMetricPredicatesRequireExactFixtureState (0.00s)
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/init-running
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/security-missing
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/uid
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/node
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/qos
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/ips
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/running
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/containers
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/ephemeral-security
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/labels
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/phase
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/container-id
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/ephemeral-id
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/escalation
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/capability-add
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/init-security
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/name
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/namespace
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/host-network
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/ip
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/privileged
+=== RUN   TestNativePodUpdatesRetainEnforcementFacts/capability-drop
+--- PASS: TestNativePodUpdatesRetainEnforcementFacts (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/init-running (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/security-missing (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/uid (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/node (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/qos (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/ips (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/running (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/containers (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/ephemeral-security (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/labels (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/phase (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/container-id (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/ephemeral-id (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/escalation (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/capability-add (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/init-security (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/name (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/namespace (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/host-network (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/ip (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/privileged (0.00s)
+    --- PASS: TestNativePodUpdatesRetainEnforcementFacts/capability-drop (0.00s)
+=== RUN   TestNativeNamespaceNodeAndPolicyUpdateFiltering
+--- PASS: TestNativeNamespaceNodeAndPolicyUpdateFiltering (0.00s)
+=== RUN   TestNodeBootstrapProcessHelper
+    node_init_linux_integration_test.go:26: helper
+--- SKIP: TestNodeBootstrapProcessHelper (0.00s)
+=== RUN   TestLinuxNodeBootstrapVerifiesPendingRuntimeIdentity
+PASS
+--- PASS: TestLinuxNodeBootstrapVerifiesPendingRuntimeIdentity (1.05s)
+=== RUN   TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse
+=== RUN   TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/foreign_boot
+=== RUN   TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/foreign_node
+=== RUN   TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/schema
+=== RUN   TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/unsafe_mode
+=== RUN   TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/trailing_record
+--- PASS: TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse (0.01s)
+    --- PASS: TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/foreign_boot (0.00s)
+    --- PASS: TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/foreign_node (0.00s)
+    --- PASS: TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/schema (0.00s)
+    --- PASS: TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/unsafe_mode (0.00s)
+    --- PASS: TestNodeBootstrapRejectsUnsafeOrStaleRecordsBeforeRuntimeUse/trailing_record (0.00s)
+=== RUN   TestNodeBootstrapRejectsSymlinkAndHardlink
+=== RUN   TestNodeBootstrapRejectsSymlinkAndHardlink/symlink
+=== RUN   TestNodeBootstrapRejectsSymlinkAndHardlink/hardlink
+--- PASS: TestNodeBootstrapRejectsSymlinkAndHardlink (0.00s)
+    --- PASS: TestNodeBootstrapRejectsSymlinkAndHardlink/symlink (0.00s)
+    --- PASS: TestNodeBootstrapRejectsSymlinkAndHardlink/hardlink (0.00s)
+=== RUN   TestPhase5CgroupDirectoryCreationRejectsSymlinkedParent
+--- PASS: TestPhase5CgroupDirectoryCreationRejectsSymlinkedParent (0.00s)
+=== RUN   TestPhase5CgroupDirectoryLifecycleRejectsSymlinkedFinalPath
+--- PASS: TestPhase5CgroupDirectoryLifecycleRejectsSymlinkedFinalPath (0.00s)
+=== RUN   TestPhase5CgroupDirectoryLifecycleCreatesAndRemovesDirectory
+--- PASS: TestPhase5CgroupDirectoryLifecycleCreatesAndRemovesDirectory (0.00s)
+=== RUN   TestPhase5CgroupProcsRejectsSymlinkedControlFile
+--- PASS: TestPhase5CgroupProcsRejectsSymlinkedControlFile (0.00s)
+=== RUN   TestPhase5CgroupProcsOpensRelativeToValidatedDirectory
+--- PASS: TestPhase5CgroupProcsOpensRelativeToValidatedDirectory (0.00s)
+=== RUN   TestPhase5EvidenceFileCreationIsExclusive
+--- PASS: TestPhase5EvidenceFileCreationIsExclusive (0.00s)
+=== RUN   TestPhase5ProcessStatsFromCounters
+=== RUN   TestPhase5ProcessStatsFromCounters/CPU_tick_overflow
+=== RUN   TestPhase5ProcessStatsFromCounters/RSS_byte_overflow
+=== RUN   TestPhase5ProcessStatsFromCounters/zero_page_size
+--- PASS: TestPhase5ProcessStatsFromCounters (0.00s)
+    --- PASS: TestPhase5ProcessStatsFromCounters/CPU_tick_overflow (0.00s)
+    --- PASS: TestPhase5ProcessStatsFromCounters/RSS_byte_overflow (0.00s)
+    --- PASS: TestPhase5ProcessStatsFromCounters/zero_page_size (0.00s)
+=== RUN   TestPhase5MaxRSSBytesRetainsMiddleSamplePeak
+--- PASS: TestPhase5MaxRSSBytesRetainsMiddleSamplePeak (0.00s)
+=== RUN   TestReadPhase5MetricsResponseRequiresOK
+=== RUN   TestReadPhase5MetricsResponseRequiresOK/status_502
+=== RUN   TestReadPhase5MetricsResponseRequiresOK/status_503
+--- PASS: TestReadPhase5MetricsResponseRequiresOK (0.00s)
+    --- PASS: TestReadPhase5MetricsResponseRequiresOK/status_502 (0.00s)
+    --- PASS: TestReadPhase5MetricsResponseRequiresOK/status_503 (0.00s)
+=== RUN   TestCommittedIdentityRequiresCompleteCurrentContainerStatus
+=== RUN   TestCommittedIdentityRequiresCompleteCurrentContainerStatus/id-missing
+=== RUN   TestCommittedIdentityRequiresCompleteCurrentContainerStatus/pending
+=== RUN   TestCommittedIdentityRequiresCompleteCurrentContainerStatus/pod-missing
+=== RUN   TestCommittedIdentityRequiresCompleteCurrentContainerStatus/inconsistent
+--- PASS: TestCommittedIdentityRequiresCompleteCurrentContainerStatus (0.00s)
+    --- PASS: TestCommittedIdentityRequiresCompleteCurrentContainerStatus/id-missing (0.00s)
+    --- PASS: TestCommittedIdentityRequiresCompleteCurrentContainerStatus/pending (0.00s)
+    --- PASS: TestCommittedIdentityRequiresCompleteCurrentContainerStatus/pod-missing (0.00s)
+    --- PASS: TestCommittedIdentityRequiresCompleteCurrentContainerStatus/inconsistent (0.00s)
+=== RUN   TestAgentContinuityTrafficHelper
+    traffic_linux.go:181: helper
+--- SKIP: TestAgentContinuityTrafficHelper (0.00s)
+=== RUN   TestAgentContinuityOwnerHelper
+    restart_continuity_linux_integration_test.go:56: helper
+--- SKIP: TestAgentContinuityOwnerHelper (0.00s)
+=== RUN   TestPhase5AgentRestartContinuity
+    restart_continuity_linux_integration_test.go:330: performance harness
+--- SKIP: TestPhase5AgentRestartContinuity (0.00s)
+=== RUN   TestPhase5AgentCrashContinuity
+    restart_continuity_linux_integration_test.go:345: performance harness
+--- SKIP: TestPhase5AgentCrashContinuity (0.00s)
+=== RUN   TestLinuxNativeAgentOutageContinuity
+=== RUN   TestLinuxNativeAgentOutageContinuity/SIGTERM
+2026/10/10 05:19:55 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 05:19:55 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=1 quarantined_cgroups=0 rules=2 duration_seconds=0.001473249 dry_run=false new_classifications=1 max_classification_delay_seconds=0.001462082 unresolved_running_containers=0
+PASS
+2026/10/10 05:19:58 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 05:19:58 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=1 quarantined_cgroups=0 rules=2 duration_seconds=0.000469708 dry_run=false new_classifications=1 max_classification_delay_seconds=0.000456625 unresolved_running_containers=0
+PASS
+    restart_continuity_linux_integration_test.go:360: agent-continuity-v2 mode=SIGTERM cgroup=52466 outage_ms=2780.58 before={IngressAllowed:49 EgressAllowed:50 Replies:49 IngressProhibited:0 EgressProhibited:0 IngressBlocked:50 EgressBlocked:50} during={IngressAllowed:328 EgressAllowed:328 Replies:328 IngressProhibited:0 EgressProhibited:0 IngressBlocked:328 EgressBlocked:328} after={IngressAllowed:378 EgressAllowed:378 Replies:378 IngressProhibited:0 EgressProhibited:0 IngressBlocked:378 EgressBlocked:378}
+=== RUN   TestLinuxNativeAgentOutageContinuity/SIGKILL
+2026/10/10 05:20:00 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 05:20:00 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=1 quarantined_cgroups=0 rules=2 duration_seconds=0.001428957 dry_run=false new_classifications=1 max_classification_delay_seconds=0.001401749 unresolved_running_containers=0
+2026/10/10 05:20:02 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+E1010 05:20:02.966219   24054 reflector.go:227] "Failed to watch" err="failed to list *v1.Node: injected Kubernetes API outage" logger="UnhandledError" reflector="/workspace/.cache/go-mod/k8s.io/client-go@v0.37.1/tools/cache/reflector.go:343" type="*v1.Node"
+E1010 05:20:02.966522   24054 reflector.go:227] "Failed to watch" err="failed to list *v1.NetworkPolicy: injected Kubernetes API outage" logger="UnhandledError" reflector="/workspace/.cache/go-mod/k8s.io/client-go@v0.37.1/tools/cache/reflector.go:343" type="*v1.NetworkPolicy"
+E1010 05:20:02.966685   24054 reflector.go:227] "Failed to watch" err="failed to list *v1.Namespace: injected Kubernetes API outage" logger="UnhandledError" reflector="/workspace/.cache/go-mod/k8s.io/client-go@v0.37.1/tools/cache/reflector.go:343" type="*v1.Namespace"
+E1010 05:20:02.966854   24054 reflector.go:227] "Failed to watch" err="failed to list *v1.Pod: injected Kubernetes API outage" logger="UnhandledError" reflector="/workspace/.cache/go-mod/k8s.io/client-go@v0.37.1/tools/cache/reflector.go:343" type="*v1.Pod"
+E1010 05:20:04.064064   24054 reflector.go:227] "Failed to watch" err="failed to list *v1.Pod: injected Kubernetes API outage" logger="UnhandledError" reflector="/workspace/.cache/go-mod/k8s.io/client-go@v0.37.1/tools/cache/reflector.go:343" type="*v1.Pod"
+E1010 05:20:04.080369   24054 reflector.go:227] "Failed to watch" err="failed to list *v1.NetworkPolicy: injected Kubernetes API outage" logger="UnhandledError" reflector="/workspace/.cache/go-mod/k8s.io/client-go@v0.37.1/tools/cache/reflector.go:343" type="*v1.NetworkPolicy"
+E1010 05:20:04.144084   24054 reflector.go:227] "Failed to watch" err="failed to list *v1.Node: injected Kubernetes API outage" logger="UnhandledError" reflector="/workspace/.cache/go-mod/k8s.io/client-go@v0.37.1/tools/cache/reflector.go:343" type="*v1.Node"
+E1010 05:20:04.165186   24054 reflector.go:227] "Failed to watch" err="failed to list *v1.Namespace: injected Kubernetes API outage" logger="UnhandledError" reflector="/workspace/.cache/go-mod/k8s.io/client-go@v0.37.1/tools/cache/reflector.go:343" type="*v1.Namespace"
+2026/10/10 05:20:07 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=1 quarantined_cgroups=0 rules=2 duration_seconds=0.001453082 dry_run=false new_classifications=1 max_classification_delay_seconds=0.001370333 unresolved_running_containers=0
+PASS
+    restart_continuity_linux_integration_test.go:360: agent-continuity-v2 mode=SIGKILL cgroup=52561 outage_ms=3163.73 before={IngressAllowed:50 EgressAllowed:50 Replies:50 IngressProhibited:0 EgressProhibited:0 IngressBlocked:50 EgressBlocked:50} during={IngressAllowed:366 EgressAllowed:366 Replies:366 IngressProhibited:0 EgressProhibited:0 IngressBlocked:366 EgressBlocked:366} after={IngressAllowed:679 EgressAllowed:679 Replies:679 IngressProhibited:0 EgressProhibited:0 IngressBlocked:679 EgressBlocked:679}
+=== RUN   TestLinuxNativeAgentOutageContinuity/SIGSTOP
+2026/10/10 05:20:08 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 05:20:08 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=1 quarantined_cgroups=0 rules=2 duration_seconds=0.001706332 dry_run=false new_classifications=1 max_classification_delay_seconds=0.001686748 unresolved_running_containers=0
+2026/10/10 05:20:11 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 05:20:11 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=1 accepted_policies=1 rejected_policies=0 subjects=1 quarantined_cgroups=0 rules=2 duration_seconds=0.000799416 dry_run=false new_classifications=1 max_classification_delay_seconds=0.000766082 unresolved_running_containers=0
+PASS
+    restart_continuity_linux_integration_test.go:360: agent-continuity-v2 mode=SIGSTOP cgroup=53456 outage_ms=1779.30 before={IngressAllowed:49 EgressAllowed:50 Replies:49 IngressProhibited:0 EgressProhibited:0 IngressBlocked:50 EgressBlocked:50} during={IngressAllowed:228 EgressAllowed:228 Replies:228 IngressProhibited:0 EgressProhibited:0 IngressBlocked:228 EgressBlocked:228} after={IngressAllowed:278 EgressAllowed:278 Replies:278 IngressProhibited:0 EgressProhibited:0 IngressBlocked:278 EgressBlocked:278}
+--- PASS: TestLinuxNativeAgentOutageContinuity (17.40s)
+    --- PASS: TestLinuxNativeAgentOutageContinuity/SIGTERM (5.13s)
+    --- PASS: TestLinuxNativeAgentOutageContinuity/SIGKILL (8.14s)
+    --- PASS: TestLinuxNativeAgentOutageContinuity/SIGSTOP (4.13s)
+=== RUN   TestNewRootCmdCommandSurface
+--- PASS: TestNewRootCmdCommandSurface (0.00s)
+=== RUN   TestRootSupportCommandsRemainCallable
+=== RUN   TestRootSupportCommandsRemainCallable/help
+=== RUN   TestRootSupportCommandsRemainCallable/completion
+--- PASS: TestRootSupportCommandsRemainCallable (0.00s)
+    --- PASS: TestRootSupportCommandsRemainCallable/help (0.00s)
+    --- PASS: TestRootSupportCommandsRemainCallable/completion (0.00s)
+=== RUN   TestRootHelpListsOnlyPrimaryCommands
+--- PASS: TestRootHelpListsOnlyPrimaryCommands (0.00s)
+=== RUN   TestVersionCommandUsesStableRecord
+--- PASS: TestVersionCommandUsesStableRecord (0.00s)
+=== RUN   TestConfigureLoggingRejectsInvalidOptions
+--- PASS: TestConfigureLoggingRejectsInvalidOptions (0.00s)
+=== RUN   TestValidateCommandAcceptsNativePolicyWithoutConfig
+--- PASS: TestValidateCommandAcceptsNativePolicyWithoutConfig (0.00s)
+=== RUN   TestValidateCommandExitCodes
+=== RUN   TestValidateCommandExitCodes/invalid_policy
+=== RUN   TestValidateCommandExitCodes/missing_file
+=== RUN   TestValidateCommandExitCodes/missing_file_flag
+=== RUN   TestValidateCommandExitCodes/unknown_flag
+=== RUN   TestValidateCommandExitCodes/unexpected_argument
+--- PASS: TestValidateCommandExitCodes (0.00s)
+    --- PASS: TestValidateCommandExitCodes/invalid_policy (0.00s)
+    --- PASS: TestValidateCommandExitCodes/missing_file (0.00s)
+    --- PASS: TestValidateCommandExitCodes/missing_file_flag (0.00s)
+    --- PASS: TestValidateCommandExitCodes/unknown_flag (0.00s)
+    --- PASS: TestValidateCommandExitCodes/unexpected_argument (0.00s)
+=== RUN   TestValidateCommandReturnsOutputErrors
+--- PASS: TestValidateCommandReturnsOutputErrors (0.00s)
+=== RUN   TestValidateCommandReadsFile
+--- PASS: TestValidateCommandReadsFile (0.00s)
+=== RUN   TestValidateCommandBoundsInputReads
+--- PASS: TestValidateCommandBoundsInputReads (0.15s)
+=== RUN   TestValidateCommandRejectsOversizedFiles
+--- PASS: TestValidateCommandRejectsOversizedFiles (0.08s)
+=== RUN   TestWorkloadSnapshotRejectsConflictingIdentitiesBeforePublication
+--- PASS: TestWorkloadSnapshotRejectsConflictingIdentitiesBeforePublication (0.00s)
+=== RUN   TestPacketSocketIsolationChecksEveryContainer
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/regular/missing
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/regular/default-escalation
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/regular/escalation
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/regular/privileged
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/regular/missing-drop
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/regular/add-raw
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/regular/add-admin
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/init/missing
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/init/default-escalation
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/init/escalation
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/init/privileged
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/init/missing-drop
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/init/add-raw
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/init/add-admin
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/ephemeral/missing
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/ephemeral/default-escalation
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/ephemeral/escalation
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/ephemeral/privileged
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/ephemeral/missing-drop
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/ephemeral/add-raw
+=== RUN   TestPacketSocketIsolationChecksEveryContainer/ephemeral/add-admin
+--- PASS: TestPacketSocketIsolationChecksEveryContainer (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/regular/missing (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/regular/default-escalation (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/regular/escalation (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/regular/privileged (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/regular/missing-drop (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/regular/add-raw (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/regular/add-admin (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/init/missing (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/init/default-escalation (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/init/escalation (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/init/privileged (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/init/missing-drop (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/init/add-raw (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/init/add-admin (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/ephemeral/missing (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/ephemeral/default-escalation (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/ephemeral/escalation (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/ephemeral/privileged (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/ephemeral/missing-drop (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/ephemeral/add-raw (0.00s)
+    --- PASS: TestPacketSocketIsolationChecksEveryContainer/ephemeral/add-admin (0.00s)
+=== RUN   TestPacketSocketIsolationAllowsSafeAndOutOfScopePods
+--- PASS: TestPacketSocketIsolationAllowsSafeAndOutOfScopePods (0.00s)
+PASS

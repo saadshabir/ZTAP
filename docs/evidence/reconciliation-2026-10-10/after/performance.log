@@ -1,0 +1,108 @@
+=== RUN   TestPhase5AgentReconciliation
+2026/10/10 19:45:43 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:45:44 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.087579427 dry_run=false new_classifications=250 max_classification_delay_seconds=0.087516011 unresolved_running_containers=0
+2026/10/10 19:45:44 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:45:44 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.014513988 dry_run=false new_classifications=250 max_classification_delay_seconds=0.014441363 unresolved_running_containers=0
+2026/10/10 19:45:44 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:45:44 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.019526233 dry_run=false new_classifications=250 max_classification_delay_seconds=0.019471776 unresolved_running_containers=0
+    native_agent_performance_test.go:311: agent reconciliation evidence:
+        {
+          "timestamp_utc": "2026-10-10T19:45:44.745862261Z",
+          "run_id": "optimization-final-after",
+          "go_version": "go1.26.9",
+          "goos": "linux",
+          "goarch": "arm64",
+          "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+          "cpus": 2,
+          "subjects": 250,
+          "policies": 25,
+          "rules": 2500,
+          "samples": 3,
+          "reconcile_samples_ms": [
+            87.579427,
+            14.513988,
+            19.526233
+          ],
+          "reconcile_p95_ms": 87.579427,
+          "reconcile_budget_ms": 2000,
+          "scope": "actual native agent compile-and-apply reconciliation after synchronized fake informer cache sync; excludes Kubernetes list latency and fixed dirty-event debounce"
+        }
+    native_agent_performance_test.go:311: wrote agent reconciliation evidence to /workspace/.cache/optimization/measurements-after/phase5-agent-reconcile.json
+--- PASS: TestPhase5AgentReconciliation (0.77s)
+=== RUN   TestPhase5AgentEventActivation
+2026/10/10 19:45:44 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:45:45 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.099580501 dry_run=false new_classifications=250 max_classification_delay_seconds=0.099483584 unresolved_running_containers=0
+2026/10/10 19:45:45 INFO native policy snapshot applied operation_id=reconcile-2 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.037972802 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+2026/10/10 19:45:45 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:45:45 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.037200094 dry_run=false new_classifications=250 max_classification_delay_seconds=0.037153011 unresolved_running_containers=0
+2026/10/10 19:45:45 INFO native policy snapshot applied operation_id=reconcile-2 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.032528431 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+2026/10/10 19:45:45 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:45:45 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.040307508 dry_run=false new_classifications=250 max_classification_delay_seconds=0.040255758 unresolved_running_containers=0
+2026/10/10 19:45:45 INFO native policy snapshot applied operation_id=reconcile-2 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.029663558 dry_run=false new_classifications=0 max_classification_delay_seconds=0 unresolved_running_containers=0
+    native_agent_performance_test.go:384: agent event activation evidence:
+        {
+          "timestamp_utc": "2026-10-10T19:45:45.846341309Z",
+          "run_id": "optimization-final-after",
+          "go_version": "go1.26.9",
+          "goos": "linux",
+          "goarch": "arm64",
+          "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+          "cpus": 2,
+          "subjects": 250,
+          "policies": 25,
+          "rules": 2500,
+          "event_samples_ms": [
+            105.409371,
+            105.761704,
+            103.067706
+          ],
+          "event_p95_ms": 105.761704,
+          "event_budget_ms": 3000,
+          "scope": "synchronized fake Kubernetes informer event, fixed debounce, native compilation, and real engine apply"
+        }
+    native_agent_performance_test.go:384: wrote agent event performance evidence to /workspace/.cache/optimization/measurements-after/phase5-agent-event.json
+--- PASS: TestPhase5AgentEventActivation (1.10s)
+=== RUN   TestPhase5AgentResourceUsage
+2026/10/10 19:45:45 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:45:46 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.091612591 dry_run=false new_classifications=250 max_classification_delay_seconds=0.091537174 unresolved_running_containers=0
+PASS
+2026/10/10 19:45:56 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:45:56 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.105608371 dry_run=false new_classifications=250 max_classification_delay_seconds=0.105542412 unresolved_running_containers=0
+PASS
+2026/10/10 19:46:06 WARN native agent cannot detect every other NetworkPolicy enforcer; coexistence is unsupported node=node-a
+2026/10/10 19:46:06 INFO native policy snapshot applied operation_id=reconcile-1 node=node-a observed_policies=25 accepted_policies=25 rejected_policies=0 subjects=250 quarantined_cgroups=0 rules=2500 duration_seconds=0.099415043 dry_run=false new_classifications=250 max_classification_delay_seconds=0.099286459 unresolved_running_containers=0
+PASS
+    native_agent_performance_test.go:528: agent resource evidence:
+        {
+          "timestamp_utc": "2026-10-10T19:46:16.979409679Z",
+          "run_id": "optimization-final-after",
+          "go_version": "go1.26.9",
+          "goos": "linux",
+          "goarch": "arm64",
+          "kernel_release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+          "cpus": 2,
+          "subjects": 250,
+          "policies": 25,
+          "rules": 2500,
+          "samples": 3,
+          "quiet_seconds": 5,
+          "process_clock_ticks_per_second": 100,
+          "cpu_core_samples": [
+            0,
+            0.0009974952688315613,
+            0
+          ],
+          "rss_mib_samples": [
+            52.8046875,
+            47.7109375,
+            47.30859375
+          ],
+          "max_cpu_cores": 0.0009974952688315613,
+          "max_rss_mib": 52.8046875,
+          "cpu_budget_cores": 0.1,
+          "rss_budget_mib": 200,
+          "scope": "dedicated helper process running the native agent with a fake Kubernetes client and the 250-Pod/25-policy/2,500-rule fixture; kernel-map memory is excluded"
+        }
+    native_agent_performance_test.go:528: wrote agent resource evidence to /workspace/.cache/optimization/measurements-after/phase5-agent-resource.json
+--- PASS: TestPhase5AgentResourceUsage (31.13s)
+PASS

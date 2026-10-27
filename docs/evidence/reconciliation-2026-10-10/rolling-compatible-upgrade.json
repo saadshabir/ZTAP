@@ -1,0 +1,6 @@
+{
+  "schema_version": 2,
+  "original_image": "ztap:dev",
+  "compatible_image": "ztap:compat-gate",
+  "rollback_completed": true
+}

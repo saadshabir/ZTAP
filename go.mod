@@ -1,6 +1,6 @@
 module github.com/saadshabir/ZTAP
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/cilium/ebpf v0.22.0
