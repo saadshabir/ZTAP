@@ -37,7 +37,7 @@ Kubernetes API -> informer snapshot -> validate/resolve -> compile
 
 ## Prerequisites
 
-- Go `1.26.9` or a compatible newer toolchain with current security patches
+- Go `1.26.10` or a compatible newer toolchain with current security patches
   for local builds.
 - Linux with cgroup v2, bpffs, and a containerd systemd-cgroup runtime for
   enforcement.

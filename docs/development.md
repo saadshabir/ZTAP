@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Go `1.26.9` or a compatible newer toolchain with current security patches is
+Go `1.26.10` or a compatible newer toolchain with current security patches is
 required. Linux is required for privileged eBPF and Kubernetes acceptance
 tests; a non-Linux checkout is suitable for the non-privileged unit tests.
 
