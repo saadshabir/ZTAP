@@ -28,6 +28,7 @@ deployments/kubernetes/   admission guard, capability-only DaemonSet, manifest t
 examples/native/          validator fixtures
 bpf/                      retained eBPF C source
 tools/bpfgen/             source-only binding generator
+tools/churnprobe/         sequenced TCP checks for multi-node churn
 tools/phase5probe/        measurement environment recorder
 tools/phase5verify/       retained performance and hosted-evidence verifier
 ```
@@ -123,6 +124,72 @@ checks decision logic; Linux integration still validates loading and
 attachment. The kind gate additionally tests admission rejection of unsafe
 regular, init, and ephemeral containers and verifies that a safe workload's
 effective, permitted, and bounding capabilities exclude `NET_RAW`.
+
+The separate **Multi-node sustained churn** CI job creates a control-plane
+node and worker with independent bpffs mounts. It disables kindnet's policy
+controller on both nodes, installs the shipped agent, and runs
+`.github/scripts/verify-multinode-churn.sh`. The gate pins endpoints to different
+nodes and exercises ingress and egress in both directions. For at least 120
+seconds and six lifecycle cycles it changes remote Pod labels, namespace
+labels, and Pod identities/IPs while continuously updating real policy rules.
+The changing peer alternates between nodes; its stable counterpart is always
+on the opposite node. Evidence requires at least three cycles of Pod-label,
+namespace-label, and old-IP denial checks enforced from each node.
+Replacement Pods overlap their predecessors, guaranteeing different IPs;
+the old IP must become denied while its listener is still alive. Each change
+must converge within 30 seconds and pass three consecutive checks in both
+directions. Refused connections do not count as policy drops.
+
+The portable regression checks for fixture placement and stream startup run
+with `bash .github/scripts/tests/multinode-churn-test.sh` and are part of CI.
+
+Two sequenced TCP streams retain their original sockets throughout churn.
+Startup polls their counters for up to 30 seconds and fails if a stream exits
+before providing ten echoes and ten denied connection attempts.
+They require zero successful handshakes to a permanently denied port and no
+availability gap above five seconds. Metadata-only updates must preserve both
+nodes' policy epochs; real updates must advance each by at least ten, with at
+least 30 policy writes per namespace. Finally, deliberate egress revocation
+must stop new echoed payloads on those same sockets after convergence, while
+the clients continue sending. This covers reply-state invalidation without
+silently reconnecting. A changed global epoch can interrupt an otherwise
+allowed stream; this test bounds observed interruption, not zero-loss delivery.
+
+Before sustained churn, a separate long-lived server-push connection establishes
+a polled baseline of ten pushes, then sends no new client payloads during a
+snapshot change. It records whether replies stop and requires recovery on the
+original socket within five seconds of one
+explicit client payload. Uninterrupted behavior also passes. This exposes the
+availability cost of epoch-scoped reply state separately from the active echo
+streams, whose initiating packets can recreate that state.
+
+CI uploads `multinode-churn-evidence`: JSONL stream counters and maximum gaps,
+transition convergence times, Pod UIDs/IPs/node placement, policy writes,
+before/after epochs, and diagnostics even on failure. To reproduce on a
+disposable Linux host with Docker, kind, kubectl, jq, curl, and Go:
+
+```sh
+export RUNNER_TEMP="$(mktemp -d)"
+export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+export GITHUB_ENV="$RUNNER_TEMP/github-env"
+ZTAP_KIND_MULTI_NODE=1 bash .github/scripts/create-kind-cluster.sh
+make docker
+docker pull busybox:1.36.1
+kind load docker-image ztap:dev busybox:1.36.1 --name ztap
+bash .github/scripts/disable-kindnet-policy.sh
+export ZTAP_KINDNET_NETWORKPOLICY_DISABLED=1
+bash .github/scripts/install-kind-agent.sh
+bash .github/scripts/verify-multinode-churn.sh
+kind delete cluster --name ztap
+```
+
+Use a dedicated Docker context without an existing `ztap` cluster. For arm64,
+build the agent image with `--build-arg TARGETARCH=arm64` and set
+`ZTAP_TEST_ARCH=arm64`. `ZTAP_CHURN_SECONDS` and `ZTAP_CHURN_CYCLES` can extend
+the run; their minimums remain 120 seconds and six cycles. The stream deadline
+is 15 minutes, and evidence defaults to `churn-evidence/` (override with
+`ZTAP_CHURN_EVIDENCE_DIR`). The evidence directory must be empty and the three
+`ztap-churn-*` fixture namespaces must not already exist.
 
 The fixed-size binary flow-event decoder has a fuzz target that rejects
 unknown sizes and schemas before decoding and exercises conversion of valid
