@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
-set -euo pipefail
 policy_count="$(kubectl get networkpolicies.networking.k8s.io --all-namespaces -o json | jq '.items | length')"
 test "$policy_count" -eq 0
 kubectl -n kube-system rollout status daemonset/kindnet --timeout=180s
-cni_config="$(docker exec ztap-control-plane find /etc/cni/net.d -maxdepth 1 -type f \
-  \( -name '*.conf' -o -name '*.conflist' \) -print -quit)"
-test -n "$cni_config"
+nodes=()
+cni_configs=()
+for node in $(kind get nodes --name ztap); do
+  nodes+=("$node")
+  cni_config="$(docker exec "$node" find /etc/cni/net.d -maxdepth 1 -type f \
+    \( -name '*.conf' -o -name '*.conflist' \) -print -quit)"
+  test -n "$cni_config"
+  cni_configs+=("$cni_config")
+done
+test "${#nodes[@]}" -gt 0
 kubectl -n kube-system delete daemonset kindnet --wait=true
 kindnet_pods=1
 for ((attempt = 0; attempt < 180; attempt++)); do
@@ -20,9 +26,10 @@ for ((attempt = 0; attempt < 180; attempt++)); do
   sleep 1
 done
 test "$kindnet_pods" -eq 0
-docker exec ztap-control-plane test -s "$cni_config"
-node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
-kubectl wait --for=condition=Ready "node/$node" --timeout=60s
+for index in "${!nodes[@]}"; do
+  docker exec "${nodes[$index]}" test -s "${cni_configs[$index]}"
+  kubectl wait --for=condition=Ready "node/${nodes[$index]}" --timeout=60s
+  printf 'kindnet_cni_config_retained[%s]=%s\n' "${nodes[$index]}" "${cni_configs[$index]}"
+done
 printf 'kindnet_networkpolicy_controller=disabled\n'
-printf 'kindnet_cni_config_retained=%s\n' "$cni_config"
 printf 'ZTAP_KINDNET_NETWORKPOLICY_DISABLED=1\n' >> "$GITHUB_ENV"
