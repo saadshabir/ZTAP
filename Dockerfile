@@ -1,5 +1,5 @@
 # Use the Docker Official Image; CI configures a Docker Hub cache mirror.
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.10-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.2-alpine AS go-builder
 
 WORKDIR /src
 
