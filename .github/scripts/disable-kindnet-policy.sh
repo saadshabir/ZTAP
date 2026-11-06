@@ -5,7 +5,7 @@ test "$policy_count" -eq 0
 kubectl -n kube-system rollout status daemonset/kindnet --timeout=180s
 nodes=()
 cni_configs=()
-for node in $(kind get nodes --name ztap); do
+for node in $(kind get nodes --name "${KIND_CLUSTER_NAME:-ztap}"); do
   nodes+=("$node")
   cni_config="$(docker exec "$node" find /etc/cni/net.d -maxdepth 1 -type f \
     \( -name '*.conf' -o -name '*.conflist' \) -print -quit)"
@@ -32,4 +32,6 @@ for index in "${!nodes[@]}"; do
   printf 'kindnet_cni_config_retained[%s]=%s\n' "${nodes[$index]}" "${cni_configs[$index]}"
 done
 printf 'kindnet_networkpolicy_controller=disabled\n'
-printf 'ZTAP_KINDNET_NETWORKPOLICY_DISABLED=1\n' >> "$GITHUB_ENV"
+if [ -n "${GITHUB_ENV:-}" ]; then
+  printf 'ZTAP_KINDNET_NETWORKPOLICY_DISABLED=1\n' >> "$GITHUB_ENV"
+fi

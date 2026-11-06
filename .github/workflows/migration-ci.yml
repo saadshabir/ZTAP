@@ -244,11 +244,22 @@ jobs:
           push: false
           load: true
           tags: ztap:test
+          build-args: |
+            ZTAP_VERSION=test
+            ZTAP_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=ztap
           cache-to: type=gha,mode=max,scope=ztap
 
       - name: Exercise containerized offline validator
         run: docker run --rm -i ztap:test validate --file - < examples/native/default-deny.yaml
+
+      - name: Verify OCI and binary build metadata
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          test "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.version" }}' ztap:test)" = test
+          test "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' ztap:test)" = "$EXPECTED_COMMIT"
+          docker run --rm ztap:test version | grep -E "^version=test .* commit=$EXPECTED_COMMIT$"
 
       - name: Scan the built image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
@@ -417,13 +428,20 @@ jobs:
 
       - name: Build and load the agent image
         run: |
-          make docker
+          make docker VERSION=dev
           kind load docker-image ztap:dev --name ztap
           # A distinct OCI image with the same compatible binary exercises
           # capability-only image replacement/rollback. The privileged kernel
           # gate separately changes actual BPF tags at directional checkpoints.
           docker build --label org.opencontainers.image.version=restart-compatibility-gate -t ztap:compat-gate .
           kind load docker-image ztap:compat-gate --name ztap
+
+      - name: Check deployment prerequisites before installing the agent
+        run: |
+          bash .github/scripts/harden-kind-system-pods.sh
+          make build
+          ./bin/ztap preflight cluster
+          bash examples/kind-demo/node-preflight.sh
 
       - name: Exercise the shipped capability-only DaemonSet
         run: bash .github/scripts/verify-capability-smoke.sh
@@ -540,7 +558,7 @@ jobs:
 
       - name: Build and load agent and workload images on both nodes
         run: |
-          make docker
+          make docker VERSION=dev
           kind load docker-image ztap:dev --name ztap
           docker pull docker.io/library/busybox:1.36.1
           kind load docker-image busybox:1.36.1 --name ztap

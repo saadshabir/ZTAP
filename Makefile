@@ -2,6 +2,11 @@ GO ?= go
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOLANGCI_LINT_CACHE ?= $(CURDIR)/.cache/golangci-lint
 GOFLAGS ?= -buildvcs=false
+VERSION ?= $(or $(shell git describe --tags --exact-match 2>/dev/null | LC_ALL=C awk '/^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$$/ && length() <= 128'),dev)
+COMMIT ?= $(shell git rev-parse --verify HEAD 2>/dev/null || printf unknown)
+IMAGE ?= ztap
+SHA256SUM ?= $(or $(shell command -v sha256sum 2>/dev/null),shasum -a 256)
+BUILD_LDFLAGS = -X github.com/saadshabir/ZTAP/internal/cli.BuildVersion=$(VERSION) -X github.com/saadshabir/ZTAP/internal/cli.buildCommit=$(COMMIT)
 # Keep CI's explicit clang-18 spelling authoritative, while allowing the
 # pinned Homebrew LLVM 18 installation used by macOS contributors to satisfy
 # the same generated-code check without an extra environment override.
@@ -34,11 +39,20 @@ GO_FILES := $(shell find . \( -path './vendor' -o -path './.cache' \
 	-o -path './bin' -o -path './dist' -o -path './.git' \) -prune \
 	-o -type f -name '*.go' -print)
 
-.PHONY: build test vet fmt-check actionlint lint vulncheck check generate check-generated integration performance verify-performance docker clean clean-build-cache clean-tools clean-test-outputs
+.PHONY: build release-binaries test vet fmt-check actionlint lint vulncheck check generate check-generated integration performance verify-performance docker clean clean-build-cache clean-tools clean-test-outputs
 
 build:
 	@mkdir -p "$(BIN_DIR)"
-	GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) build -o "$(BIN_DIR)/ztap" ./cmd/ztap
+	GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) build -trimpath -ldflags "$(BUILD_LDFLAGS)" -o "$(BIN_DIR)/ztap" ./cmd/ztap
+
+release-binaries:
+	@mkdir -p "dist/release/$(VERSION)"
+	@set -eu; for arch in amd64 arm64; do \
+		CGO_ENABLED=0 GOOS=linux GOARCH="$$arch" GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" \
+			$(GO) build -buildvcs=false -trimpath -ldflags "-s -w $(BUILD_LDFLAGS)" \
+			-o "dist/release/$(VERSION)/ztap-$(VERSION)-linux-$$arch" ./cmd/ztap; \
+	done
+	cd "dist/release/$(VERSION)" && $(SHA256SUM) "ztap-$(VERSION)-linux-amd64" "ztap-$(VERSION)-linux-arm64" > SHA256SUMS
 
 test:
 	GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) test -race ./...
@@ -135,7 +149,7 @@ verify-performance:
 	GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) run ./tools/phase5verify --dir "$(PHASE5_EVIDENCE_DIR)" $(PHASE5_VERIFY_FLAGS)
 
 docker:
-	docker build -t ztap:dev .
+	docker build --build-arg ZTAP_VERSION="$(VERSION)" --build-arg ZTAP_COMMIT="$(COMMIT)" -t "$(IMAGE):$(VERSION)" .
 
 clean-build-cache:
 	GOCACHE="$(GOCACHE)" GOFLAGS="$(GOFLAGS)" $(GO) clean -cache

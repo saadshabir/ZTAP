@@ -524,8 +524,8 @@ func (a *nativeAgentHTTP) close(ctx context.Context) error {
 }
 
 func agentVersion() string {
-	if strings.TrimSpace(Version) == "" {
+	if strings.TrimSpace(BuildVersion) == "" {
 		return "dev"
 	}
-	return Version
+	return BuildVersion
 }

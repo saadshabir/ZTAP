@@ -10,7 +10,7 @@ import (
 )
 
 // Fake clientsets satisfy the same small interface in integration tests. The
-// shipped binary constructs only the two API clients it actually uses.
+// agent constructs only the two API clients it uses.
 type nativeCoreClient interface {
 	CoreV1() coreclient.CoreV1Interface
 }

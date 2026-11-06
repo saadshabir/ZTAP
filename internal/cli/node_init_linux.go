@@ -94,13 +94,8 @@ func initializeNodeBootstrap(ctx context.Context, client nativeCoreClient, confi
 	if _, err := findBootstrapProcessIdentity(cgroupRoot, selfUID); err != nil {
 		return fmt.Errorf("verify initializer runtime identity: %w", err)
 	}
-	socket, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	cookie, err := socketNetnsCookie()
 	if err != nil {
-		return err
-	}
-	cookie, cookieErr := unix.GetsockoptUint64(socket, unix.SOL_SOCKET, unix.SO_NETNS_COOKIE)
-	closeErr := unix.Close(socket)
-	if err := errors.Join(cookieErr, closeErr); err != nil {
 		return err
 	}
 	if cookie == 0 {
@@ -111,19 +106,9 @@ func initializeNodeBootstrap(ctx context.Context, client nativeCoreClient, confi
 		return err
 	}
 	record := nodeBootstrap{Schema: 1, Boot: boot, Node: nodeName, NodeUID: string(node.UID), HostNetnsCookie: cookie}
-	for _, relative := range []string{"kubepods.slice", "kubelet.slice/kubelet-kubepods.slice"} {
-		fd, err := openExistingDirectory(filepath.Join(cgroupRoot, relative), "Kubernetes parent")
-		if errors.Is(err, unix.ENOENT) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		_ = unix.Close(fd)
-		record.Parents = append(record.Parents, relative)
-	}
-	if len(record.Parents) == 0 {
-		return errors.New("no supported Kubernetes systemd cgroup parent exists")
+	record.Parents, err = kubernetesCgroupParents(cgroupRoot)
+	if err != nil {
+		return err
 	}
 	port := uint16(443)
 	if apiURL.Port() != "" {
@@ -180,6 +165,35 @@ func initializeNodeBootstrap(ctx context.Context, client nativeCoreClient, confi
 		return errors.New("host-network bootstrap identity capacity exceeded")
 	}
 	return writeNodeBootstrap(runDir, record)
+}
+
+func socketNetnsCookie() (uint64, error) {
+	socket, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return 0, err
+	}
+	cookie, cookieErr := unix.GetsockoptUint64(socket, unix.SOL_SOCKET, unix.SO_NETNS_COOKIE)
+	closeErr := unix.Close(socket)
+	return cookie, errors.Join(cookieErr, closeErr)
+}
+
+func kubernetesCgroupParents(cgroupRoot string) ([]string, error) {
+	var parents []string
+	for _, relative := range []string{"kubepods.slice", "kubelet.slice/kubelet-kubepods.slice"} {
+		fd, err := openExistingDirectory(filepath.Join(cgroupRoot, relative), "Kubernetes parent")
+		if errors.Is(err, unix.ENOENT) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		_ = unix.Close(fd)
+		parents = append(parents, relative)
+	}
+	if len(parents) == 0 {
+		return nil, errors.New("no supported Kubernetes systemd cgroup parent exists")
+	}
+	return parents, nil
 }
 
 func bootstrapPodDirectories(root, uid string) ([]string, error) {

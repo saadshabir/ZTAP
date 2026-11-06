@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ztap-demo
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: server
+  namespace: ztap-demo
+  labels:
+    app: demo-server
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: http
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      command:
+        - sh
+        - -ec
+        - |
+          mkdir -p /tmp/www
+          printf 'demo-ok\n' > /tmp/www/index.html
+          httpd -p 8080 -h /tmp/www
+          exec httpd -f -p 8081 -h /tmp/www
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 8081
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client
+  namespace: ztap-demo
+  labels:
+    app: demo-client
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: client
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      command: [sleep, "3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
