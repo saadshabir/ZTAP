@@ -3,7 +3,7 @@
 ZTAP is deployed as an agent and a node initializer, using two Linux DaemonSets
 and one runtime image. The maintained manifest is
 [`deployments/kubernetes/ztap-agent.yaml`](../deployments/kubernetes/ztap-agent.yaml).
-Its `ztap:dev` image matches `make docker`. Load that image into a disposable
+Its `ztap:dev` image matches `make docker VERSION=dev`. Load that image into a disposable
 local cluster, or use a copy of the manifest with your registry image's digest.
 
 ## Requirements
@@ -17,12 +17,13 @@ local cluster, or use a copy of the manifest with your registry image's digest.
   with containerd `2.3.4` and Kubernetes `1.36.4`.
 - containerd configured to use the systemd cgroup driver; cgroupfs, cgroup v1,
   Docker Engine, and CRI-O layouts are unsupported.
-- Kubernetes 1.36.x (CI uses `kindest/node:v1.36.4`) with a CNI that does not
+- Kubernetes 1.36.x (CI uses `kindest/node:v1.36.4`) with an IPv4 primary
+  ClusterIP for the `default/kubernetes` Service and a CNI that does not
   enforce NetworkPolicy. ZTAP does not disable another NetworkPolicy
   implementation; running both produces intersected enforcement and is
   outside the supported deployment contract.
 - Kubernetes access for the agent ServiceAccount to read Nodes, Namespaces,
-  Pods, and NetworkPolicies.
+  Pods, NetworkPolicies, and the `default/kubernetes` Endpoints object.
 - Every non-host-network Pod in the cluster must explicitly drop `NET_RAW`
   (or `ALL`), set `allowPrivilegeEscalation: false`, and avoid privileged mode
   and added `NET_RAW` or `SYS_ADMIN`. This applies to regular, init, sidecar,
@@ -52,53 +53,49 @@ classification. There is no namespace-wide workload bypass. Static mirror
 identities also require an authenticated mirror hash and full runtime container
 ID. Keep both DaemonSets and their downward-API `POD_UID` environment values.
 
-## Install
+## Preflight
 
-Build from a source checkout. Update workload templates and recreate unsafe
-Pods as described below before applying the manifest. Inspect the
-checked-in manifest, including its cluster-wide admission guard.
-
-For an existing disposable kind cluster named `ztap` that meets the
-requirements above, build and load the local image:
+From the workstation you will install from, use the same kubeconfig and
+context for preflight and `kubectl apply`.
 
 ```sh
-make docker
-kind load docker-image ztap:dev --name ztap
-kubectl apply -f deployments/kubernetes/ztap-agent.yaml
-kubectl -n ztap-system rollout status daemonset/ztap-node-init --timeout=5m
-kubectl -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
-kubectl -n ztap-system get pods -l app=ztap-agent -o wide
+make build
+./bin/ztap preflight cluster --context YOUR_CONTEXT
 ```
 
-For other clusters, use [your own registry image](#build-your-own-image).
-`make docker` builds the image locally; it does not push it or create a cluster.
+This checks the admission-policy API, the API Service's primary ClusterIP,
+Linux node architectures and reported container runtimes, and live Pods across
+namespaces. It reads the shipped install objects and reviews the current
+identity's permission to create missing objects or patch existing ones,
+including authorization to grant the agent's RBAC. The audit also needs
+cluster-wide Pod and Node list access and read access to `default/kubernetes`
+in the Services API. Fix reported workloads and rerun before installing.
+[Kubernetes RBAC rules for creating roles and bindings](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#privilege-escalation-prevention-and-bootstrapping)
 
-Check that an agent is Ready on each intended node. Then validate and apply
-your native `NetworkPolicy` documents; see [policy examples](policies.md#examples).
-
-### Build your own image
-
-To deploy a source build, publish it to a registry reachable by your nodes:
+On each target Linux node, run the matching Linux binary with node administrator
+permissions.
 
 ```sh
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  --tag your-registry/ztap:source \
-  --push .
-docker buildx imagetools inspect your-registry/ztap:source
-cp deployments/kubernetes/ztap-agent.yaml ztap-agent.yaml
+sudo ./ztap preflight node
 ```
 
-Replace `your-registry` with your registry path. In `ztap-agent.yaml`, change
-the `image` field from `ztap:dev` to `your-registry/ztap@sha256:<digest>` using
-the index digest reported by `imagetools inspect`, then run:
+The node check verifies the cgroup v2 and bpffs mounts, supported Kubernetes
+systemd cgroup parents, socket network-namespace cookies, and effective Linux
+capabilities. For a fresh installation it checks that the guard hooks on
+each Kubernetes cgroup parent have no direct BPF attachments. It loads the
+shipped eBPF collection into the kernel verifier
+and exercises link attachment, pinning, reopening, replacement, and child
+inheritance using temporary allow-only links. It leaves the agent's pins and
+workload policy untouched. Both preflight commands exit nonzero on a failed
+check.
 
-```sh
-kubectl apply -f ztap-agent.yaml
-kubectl -n ztap-system rollout status daemonset/ztap-node-init
-kubectl -n ztap-system rollout status daemonset/ztap-agent
-kubectl -n ztap-system get pods -o wide
-```
+A host probe uses the host's permissions and seccomp profile. The demo also
+runs the node probe in a temporary Pod with the agent's container security
+context and read-only cgroup mount. In a Pod, `POD_UID` selects the probe's own
+containerd cgroup and the probe skips the child-cgroup test. Confirm your CNI
+configuration and any site-specific admission restrictions separately.
+
+### Workload remediation
 
 Update existing workload templates before installing the manifest. For each
 container, the minimum packet-socket restriction is:
@@ -132,6 +129,76 @@ node diagnostics rather than expecting a shell inside the container.
 
 The local `ztap:dev` tag is intended for disposable clusters. Use a digest
 in the registry-backed manifest so each node runs the same source build.
+
+## Install
+
+The [kind demo](../examples/kind-demo/README.md) prepares and checks a disposable
+cluster and exercises the shipped install manifest. For an existing cluster,
+complete preflight, build or obtain a versioned image, and update both
+DaemonSet image fields in a copy of the manifest to the registry's index digest.
+Use the same context you checked.
+
+```sh
+kubectl --context YOUR_CONTEXT apply -f ztap-agent.yaml
+kubectl --context YOUR_CONTEXT -n ztap-system rollout status daemonset/ztap-node-init --timeout=5m
+kubectl --context YOUR_CONTEXT -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
+kubectl --context YOUR_CONTEXT -n ztap-system get pods -l app=ztap-agent -o wide
+```
+
+Check that an agent is Ready on each intended node. Then validate and apply
+your native NetworkPolicy documents. [Policy examples](policies.md#examples)
+
+For an existing compatible kind cluster named `ztap`, load the development
+image and apply the original manifest. Run the same rollout checks with
+`--context kind-ztap`.
+
+```sh
+make docker VERSION=dev
+kind load docker-image ztap:dev --name ztap
+kubectl --context kind-ztap apply -f deployments/kubernetes/ztap-agent.yaml
+```
+
+### Versioned builds
+
+`make build` and `make docker` default to an image-tag-compatible exact Git
+tag at HEAD, or `dev` between tags. Both embed the full HEAD commit, which
+identifies the base revision when building with local edits. Override
+`VERSION` and `COMMIT` to build from a source archive. The image stores the
+same values in its OCI labels. Run `ztap version` to inspect a binary or use
+`docker run --rm ztap:dev version` for a development image.
+
+Produce checksummed Linux binaries from a tagged or clean checkout.
+
+```sh
+make release-binaries VERSION=v1.2.3
+cd dist/release/v1.2.3
+shasum -a 256 -c SHA256SUMS
+```
+
+The release target builds static Linux amd64 and arm64 executables. Use the same
+Go toolchain and build inputs when reproducing their checksums.
+
+#### Build your own image
+
+From the repository root, publish to a registry reachable by your nodes.
+
+```sh
+version=v1.2.3
+commit="$(git rev-parse --verify HEAD)"
+image=your-registry/ztap
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg ZTAP_VERSION="$version" \
+  --build-arg ZTAP_COMMIT="$commit" \
+  --tag "$image:$version" \
+  --push .
+docker buildx imagetools inspect "$image:$version"
+cp deployments/kubernetes/ztap-agent.yaml ztap-agent.yaml
+```
+
+Replace both instances of `ztap:dev` in `ztap-agent.yaml` with
+`your-registry/ztap@sha256:<digest>`, using the index digest from
+`imagetools inspect`. Then follow the install steps above.
 
 ## Upgrade
 

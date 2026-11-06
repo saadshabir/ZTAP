@@ -48,8 +48,6 @@ Use "{{.CommandPath}} [command] --help" for more information about a command.{{e
 // NewRootCmd builds the focused ZTAP command surface. Command construction is
 // explicit (no init side effects); main calls this once and executes it.
 func NewRootCmd(version string) *cobra.Command {
-	Version = version
-
 	root := &cobra.Command{
 		Use:           "ztap",
 		Short:         "Linux eBPF enforcement for Kubernetes NetworkPolicy",
@@ -72,7 +70,8 @@ compiles the supported subset, and enforces it with per-container eBPF programs.
 		newValidateCmd(),
 		newFlowsCmd(),
 		newNodeInitCmd(),
-		newVersionCmd(),
+		newPreflightCmd(),
+		newVersionCmd(version),
 	)
 	root.InitDefaultHelpCmd()
 	for _, command := range root.Commands() {

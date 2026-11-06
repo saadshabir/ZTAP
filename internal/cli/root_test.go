@@ -8,7 +8,7 @@ import (
 
 func TestNewRootCmdCommandSurface(t *testing.T) {
 	root := NewRootCmd("test-version")
-	want := []string{"agent", "cleanup", "flows", "node-init", "validate", "version"}
+	want := []string{"agent", "cleanup", "flows", "node-init", "preflight", "validate", "version"}
 	var visible []string
 	for _, command := range root.Commands() {
 		if !command.Hidden {
@@ -85,7 +85,7 @@ func TestRootHelpListsOnlyPrimaryCommands(t *testing.T) {
 		t.Fatalf("root help has no available commands section: %q", output.String())
 	}
 	commands := strings.SplitN(parts[1], "\n\n", 2)[0]
-	for _, line := range []string{"  agent ", "  cleanup ", "  flows ", "  validate ", "  version "} {
+	for _, line := range []string{"  agent ", "  cleanup ", "  flows ", "  preflight ", "  validate ", "  version "} {
 		if !strings.Contains(commands, line) {
 			t.Errorf("root help missing %q", line)
 		}
@@ -98,7 +98,6 @@ func TestRootHelpListsOnlyPrimaryCommands(t *testing.T) {
 }
 
 func TestVersionCommandUsesStableRecord(t *testing.T) {
-	t.Cleanup(func() { Version = "dev" })
 	root := NewRootCmd("test-version")
 	output := &bytes.Buffer{}
 	root.SetOut(output)
@@ -108,7 +107,7 @@ func TestVersionCommandUsesStableRecord(t *testing.T) {
 		t.Fatalf("version command failed: %v", err)
 	}
 	line := strings.TrimSpace(output.String())
-	for _, field := range []string{"version=test-version", "go=", "os=", "arch="} {
+	for _, field := range []string{"version=test-version", "go=", "os=", "arch=", "commit="} {
 		if !strings.Contains(line, field) {
 			t.Errorf("version output = %q, missing %q", line, field)
 		}

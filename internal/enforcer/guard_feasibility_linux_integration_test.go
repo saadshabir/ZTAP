@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,37 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/saadshabir/ZTAP/internal/restartproof"
 )
+
+func TestLinuxPreflightRejectsDirectGuardAttachments(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+	root := createTestCgroup(t)
+	parent := createSubCgroup(t, root, "kubepods.slice")
+	parents := []string{"kubepods.slice"}
+	if err := CheckGuardParents(root, parents); err != nil {
+		t.Fatalf("empty guard hooks: %v", err)
+	}
+	cgroup, err := os.Open(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cgroup.Close() }()
+	program, err := ebpf.NewProgram(&ebpf.ProgramSpec{
+		Type: ebpf.CGroupSKB, AttachType: ebpf.AttachCGroupInetEgress, License: "GPL",
+		Instructions: asm.Instructions{asm.Mov.Imm(asm.R0, 1), asm.Return()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = program.Close() }()
+	handle, err := link.AttachRawLink(link.RawLinkOptions{Target: int(cgroup.Fd()), Program: program, Attach: ebpf.AttachCGroupInetEgress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = handle.Close() }()
+	if err := CheckGuardParents(root, parents); err == nil || !strings.Contains(err.Error(), "already has a directly attached BPF program") {
+		t.Fatalf("expected the existing program to block preflight, got %v", err)
+	}
+}
 
 // This proof intentionally uses an independent minimal guard. It establishes
 // socket identity and inheritance before the production classification ABI is

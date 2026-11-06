@@ -173,7 +173,7 @@ export RUNNER_TEMP="$(mktemp -d)"
 export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
 export GITHUB_ENV="$RUNNER_TEMP/github-env"
 ZTAP_KIND_MULTI_NODE=1 bash .github/scripts/create-kind-cluster.sh
-make docker
+make docker VERSION=dev
 docker pull busybox:1.36.1
 kind load docker-image ztap:dev busybox:1.36.1 --name ztap
 bash .github/scripts/disable-kindnet-policy.sh

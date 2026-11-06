@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: ztap-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: demo-client
+  policyTypes: [Egress]
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-http-8080
+  namespace: ztap-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: demo-client
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: demo-server
+      ports:
+        - protocol: TCP
+          port: 8080
