@@ -606,7 +606,7 @@ func (s *linuxEngineStore) ownerLive(owner WorkloadIdentity) (bool, error) {
 	return true, nil
 }
 
-func (s *linuxEngineStore) ValidateCandidate(ctx context.Context, candidate policy.PolicySet) error {
+func (s *linuxEngineStore) ValidateCandidate(ctx context.Context, candidate encodedPolicySet) error {
 	if err := s.validateGuardCandidate(candidate); err != nil {
 		return err
 	}

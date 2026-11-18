@@ -15,8 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/saadshabir/ZTAP/internal/policy"
-
 	"github.com/cilium/ebpf/link"
 	"golang.org/x/sys/unix"
 )
@@ -25,7 +23,7 @@ func nilContextForTest() context.Context { return nil }
 
 func TestLinuxEngineStoreRejectsNilPopulateContext(t *testing.T) {
 	store := &linuxEngineStore{}
-	if err := store.PopulateSlot(nilContextForTest(), 0, policy.PolicySet{}); err == nil || !strings.Contains(err.Error(), "context is nil") {
+	if err := store.PopulateSlot(nilContextForTest(), 0, encodedPolicySet{}); err == nil || !strings.Contains(err.Error(), "context is nil") {
 		t.Fatalf("nil populate context error = %v, want context validation", err)
 	}
 }

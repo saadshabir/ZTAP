@@ -17,7 +17,7 @@ import (
 
 type fakePolicyStore struct {
 	active       activeConfiguration
-	slots        map[uint32]policy.PolicySet
+	slots        map[uint32]encodedPolicySet
 	calls        []string
 	callSequence *[]string
 	populateErr  error
@@ -31,7 +31,7 @@ type fakePolicyStore struct {
 }
 
 func newFakePolicyStore(sequence ...*[]string) *fakePolicyStore {
-	store := &fakePolicyStore{slots: make(map[uint32]policy.PolicySet), clearErr: make(map[uint32]int)}
+	store := &fakePolicyStore{slots: make(map[uint32]encodedPolicySet), clearErr: make(map[uint32]int)}
 	if len(sequence) > 0 {
 		store.callSequence = sequence[0]
 	}
@@ -55,10 +55,10 @@ func (s *fakePolicyStore) ClearSlot(slot uint32) error {
 	return nil
 }
 
-func (s *fakePolicyStore) PopulateSlot(_ context.Context, slot uint32, set policy.PolicySet) error {
+func (s *fakePolicyStore) PopulateSlot(_ context.Context, slot uint32, set encodedPolicySet) error {
 	s.record("populate:" + slotString(slot))
 	if s.partialWrite || s.populateErr == nil {
-		s.slots[slot] = clonePolicySet(set)
+		s.slots[slot] = set
 	}
 	if s.populateHook != nil {
 		s.populateHook()
@@ -168,7 +168,7 @@ func TestEngineApplyPublishesCompleteCandidateAndDetachesRemovedSubjectsAfterFli
 	if indexOf(sequence, "quiescent:1") < 0 {
 		t.Fatalf("second commit did not retire slot 1: %v", sequence)
 	}
-	if slot := store.slots[0]; len(slot.Subjects) != 1 || slot.Subjects[0].CgroupID != 20 {
+	if slot := store.slots[0]; len(slot.Subjects) != 1 || slot.Subjects[0].Key.CgroupID != 20 {
 		t.Fatalf("active candidate slot was not populated: %+v", slot)
 	}
 	if _, exists := store.slots[1]; exists {

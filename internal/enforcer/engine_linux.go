@@ -35,6 +35,9 @@ const (
 	engineStateStarting  = AgentLifecycleStarting
 	engineStateEnforcing = AgentLifecycleEnforcing
 	engineStateStopping  = AgentLifecycleStopping
+
+	policyRuleBatchMin  = 32
+	policyRuleBatchSize = 256
 )
 
 var errCgroupReplaced = errors.New("cgroup path now identifies a replacement")
@@ -528,16 +531,12 @@ func enginePinPathAt(directory *os.File, name string) (string, error) {
 	return filepath.Join("/proc/self/fd", strconv.FormatUint(uint64(directory.Fd()), 10), name), nil
 }
 
-func (s *linuxEngineStore) PopulateSlot(ctx context.Context, slot uint32, set policy.PolicySet) error {
+func (s *linuxEngineStore) PopulateSlot(ctx context.Context, slot uint32, encoded encodedPolicySet) error {
 	if ctx == nil {
 		return errors.New("populate policy context is nil")
 	}
 	if slot > 1 {
 		return fmt.Errorf("policy slot %d is outside 0..1", slot)
-	}
-	encoded, err := encodePolicySet(slot, set)
-	if err != nil {
-		return err
 	}
 	if s.slotCounts[slot] != (slotMapCounts{}) {
 		return fmt.Errorf("policy slot %d was not empty before population", slot)
@@ -569,6 +568,7 @@ func (s *linuxEngineStore) PopulateSlot(ctx context.Context, slot uint32, set po
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		entry.Key.Slot = slot
 		if err := s.maps["subject_state"].Put(&entry.Key, &entry.Value); err != nil {
 			return fmt.Errorf("write subject state for cgroup %d: %w", entry.Key.CgroupID, err)
 		}
@@ -588,6 +588,7 @@ func (s *linuxEngineStore) PopulateSlot(ctx context.Context, slot uint32, set po
 		if err := s.rememberOwner(ctx, key.CgroupID, path); err != nil {
 			return err
 		}
+		key.Slot = slot
 		if err := s.maps["workload_class"].Put(&key, &present); err != nil {
 			return err
 		}
@@ -596,6 +597,7 @@ func (s *linuxEngineStore) PopulateSlot(ctx context.Context, slot uint32, set po
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		key.Slot = slot
 		if err := s.maps["node_bypass"].Put(&key, &present); err != nil {
 			return fmt.Errorf("write Node bypass entry: %w", err)
 		}
@@ -604,19 +606,64 @@ func (s *linuxEngineStore) PopulateSlot(ctx context.Context, slot uint32, set po
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		key.Slot = slot
 		if err := s.maps["self_bypass"].Put(&key, &present); err != nil {
 			return fmt.Errorf("write self bypass for cgroup %d: %w", key.CgroupID, err)
 		}
 	}
-	for _, key := range encoded.Rules {
+	return populateRuleMap(ctx, s.maps["policy_rules"], slot, encoded.Rules)
+}
+
+func populateRuleMap(ctx context.Context, m *ebpf.Map, slot uint32, keys []policyRuleKey) error {
+	if len(keys) >= policyRuleBatchMin {
+		var slotKeys [policyRuleBatchSize]policyRuleKey
+		var values [policyRuleBatchSize]uint8
+		for i := range values {
+			values[i] = 1
+		}
+		for len(keys) >= policyRuleBatchMin {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			size := min(len(keys), policyRuleBatchSize)
+			batch := keys[:size]
+			if slot != 0 {
+				copy(slotKeys[:size], batch)
+				batch = slotKeys[:size]
+				for i := range batch {
+					batch[i].Meta |= slot << 31
+				}
+			}
+			written, err := m.BatchUpdate(batch, values[:size], nil)
+			if policyBatchUnsupported(err) {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("write policy rules (batch reported %d/%d): %w", written, size, err)
+			}
+			if written != size {
+				return fmt.Errorf("write policy rules: incomplete batch %d/%d", written, size)
+			}
+			keys = keys[size:]
+		}
+	}
+	present := uint8(1)
+	for _, key := range keys {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.maps["policy_rules"].Put(&key, &present); err != nil {
+		key.Meta |= slot << 31
+		if err := m.Put(&key, &present); err != nil {
 			return fmt.Errorf("write policy rule for cgroup %d: %w", key.CgroupID, err)
 		}
 	}
 	return nil
+}
+
+func policyBatchUnsupported(err error) bool {
+	// cilium/ebpf maps the kernel's ENOTSUPP and missing batch API to
+	// ErrNotSupported. Each command can be unavailable independently.
+	return errors.Is(err, ebpf.ErrNotSupported) || errors.Is(err, unix.EOPNOTSUPP)
 }
 
 func ensureMapCapacity(m *ebpf.Map, name string, observed int) error {
@@ -651,7 +698,7 @@ func (s *linuxEngineStore) ClearSlot(slot uint32) error {
 	if err := clearSelfMap(s.maps["self_bypass"], slot); err != nil {
 		clearErrors = append(clearErrors, err)
 	}
-	if err := clearRuleMap(s.maps["policy_rules"], slot); err != nil {
+	if err := clearRuleMap(s.maps["policy_rules"], slot, s.slotCounts[0].rules+s.slotCounts[1].rules); err != nil {
 		clearErrors = append(clearErrors, err)
 	}
 	if err := errors.Join(clearErrors...); err != nil {
@@ -709,7 +756,18 @@ func clearSelfMap(m *ebpf.Map, slot uint32) error {
 	return deleteMapKeys(m, "self_bypass", keys)
 }
 
-func clearRuleMap(m *ebpf.Map, slot uint32) error {
+func clearRuleMap(m *ebpf.Map, slot uint32, ruleCount int) error {
+	// Both slots share the trie. Complete the scan before deleting any keys
+	// so the cursor stays valid and only the requested slot is modified.
+	if ruleCount >= policyRuleBatchMin {
+		keys, err := lookupRuleSlotBatch(m, slot)
+		if err == nil {
+			return deleteRuleKeys(m, keys)
+		}
+		if !policyBatchUnsupported(err) {
+			return fmt.Errorf("scan policy_rules: %w", err)
+		}
+	}
 	var keys []policyRuleKey
 	iter := m.Iterate()
 	var key policyRuleKey
@@ -721,6 +779,49 @@ func clearRuleMap(m *ebpf.Map, slot uint32) error {
 	}
 	if err := iter.Err(); err != nil {
 		return fmt.Errorf("iterate policy_rules: %w", err)
+	}
+	return deleteRuleKeys(m, keys)
+}
+
+func lookupRuleSlotBatch(m *ebpf.Map, slot uint32) ([]policyRuleKey, error) {
+	var cursor ebpf.MapBatchCursor
+	var keys [policyRuleBatchSize]policyRuleKey
+	var values [policyRuleBatchSize]uint8
+	var matches []policyRuleKey
+	for {
+		count, err := m.BatchLookup(&cursor, keys[:], values[:], nil)
+		done := errors.Is(err, ebpf.ErrKeyNotExist)
+		if err != nil && !done {
+			return nil, err
+		}
+		for _, key := range keys[:count] {
+			if key.Meta>>31 == slot {
+				matches = append(matches, key)
+			}
+		}
+		if done {
+			return matches, nil
+		}
+		if count == 0 {
+			return nil, errors.New("batch lookup made no progress")
+		}
+	}
+}
+
+func deleteRuleKeys(m *ebpf.Map, keys []policyRuleKey) error {
+	for len(keys) >= policyRuleBatchMin {
+		size := min(len(keys), policyRuleBatchSize)
+		deleted, err := m.BatchDelete(keys[:size], nil)
+		if policyBatchUnsupported(err) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("delete policy rules (batch reported %d/%d): %w", deleted, size, err)
+		}
+		if deleted != size {
+			return fmt.Errorf("delete policy rules: incomplete batch %d/%d", deleted, size)
+		}
+		keys = keys[size:]
 	}
 	return deleteMapKeys(m, "policy_rules", keys)
 }

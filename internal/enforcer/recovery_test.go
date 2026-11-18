@@ -19,7 +19,7 @@ type guardedTestStore struct {
 	identityErr error
 }
 
-func (s *guardedTestStore) ValidateCandidate(context.Context, policy.PolicySet) error {
+func (s *guardedTestStore) ValidateCandidate(context.Context, encodedPolicySet) error {
 	return s.identityErr
 }
 
@@ -32,7 +32,7 @@ func TestRecoveredEnginePreservesEpochForIdenticalSnapshot(t *testing.T) {
 	active := activeConfiguration{Slot: 1, PolicyEpoch: 42}
 	store := newFakePolicyStore()
 	store.active = active
-	store.slots[1] = set
+	store.slots[1] = encoded
 	handle := &preservingTestLink{}
 	linker := newFakeLinker(nil)
 	engine := newEngineCore(store, linker, nil)
@@ -65,7 +65,7 @@ func TestRecoveredEngineDefersEntireSnapshotWhileIdentityIsUncertain(t *testing.
 			store := &guardedTestStore{fakePolicyStore: newFakePolicyStore(), identityErr: errors.New(state)}
 			active := activeConfiguration{Slot: 1, PolicyEpoch: 27}
 			store.active = active
-			store.slots[1] = set
+			store.slots[1] = encoded
 			handle := &preservingTestLink{}
 			engine := newEngineCore(store, newFakeLinker(nil), nil)
 			if err := engine.recover(active, encoded, map[uint64]io.Closer{10: handle}); err != nil {

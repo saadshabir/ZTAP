@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -597,8 +598,8 @@ func TestLinuxEngineFlowEventRateLimitPersistsAcrossPolicyEpochs(t *testing.T) {
 		t.Fatalf("prime flow event limiter: %v", err)
 	}
 
-	changed := clonePolicySet(set)
-	changed.NodeIPs = append(changed.NodeIPs, netip.MustParseAddr("192.0.2.99"))
+	changed := set
+	changed.NodeIPs = append(slices.Clone(set.NodeIPs), netip.MustParseAddr("192.0.2.99"))
 	if err := engine.Apply(context.Background(), changed); err != nil {
 		t.Fatalf("apply second policy epoch: %v", err)
 	}
@@ -860,8 +861,8 @@ func TestLinuxEngineReplyStateExpiresAcrossReusedSlot(t *testing.T) {
 
 	// Two complete updates cycle the active slot 1 -> 0 -> 1. The reply-state
 	// entry remains physically present under epoch 1 but cannot match epoch 3.
-	changed := clonePolicySet(set)
-	changed.NodeIPs = append(changed.NodeIPs, netip.MustParseAddr("192.0.2.99"))
+	changed := set
+	changed.NodeIPs = append(slices.Clone(set.NodeIPs), netip.MustParseAddr("192.0.2.99"))
 	if err := engine.Apply(context.Background(), changed); err != nil {
 		t.Fatalf("apply epoch 2: %v", err)
 	}
@@ -900,9 +901,20 @@ func TestLinuxEngineConcurrentTrafficSeesCompletePolicyEpoch(t *testing.T) {
 	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
 	policyA := engineTestPolicySet(t, cgroupID, portA)
 	policyB := engineTestPolicySet(t, cgroupID, portB)
+	// Leave at least one minimum-sized batch after the first full batch.
+	// The filler peer keeps these rules from affecting the loopback traffic.
+	fillerPeer := netip.MustParsePrefix("203.0.113.0/24")
+	for i := range policyRuleBatchSize + policyRuleBatchMin {
+		rule := policyA.Rules[0]
+		rule.Peer = fillerPeer
+		rule.Port = 10000 + uint16(i)
+		policyA.Rules = append(policyA.Rules, rule)
+		policyB.Rules = append(policyB.Rules, rule)
+	}
 	if err := engine.Apply(context.Background(), policyA); err != nil {
 		t.Fatalf("apply initial policy: %v", err)
 	}
+	assertEngineRuleSnapshot(t, engine, policyA)
 	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
 	if err != nil {
 		t.Fatalf("create flow event reader: %v", err)
@@ -947,6 +959,7 @@ func TestLinuxEngineConcurrentTrafficSeesCompletePolicyEpoch(t *testing.T) {
 		if err := engine.Apply(context.Background(), candidate); err != nil {
 			t.Fatalf("apply concurrent candidate %d: %v", update+2, err)
 		}
+		assertEngineRuleSnapshot(t, engine, candidate)
 	}
 	time.Sleep(30 * time.Millisecond)
 
@@ -1006,6 +1019,35 @@ func TestLinuxEngineConcurrentTrafficSeesCompletePolicyEpoch(t *testing.T) {
 	case err := <-readerErrors:
 		t.Fatalf("read flow events during policy updates: %v", err)
 	default:
+	}
+}
+
+func assertEngineRuleSnapshot(t *testing.T, engine *LinuxEngine, set policy.PolicySet) {
+	t.Helper()
+	active := engine.active
+	expected := make(map[policyRuleKey]struct{}, len(set.Rules))
+	for _, rule := range set.Rules {
+		key, err := encodePolicyRuleKey(active.Slot, rule)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected[key] = struct{}{}
+	}
+
+	iter := engine.store.maps["policy_rules"].Iterate()
+	var key policyRuleKey
+	var value uint8
+	for iter.Next(&key, &value) {
+		if _, ok := expected[key]; !ok || value != 1 {
+			t.Fatalf("epoch %d slot %d: unexpected policy_rules entry %+v = %d", active.PolicyEpoch, active.Slot, key, value)
+		}
+		delete(expected, key)
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("iterate policy_rules: %v", err)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("epoch %d slot %d: policy_rules is missing %d rules", active.PolicyEpoch, active.Slot, len(expected))
 	}
 }
 
@@ -1158,6 +1200,83 @@ func TestLinuxEngineKernelMapWriteFailurePreservesActivePackets(t *testing.T) {
 			assertEngineUDPDelivery(t, newListener, false)
 		})
 	}
+}
+
+func TestLinuxEngineRollsBackPartialRuleBatch(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+
+	cgroup := createTestCgroup(t)
+	cgroupID := mustCgroupID(t, cgroup)
+	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
+	ctx := t.Context()
+	initial := engineTestPolicySet(t, cgroupID, 40000)
+	if err := engine.Apply(ctx, initial); err != nil {
+		t.Fatal(err)
+	}
+
+	ports := make([]uint16, policyRuleBatchMin+1)
+	for i := range ports {
+		ports[i] = 41000 + uint16(i)
+	}
+	candidate := compileEngineTestPolicySet(t, []uint64{cgroupID}, []string{"Egress"}, ports, nil, nil, nil)
+	candidateKey, err := encodePolicyRuleKey(0, candidate.Rules[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeKey, err := encodePolicyRuleKey(1, initial.Rules[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := engine.store.maps["policy_rules"]
+	var sawPartialWrite bool
+	engine.store.checkpoint = func(name string) {
+		if name != "slot-subjects-cleared" {
+			return
+		}
+		// The rollback has cleared subjects and is about to clear rules.
+		var value uint8
+		if err := rules.Lookup(&candidateKey, &value); err == nil && value == 1 {
+			sawPartialWrite = true
+		}
+	}
+	engine.engineCore.store = invalidRuleBatchStore{engine.store}
+	err = engine.Apply(ctx, candidate)
+	engine.engineCore.store = engine.store
+	engine.store.checkpoint = nil
+	if !errors.Is(err, unix.EINVAL) || !sawPartialWrite {
+		t.Fatalf("partial rule write observed = %t, apply error = %v", sawPartialWrite, err)
+	}
+	t.Logf("population error: %v", err)
+	if engine.active != (activeConfiguration{Slot: 1, PolicyEpoch: 1}) || engine.pendingCleanup != nil {
+		t.Fatalf("after failure: active = %+v, pending cleanup = %v", engine.active, engine.pendingCleanup)
+	}
+	if engine.store.slotCounts[0] != (slotMapCounts{}) {
+		t.Fatalf("failed candidate still accounted for: %+v", engine.store.slotCounts[0])
+	}
+	assertEngineSlotEmpty(t, engine, 0)
+	var value uint8
+	if err := rules.Lookup(&activeKey, &value); err != nil || value != 1 {
+		t.Fatalf("committed rule after failure: value=%d, err=%v", value, err)
+	}
+	if err := engine.Apply(ctx, candidate); err != nil {
+		t.Fatalf("retry valid candidate: %v", err)
+	}
+	if engine.active != (activeConfiguration{Slot: 0, PolicyEpoch: 2}) || engine.pendingCleanup != nil {
+		t.Fatalf("after retry: active = %+v, pending cleanup = %v", engine.active, engine.pendingCleanup)
+	}
+	assertEngineSlotEmpty(t, engine, 1)
+	if err := rules.Lookup(&candidateKey, &value); err != nil || value != 1 {
+		t.Fatalf("committed rule after retry: value=%d, err=%v", value, err)
+	}
+}
+
+type invalidRuleBatchStore struct{ *linuxEngineStore }
+
+func (s invalidRuleBatchStore) PopulateSlot(ctx context.Context, slot uint32, encoded encodedPolicySet) error {
+	encoded.Rules = slices.Clone(encoded.Rules)
+	// Model a kernel rejection after the earlier keys in this batch were written.
+	encoded.Rules[len(encoded.Rules)-1].PrefixLength = ^uint32(0)
+	return s.linuxEngineStore.PopulateSlot(ctx, slot, encoded)
 }
 
 func TestLinuxEngineRetiredSlotQuiescenceIgnoresCurrentTraffic(t *testing.T) {
