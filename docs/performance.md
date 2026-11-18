@@ -179,6 +179,38 @@ p95 is the maximum of three retained samples. This comparison bundle is
 separate from the complete hosted acceptance evidence and does not update
 historical packet, resource, or availability claims.
 
+### Changed-policy engine apply
+
+On November 16, 2026, a local Linux arm64 comparison ran on OrbStack kernel
+`7.2.12-orbstack-00394-gbecdd6130068` with Go 1.27.4, CPUs `0,1` and
+`GOMAXPROCS=2`. Each variant ran six groups of 120 applies after warming both
+slots. The fixture alternated one rule port and checked that each apply
+advanced the epoch and left no deferred cleanup. Its 250 subjects already had
+links and explicit workload classification.
+
+The baseline CPU profile attributed 49% of samples to slot cleanup and 44%
+to map iteration, which overlapped. Snapshot encoding across both passes
+accounted for 23% of sampled allocation bytes. The table reports the median
+of the six per-run medians and p95s, plus median allocated bytes per apply.
+
+| Variant, 2,500 rules | Median | p95 | Bytes per apply |
+| --- | ---: | ---: | ---: |
+| Baseline (`ea2aae9`) | 12.76 ms | 14.30 ms | 2,468,010 |
+| Reuse the normalized snapshot | 12.25 ms | 13.39 ms | 1,982,918 |
+| Reuse plus batched LPM writes and deletes | 11.10 ms | 12.65 ms | 1,930,026 |
+| Reuse plus batched LPM writes, scans and deletes | 8.03 ms | 8.87 ms | 1,944,206 |
+
+The 10-rule, one-subject fixture stayed near 0.22 ms median. The comparison
+measures repeated engine applies with real cgroups and maps. Informer
+delivery, debounce, snapshot compilation and new link attachment are outside
+the timed path.
+
+The fake-client agent event harness recorded 24 samples per revision.
+Median event-to-observed-epoch time was 104.87 ms at baseline and 104.26 ms
+with batching and snapshot reuse. The harness polls metrics every 100 ms
+and includes the 50 ms debounce, so these samples do not resolve a material
+event-latency improvement.
+
 ### Linux performance harness
 
 Use a disposable Linux host with cgroup v2, mounted bpffs, and the privileges

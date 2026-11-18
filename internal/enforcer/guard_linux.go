@@ -13,7 +13,6 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
-	"github.com/saadshabir/ZTAP/internal/policy"
 	"golang.org/x/sys/unix"
 )
 
@@ -345,16 +344,16 @@ func (s *linuxEngineStore) installParentGuard(file *os.File, id uint64, relative
 	return nil
 }
 
-func (s *linuxEngineStore) validateGuardCandidate(set policy.PolicySet) error {
+func (s *linuxEngineStore) validateGuardCandidate(set encodedPolicySet) error {
 	if len(s.guardOwners) == 0 {
 		return nil
 	}
-	classified := make(map[uint64]bool, len(set.ClassifiedCgroups))
-	for _, id := range set.ClassifiedCgroups {
-		classified[id] = true
+	classified := make(map[uint64]bool, len(set.Classified))
+	for _, key := range set.Classified {
+		classified[key.CgroupID] = true
 	}
 	for _, subject := range set.Subjects {
-		if !classified[subject.CgroupID] {
+		if !classified[subject.Key.CgroupID] {
 			return errors.New("guarded policy subject lacks explicit classification")
 		}
 	}

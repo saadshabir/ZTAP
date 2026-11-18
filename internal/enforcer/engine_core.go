@@ -7,9 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
-	"net/netip"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -25,7 +23,8 @@ type activeConfiguration struct {
 
 type enginePolicyStore interface {
 	ClearSlot(uint32) error
-	PopulateSlot(context.Context, uint32, policy.PolicySet) error
+	// PopulateSlot accepts a normalized snapshot encoded for slot zero.
+	PopulateSlot(context.Context, uint32, encodedPolicySet) error
 	Flip(activeConfiguration) error
 	WaitQuiescent(context.Context, uint32) error
 	Close() error
@@ -72,12 +71,9 @@ func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := policy.ValidatePolicySet(desired); err != nil {
-		return fmt.Errorf("validate policy set: %w", err)
-	}
-	desired = clonePolicySet(desired)
-	// Compare the actual map contents, including normalized order and duplicate
-	// removal, rather than informer object versions or slice ordering.
+	// Normalize once for comparison, identity validation, and population.
+	// Keep these keys encoded for slot zero so equality is independent of the
+	// active slot, including when the committed contents came from recovery.
 	encoded, err := encodePolicySet(0, desired)
 	if err != nil {
 		return err
@@ -93,9 +89,9 @@ func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error 
 	// Identity uncertainty rejects the whole transaction, including the no-op
 	// path. A synchronized informer cache may still omit a live container.
 	if validator, ok := e.store.(interface {
-		ValidateCandidate(context.Context, policy.PolicySet) error
+		ValidateCandidate(context.Context, encodedPolicySet) error
 	}); ok {
-		if err := validator.ValidateCandidate(ctx, desired); err != nil {
+		if err := validator.ValidateCandidate(ctx, encoded); err != nil {
 			return fmt.Errorf("preserve committed enforcement: %w", err)
 		}
 	}
@@ -117,7 +113,7 @@ func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error 
 		if err := e.reclaimPendingSlot(ctx, 1-e.active.Slot); err != nil {
 			return err
 		}
-		e.closeRemovedLinks(policySetCgroupIDs(desired))
+		e.closeRemovedLinks(encoded.Subjects)
 		return e.markEnforcing()
 	}
 	if e.active.PolicyEpoch == math.MaxUint64 {
@@ -139,7 +135,7 @@ func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := e.store.PopulateSlot(ctx, candidate.Slot, desired); err != nil {
+	if err := e.store.PopulateSlot(ctx, candidate.Slot, encoded); err != nil {
 		cleanupErr := e.store.ClearSlot(candidate.Slot)
 		if cleanupErr != nil {
 			e.slotCleanupFailures++
@@ -154,9 +150,9 @@ func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error 
 	}
 	e.observeCheckpoint("inactive-slot-populated")
 
-	desiredIDs := policySetCgroupIDs(desired)
 	newLinks := make(map[uint64]io.Closer)
-	for _, cgroupID := range desiredIDs {
+	for _, subject := range encoded.Subjects {
+		cgroupID := subject.Key.CgroupID
 		if _, exists := e.links[cgroupID]; exists {
 			continue
 		}
@@ -201,7 +197,7 @@ func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error 
 	for cgroupID, link := range newLinks {
 		e.links[cgroupID] = link
 	}
-	e.closeRemovedLinks(desiredIDs)
+	e.closeRemovedLinks(encoded.Subjects)
 	e.reclaimCommittedSlot(old.Slot)
 	if statusErr != nil {
 		return statusErr
@@ -306,10 +302,10 @@ func (e *engineCore) retryOrphanLinks() error {
 	return errors.Join(closeErrors...)
 }
 
-func (e *engineCore) closeRemovedLinks(desiredIDs []uint64) {
-	desired := make(map[uint64]struct{}, len(desiredIDs))
-	for _, cgroupID := range desiredIDs {
-		desired[cgroupID] = struct{}{}
+func (e *engineCore) closeRemovedLinks(subjects []encodedSubjectState) {
+	desired := make(map[uint64]struct{}, len(subjects))
+	for _, subject := range subjects {
+		desired[subject.Key.CgroupID] = struct{}{}
 	}
 	for cgroupID, link := range e.links {
 		if _, keep := desired[cgroupID]; keep {
@@ -422,29 +418,6 @@ func (e *engineCore) recover(active activeConfiguration, encoded encodedPolicySe
 	// immediately following a flip. Never reset its packet-reader counters.
 	e.pendingCleanup = slotPointer(1 - active.Slot)
 	return nil
-}
-
-func clonePolicySet(source policy.PolicySet) policy.PolicySet {
-	copySet := policy.PolicySet{
-		NodeIPs:           append([]netip.Addr(nil), source.NodeIPs...),
-		Subjects:          make([]policy.Subject, len(source.Subjects)),
-		Rules:             append([]policy.Rule(nil), source.Rules...),
-		ClassifiedCgroups: append([]uint64(nil), source.ClassifiedCgroups...),
-	}
-	for i, subject := range source.Subjects {
-		copySet.Subjects[i] = subject
-		copySet.Subjects[i].PodIPs = append([]netip.Addr(nil), subject.PodIPs...)
-	}
-	return copySet
-}
-
-func policySetCgroupIDs(set policy.PolicySet) []uint64 {
-	ids := make([]uint64, 0, len(set.Subjects))
-	for _, subject := range set.Subjects {
-		ids = append(ids, subject.CgroupID)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	return ids
 }
 
 func slotPointer(slot uint32) *uint32 {
