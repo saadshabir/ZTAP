@@ -6,7 +6,7 @@ container cgroups, then replaces the node-local eBPF policy snapshot
 atomically.
 
 The tested cluster profile is Kubernetes `1.36.4`. The current checkout uses
-`k8s.io/* v0.37.0` client libraries; that dependency version does not establish
+`k8s.io/* v0.37.1` client libraries; that dependency version does not establish
 support for another cluster version. ZTAP implements a deliberate IPv4-only
 subset, with explicit rejection of unsupported native features.
 
