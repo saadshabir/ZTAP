@@ -1113,7 +1113,7 @@ func (p *durableLinkPair) Remove() error {
 	return nil
 }
 
-func (l *linuxSubjectLinker) attachPersistent(ctx context.Context, id uint64) (io.Closer, error) {
+func (l *linuxSubjectLinker) Attach(ctx context.Context, id uint64) (io.Closer, error) {
 	if ctx == nil {
 		return nil, errors.New("attach cgroup context is nil")
 	}

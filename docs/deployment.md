@@ -11,9 +11,8 @@ local cluster, or use a copy of the manifest with your registry image's digest.
 - Linux nodes with cgroup v2 and a mounted bpffs at `/sys/fs/bpf`.
 - Pinnable cgroup BPF links with reopen and in-place program replacement,
   inherited ingress/egress hooks, cgroup socket storage with listener cloning,
-  and socket network-namespace cookies. Startup probes these capabilities;
-  restart-safe mode has no legacy attachment fallback. The new gates were
-  exercised on Linux `7.0.14-orbstack-00380-ga7e0a2dc9535`, arm64,
+  and socket network-namespace cookies. Startup probes these capabilities.
+  The restart tests ran on Linux `7.0.14-orbstack-00380-ga7e0a2dc9535`, arm64,
   with containerd `2.3.4` and Kubernetes `1.36.4`.
 - containerd configured to use the systemd cgroup driver; cgroupfs, cgroup v1,
   Docker Engine, and CRI-O layouts are unsupported.
@@ -229,12 +228,13 @@ descendants remain blocked in both directions until the atomic policy/class
 commit; known unisolated containers resume NetworkPolicy default allow.
 
 The first migration from the historical process-owned version requires drained
-workloads or a maintenance traffic gate: that old process still detaches on
-exit. Fresh installation also requires preventing workload traffic until the
-guard is installed and classification completes. Persistence covers one kernel
-boot. A node reboot destroys these objects; this release does not provide or
-verify a host/runtime startup dependency that installs protection before
-workload traffic. Reboot continuity requires that separate gate and reboot test.
+workloads or a maintenance traffic gate because that version detaches on exit.
+The persistent engine starts with an empty pin directory for a fresh install
+and requires valid durable ownership metadata to recover existing pins. Keep
+workload traffic gated until the guard is installed and classification
+completes. Persistence covers one kernel boot. A node reboot destroys these
+objects. Reboot continuity requires a separate host/runtime startup dependency
+that installs protection before workload traffic, plus a reboot test.
 
 The [restart evidence](performance.md#restart-continuity-results) records finite
 Linux and deployed-agent tests with zero observed prohibited traffic; it is not

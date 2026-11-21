@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -135,12 +134,6 @@ type slotMapCounts struct {
 	nodes      int
 	self       int
 	classified int
-}
-
-type subjectLinkPair struct {
-	mu      sync.Mutex
-	egress  io.Closer
-	ingress io.Closer
 }
 
 type linuxSubjectLinker struct {
@@ -1038,200 +1031,9 @@ func (s *linuxEngineStore) Close() error {
 	return errors.Join(closeErrors...)
 }
 
-func (l *linuxSubjectLinker) Attach(ctx context.Context, cgroupID uint64) (io.Closer, error) {
-	if l.store != nil {
-		return l.attachPersistent(ctx, cgroupID)
-	}
-	if ctx == nil {
-		return nil, errors.New("attach cgroup context is nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	path, err := l.resolvePath(ctx, cgroupID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve cgroup %d path: %w", cgroupID, err)
-	}
-	cgroup, _, err := openValidatedCgroup(l.cgroupRoot, path, cgroupID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = cgroup.Close()
-	}()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := rejectIncompatibleCgroupProgram(cgroup, ebpf.AttachCGroupInetEgress, l.egress); err != nil {
-		return nil, fmt.Errorf("inspect egress attachments for cgroup %d: %w", cgroupID, err)
-	}
-	egress, err := attachCgroupProgram(cgroup, ebpf.AttachCGroupInetEgress, l.egress)
-	if err != nil {
-		return nil, fmt.Errorf("attach egress program to cgroup %d: %w", cgroupID, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return &subjectLinkPair{egress: egress}, err
-	}
-	if err := rejectIncompatibleCgroupProgram(cgroup, ebpf.AttachCGroupInetEgress, l.egress); err != nil {
-		return &subjectLinkPair{egress: egress}, fmt.Errorf("validate egress attachments for cgroup %d: %w", cgroupID, err)
-	}
-	if err := rejectIncompatibleCgroupProgram(cgroup, ebpf.AttachCGroupInetIngress, l.ingress); err != nil {
-		return &subjectLinkPair{egress: egress}, fmt.Errorf("inspect ingress attachments for cgroup %d: %w", cgroupID, err)
-	}
-	ingress, err := attachCgroupProgram(cgroup, ebpf.AttachCGroupInetIngress, l.ingress)
-	if err != nil {
-		return &subjectLinkPair{egress: egress}, fmt.Errorf("attach ingress program to cgroup %d: %w", cgroupID, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return &subjectLinkPair{egress: egress, ingress: ingress}, err
-	}
-	if err := rejectIncompatibleCgroupProgram(cgroup, ebpf.AttachCGroupInetIngress, l.ingress); err != nil {
-		return &subjectLinkPair{egress: egress, ingress: ingress}, fmt.Errorf("validate ingress attachments for cgroup %d: %w", cgroupID, err)
-	}
-	pair := &subjectLinkPair{
-		egress:  egress,
-		ingress: ingress,
-	}
-	if err := ctx.Err(); err != nil {
-		return pair, err
-	}
-	if l.cgroupStorage == nil {
-		return pair, errors.New("attached_cgroup storage map is missing")
-	}
-	egressKey := cgroupStorageKey{CgroupID: cgroupID, AttachType: uint32(ebpf.AttachCGroupInetEgress)}
-	if err := l.cgroupStorage.Put(&egressKey, &cgroupID); err != nil {
-		return pair, fmt.Errorf("record attached egress cgroup %d identity: %w", cgroupID, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return pair, err
-	}
-	ingressKey := cgroupStorageKey{CgroupID: cgroupID, AttachType: uint32(ebpf.AttachCGroupInetIngress)}
-	if err := l.cgroupStorage.Put(&ingressKey, &cgroupID); err != nil {
-		return pair, fmt.Errorf("record attached ingress cgroup %d identity: %w", cgroupID, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return pair, err
-	}
-	return pair, nil
-}
-
-const (
-	cgroupAttachAllowOverride = 1 << iota
-	cgroupAttachAllowMulti
-)
-
-// legacyCgroupAttachment retains the cgroup and cloned program handles needed
-// by the legacy BPF_PROG_ATTACH fallback. bpf_link attachments are returned as
-// the package's raw link and do not need to retain the target descriptor.
-type legacyCgroupAttachment struct {
-	cgroup  *os.File
-	program *ebpf.Program
-	attach  ebpf.AttachType
-}
-
-func (a *legacyCgroupAttachment) Close() error {
-	if a == nil {
-		return nil
-	}
-	var closeErrors []error
-	if a.program != nil {
-		if a.cgroup == nil {
-			return errors.New("cgroup handle is missing while program is attached")
-		}
-		if err := link.RawDetachProgram(link.RawDetachProgramOptions{
-			Target:  int(a.cgroup.Fd()),
-			Program: a.program,
-			Attach:  a.attach,
-		}); err != nil {
-			// Retain both handles so an engine retry can attempt the detach again.
-			return fmt.Errorf("detach cgroup program: %w", err)
-		}
-		if err := a.program.Close(); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("close cgroup program: %w", err))
-		}
-		a.program = nil
-	}
-	if a.cgroup != nil {
-		if err := a.cgroup.Close(); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("close cgroup handle: %w", err))
-		}
-		a.cgroup = nil
-	}
-	return errors.Join(closeErrors...)
-}
-
-func attachCgroupProgram(cgroup *os.File, attach ebpf.AttachType, program *ebpf.Program) (io.Closer, error) {
-	if cgroup == nil {
-		return nil, errors.New("cgroup handle is nil")
-	}
-	if program == nil {
-		return nil, errors.New("cgroup program is nil")
-	}
-	raw, err := link.AttachRawLink(link.RawLinkOptions{
-		Target:  int(cgroup.Fd()),
-		Program: program,
-		Attach:  attach,
-	})
-	if err == nil {
-		return raw, nil
-	}
-	if !errors.Is(err, link.ErrNotSupported) {
-		return nil, err
-	}
-
-	clone, err := program.Clone()
-	if err != nil {
-		return nil, err
-	}
-	lastErr := tryLegacyCgroupAttach(func(flags uint32) error {
-		return link.RawAttachProgram(link.RawAttachProgramOptions{
-			Target:  int(cgroup.Fd()),
-			Program: clone,
-			Attach:  attach,
-			Flags:   flags,
-		})
-	})
-	if lastErr != nil {
-		_ = clone.Close()
-		return nil, lastErr
-	}
-	dupFD, dupErr := unix.Dup(int(cgroup.Fd()))
-	if dupErr != nil {
-		_ = link.RawDetachProgram(link.RawDetachProgramOptions{
-			Target:  int(cgroup.Fd()),
-			Program: clone,
-			Attach:  attach,
-		})
-		_ = clone.Close()
-		return nil, fmt.Errorf("duplicate cgroup handle: %w", dupErr)
-	}
-	return &legacyCgroupAttachment{
-		cgroup:  os.NewFile(uintptr(dupFD), "ztap cgroup attachment"),
-		program: clone,
-		attach:  attach,
-	}, nil
-}
-
-func tryLegacyCgroupAttach(attach func(uint32) error) error {
-	if attach == nil {
-		return errors.New("legacy cgroup attach function is nil")
-	}
-	if err := attach(cgroupAttachAllowMulti); err != nil {
-		if !cgroupMultiAttachUnsupported(err) {
-			return err
-		}
-		return attach(cgroupAttachAllowOverride)
-	}
-	return nil
-}
-
-func cgroupMultiAttachUnsupported(err error) bool {
-	return errors.Is(err, link.ErrNotSupported) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP)
-}
-
 // rejectIncompatibleCgroupProgram verifies that the target has no direct
 // cgroup-skb attachment other than the program this engine is about to use.
-// AttachCgroup intentionally supports multi-attach, but accepting an
+// Cgroup BPF links support multi-attach, but accepting an
 // unrelated program would make the resulting verdict and local-storage
 // ownership dependent on another controller. Querying before and after the
 // attach also closes the small race where a second controller attaches while
@@ -1264,29 +1066,6 @@ func rejectIncompatibleCgroupProgram(cgroup *os.File, attach ebpf.AttachType, ex
 		}
 	}
 	return nil
-}
-
-func (p *subjectLinkPair) Close() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	// Cgroup-local storage is kernel-owned. It is updated after attach and is
-	// released with the map/cgroup lifecycle; userspace cannot delete entries.
-	var closeErrors []error
-	if p.egress != nil {
-		if err := p.egress.Close(); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("close egress link: %w", err))
-		} else {
-			p.egress = nil
-		}
-	}
-	if p.ingress != nil {
-		if err := p.ingress.Close(); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("close ingress link: %w", err))
-		} else {
-			p.ingress = nil
-		}
-	}
-	return errors.Join(closeErrors...)
 }
 
 func validateCgroupTarget(root, target string, expectedID uint64) (string, error) {

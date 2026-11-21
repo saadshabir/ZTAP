@@ -5,18 +5,13 @@ package enforcer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/cilium/ebpf/link"
-	"golang.org/x/sys/unix"
 )
 
 func nilContextForTest() context.Context { return nil }
@@ -404,48 +399,6 @@ func TestEnsureEnginePinDirectoryRejectsSymlinkedRootComponent(t *testing.T) {
 
 	if err := ensureEnginePinDirectory(filepath.Join(link, "bpffs")); err == nil || !strings.Contains(err.Error(), "symlink component") {
 		t.Fatalf("ensureEnginePinDirectory error = %v, want symlink-component rejection", err)
-	}
-}
-
-func TestTryLegacyCgroupAttachFallsBackToOverride(t *testing.T) {
-	for _, unsupported := range []error{
-		link.ErrNotSupported,
-		fmt.Errorf("multi attach: %w", unix.EINVAL),
-		fmt.Errorf("multi attach: %w", unix.EOPNOTSUPP),
-	} {
-		t.Run(unsupported.Error(), func(t *testing.T) {
-			var flags []uint32
-			err := tryLegacyCgroupAttach(func(flag uint32) error {
-				flags = append(flags, flag)
-				if flag == cgroupAttachAllowMulti {
-					return unsupported
-				}
-				return nil
-			})
-			if err != nil {
-				t.Fatalf("tryLegacyCgroupAttach: %v", err)
-			}
-			want := []uint32{cgroupAttachAllowMulti, cgroupAttachAllowOverride}
-			if !reflect.DeepEqual(flags, want) {
-				t.Fatalf("attach flags = %v, want %v", flags, want)
-			}
-		})
-	}
-}
-
-func TestTryLegacyCgroupAttachDoesNotMaskOtherErrors(t *testing.T) {
-	wantErr := fmt.Errorf("multi attach: %w", unix.EPERM)
-	var flags []uint32
-	err := tryLegacyCgroupAttach(func(flag uint32) error {
-		flags = append(flags, flag)
-		return wantErr
-	})
-	if !errors.Is(err, unix.EPERM) {
-		t.Fatalf("tryLegacyCgroupAttach error = %v, want EPERM", err)
-	}
-	wantFlags := []uint32{cgroupAttachAllowMulti}
-	if !reflect.DeepEqual(flags, wantFlags) {
-		t.Fatalf("attach flags = %v, want %v", flags, wantFlags)
 	}
 }
 
