@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -54,6 +56,94 @@ func restartProofPolicy(id uint64, ingress, egress uint16) policy.PolicySet {
 			{CgroupID: id, Direction: policy.DirectionIngress, Protocol: policy.ProtocolUDP, Port: ingress, Peer: netip.MustParsePrefix("127.0.0.1/32")},
 			{CgroupID: id, Direction: policy.DirectionEgress, Protocol: policy.ProtocolUDP, Port: egress, Peer: netip.MustParsePrefix("127.0.0.1/32")},
 		},
+	}
+}
+
+func TestLinuxEnginePortRangesSurviveReopen(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+	cgroup := createTestCgroup(t)
+	id := mustCgroupID(t, cgroup)
+	options := LinuxEngineOptions{
+		BPFFSRoot: createEngineTestBPFFSRoot(t),
+		ResolveCgroupPath: func(context.Context, uint64) (string, error) {
+			return cgroup, nil
+		},
+	}
+	openEngine := func() *LinuxEngine {
+		t.Helper()
+		engine, err := NewLinuxEngine(t.Context(), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := engine.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		return engine
+	}
+
+	listeners := []*net.UDPConn{listenEngineTestUDP(t), listenEngineTestUDP(t), listenEngineTestUDP(t)}
+	port := func(conn *net.UDPConn) int { return conn.LocalAddr().(*net.UDPAddr).Port }
+	slices.SortFunc(listeners, func(a, b *net.UDPConn) int { return port(a) - port(b) })
+	end, outside := port(listeners[1]), port(listeners[2])
+	// Include an aligned block even if the allowed listeners are adjacent.
+	start := port(listeners[0]) &^ 3
+	peer := policy.NativePeer{IPBlock: &policy.NativeIPBlock{CIDR: "127.0.0.0/8"}}
+	portRange := policy.NativePort{Protocol: "UDP", Port: start, EndPort: &end}
+	outsideEnd := outside | 1
+	otherPeerRange := policy.NativePort{Protocol: "UDP", Port: outside &^ 1, EndPort: &outsideEnd}
+	otherProtocolRange := otherPeerRange
+	otherProtocolRange.Protocol = "TCP"
+	native := policy.NativeNetworkPolicy{
+		APIVersion: policy.NativeNetworkPolicyAPIVersion,
+		Kind:       policy.NativeNetworkPolicyKind,
+		Metadata:   &policy.NativeObjectMeta{Name: "port-range"},
+		Spec: &policy.NativeNetworkPolicySpec{
+			PodSelector: &policy.NativeLabelSelector{},
+			Ingress:     []policy.NativeIngressRule{{From: []policy.NativePeer{peer}, Ports: []policy.NativePort{portRange}}},
+			Egress: []policy.NativeEgressRule{
+				{To: []policy.NativePeer{peer}, Ports: []policy.NativePort{portRange, otherProtocolRange}},
+				{To: []policy.NativePeer{{IPBlock: &policy.NativeIPBlock{CIDR: "192.0.2.0/24"}}}, Ports: []policy.NativePort{otherPeerRange}},
+			},
+		},
+	}
+	input := policy.ResolutionInput{
+		NodeIPs:    []netip.Addr{netip.MustParseAddr("192.0.2.1")},
+		Namespaces: []policy.ResolvedNamespace{{Name: "default"}},
+		Pods:       []policy.ResolvedPod{{Namespace: "default", Name: "client", CgroupIDs: []uint64{id}, Local: true}},
+	}
+	result, err := policy.CompileNativePolicies([]policy.NativeNetworkPolicy{native}, input)
+	if err != nil || len(result.Rejected) != 0 {
+		t.Fatalf("compile port range: %v, rejected: %+v", err, result.Rejected)
+	}
+	engine := openEngine()
+	if err := engine.Apply(t.Context(), result.PolicySet); err != nil {
+		t.Fatal(err)
+	}
+	for _, listener := range listeners {
+		runUDPSendHelperInCgroup(t, cgroup, listener.LocalAddr().String())
+		assertEngineUDPDelivery(t, listener, port(listener) <= end)
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	engine = openEngine()
+	epoch := engine.active.PolicyEpoch
+	if err := engine.Apply(t.Context(), result.PolicySet); err != nil {
+		t.Fatal(err)
+	}
+	if engine.active.PolicyEpoch != epoch {
+		t.Fatal("unchanged range policy advanced the recovered epoch")
+	}
+	for _, p := range []int{start, end, outside} {
+		if delivered := runUDPReceiveHelperInCgroup(t, cgroup, p); delivered != (p <= end) {
+			t.Errorf("ingress port %d after reopen: delivered=%t, want %t", p, delivered, p <= end)
+		}
 	}
 }
 
@@ -138,7 +228,7 @@ func TestRestartEngineOwnerHelper(t *testing.T) {
 	if armed {
 		spec = compatibleRestartProgramSpec(t)
 	}
-	engine, err := newPersistentLinuxEngineWithSpec(ctx, options, spec)
+	engine, err := newPersistentLinuxEngineWithSpec(ctx, options, spec, false)
 	if err != nil {
 		t.Fatal(err)
 	}

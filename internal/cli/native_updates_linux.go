@@ -60,7 +60,8 @@ func nativeContainerStatusesEqual(a, b []corev1.ContainerStatus) bool {
 
 func nativeContainersEqual(a, b []corev1.Container) bool {
 	return slices.EqualFunc(a, b, func(a, b corev1.Container) bool {
-		return a.Name == b.Name && nativeSecurityContextsEqual(a.SecurityContext, b.SecurityContext)
+		return a.Name == b.Name && nativeSecurityContextsEqual(a.SecurityContext, b.SecurityContext) &&
+			slices.Equal(a.Ports, b.Ports) && reflect.DeepEqual(a.RestartPolicy, b.RestartPolicy)
 	})
 }
 

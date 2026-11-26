@@ -66,6 +66,30 @@ func TestLoadNativePoliciesFromBytes(t *testing.T) {
 	}
 }
 
+func TestLoadNativePoliciesFromBytesPreservesPortRange(t *testing.T) {
+	input := strings.Replace(validNativePolicyYAML, "protocol: TCP\n          port: 443", "port: 443\n          endPort: 65535", 1)
+	policies, err := LoadNativePoliciesFromBytes([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := policies[0].Spec.Ingress[0].Ports[0]
+	if port.Protocol != "TCP" || port.Port != 443 || port.EndPort == nil || *port.EndPort != 65535 {
+		t.Fatalf("ingress port = %+v, want TCP 443–65535", port)
+	}
+}
+
+func TestLoadNativePoliciesFromBytesAcceptsNamedPort(t *testing.T) {
+	input := strings.Replace(validNativePolicyYAML, "protocol: TCP\n          port: 443", "port: https", 1)
+	policies, err := LoadNativePoliciesFromBytes([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := policies[0].Spec.Ingress[0].Ports[0]
+	if port.Protocol != "TCP" || port.PortName != "https" || port.Port != 0 || port.EndPort != nil {
+		t.Fatalf("ingress port = %+v, want TCP/https", port)
+	}
+}
+
 func TestDecodeNativePoliciesInputSizeLimit(t *testing.T) {
 	const limit = 16 << 20
 	data := []byte(validNativePolicyYAML + strings.Repeat(" ", limit-len(validNativePolicyYAML)))
@@ -425,13 +449,38 @@ spec:
 			field: "spec.ingress[0].ports",
 		},
 		{
-			name:  "named port",
-			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "port: https", 1),
+			name:  "invalid named port",
+			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "port: \" HTTPS \"", 1),
 			field: "spec.ingress[0].ports[0].port",
 		},
 		{
-			name:  "end port",
-			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "port: 443\n          endPort: 444", 1),
+			name:  "end port precedes port",
+			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "port: 443\n          endPort: 442", 1),
+			field: "spec.ingress[0].ports[0].endPort",
+		},
+		{
+			name:  "zero end port",
+			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "port: 443\n          endPort: 0", 1),
+			field: "spec.ingress[0].ports[0].endPort",
+		},
+		{
+			name:  "end port exceeds valid range",
+			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "port: 443\n          endPort: 65536", 1),
+			field: "spec.ingress[0].ports[0].endPort",
+		},
+		{
+			name:  "end port is a string",
+			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "port: 443\n          endPort: \"444\"", 1),
+			field: "spec.ingress[0].ports[0].endPort",
+		},
+		{
+			name:  "end port without port",
+			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "endPort: 444", 1),
+			field: "spec.ingress[0].ports[0].port",
+		},
+		{
+			name:  "end port with named port",
+			yaml:  strings.Replace(validNativePolicyYAML, "port: 443", "port: https\n          endPort: 444", 1),
 			field: "spec.ingress[0].ports[0].endPort",
 		},
 		{

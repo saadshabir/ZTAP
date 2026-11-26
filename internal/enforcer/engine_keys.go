@@ -3,6 +3,7 @@ package enforcer
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 	"net/netip"
 	"sort"
 
@@ -14,12 +15,25 @@ import (
 // when the Linux loader is not part of the build.
 const enginePolicyRulesMapFlags uint32 = 1
 
+const (
+	rulePortWildcardShift = 24
+	ruleDirectionShift    = 30
+)
+
 type policyRuleKey struct {
 	PrefixLength uint32
 	Meta         uint32
 	CgroupID     uint64
 	Peer         [4]byte
 	_            [4]byte
+}
+
+func (key policyRuleKey) portWildcardBits() uint8 {
+	return uint8((key.Meta >> rulePortWildcardShift) & 0xf)
+}
+
+func (key policyRuleKey) directionIndex() uint32 {
+	return (key.Meta >> ruleDirectionShift) & 1
 }
 
 type subjectStateKey struct {
@@ -31,7 +45,9 @@ type subjectStateKey struct {
 type subjectStateValue struct {
 	Isolated    uint8
 	Quarantined uint8
-	_           [6]byte
+	// Egress, then ingress. Bit n enables lookup of blocks of 1 << (n+1) ports.
+	PortRangeMasks [2]uint16
+	_              [2]byte
 }
 
 type nodeBypassKey struct {
@@ -124,13 +140,31 @@ func encodePolicySet(slot uint32, set policy.PolicySet) (encodedPolicySet, error
 	seenNodes := make(map[nodeBypassKey]struct{}, len(set.NodeIPs))
 	seenSelf := make(map[selfBypassKey]struct{})
 	seenRules := make(map[policyRuleKey]struct{}, len(set.Rules))
+	portRangeMasks := make(map[uint64][2]uint16)
+
+	for _, rule := range set.Rules {
+		key, err := encodePolicyRuleKey(slot, rule)
+		if err != nil {
+			return encodedPolicySet{}, err
+		}
+		seenRules[key] = struct{}{}
+		if wildcardBits := key.portWildcardBits(); wildcardBits != 0 {
+			masks := portRangeMasks[key.CgroupID]
+			masks[key.directionIndex()] |= 1 << (wildcardBits - 1)
+			portRangeMasks[key.CgroupID] = masks
+		}
+	}
+	for key := range seenRules {
+		encoded.Rules = append(encoded.Rules, key)
+	}
 
 	for _, subject := range set.Subjects {
 		encoded.Subjects = append(encoded.Subjects, encodedSubjectState{
 			Key: subjectStateKey{CgroupID: subject.CgroupID, Slot: slot},
 			Value: subjectStateValue{
-				Isolated:    uint8(subject.Isolated),
-				Quarantined: uint8(subject.Quarantined),
+				Isolated:       uint8(subject.Isolated),
+				Quarantined:    uint8(subject.Quarantined),
+				PortRangeMasks: portRangeMasks[subject.CgroupID],
 			},
 		})
 		for _, address := range subject.PodIPs {
@@ -153,17 +187,6 @@ func encodePolicySet(slot uint32, set policy.PolicySet) (encodedPolicySet, error
 	for key := range seenNodes {
 		encoded.Nodes = append(encoded.Nodes, key)
 	}
-	for _, rule := range set.Rules {
-		key, err := encodePolicyRuleKey(slot, rule)
-		if err != nil {
-			return encodedPolicySet{}, err
-		}
-		seenRules[key] = struct{}{}
-	}
-	for key := range seenRules {
-		encoded.Rules = append(encoded.Rules, key)
-	}
-
 	sort.Slice(encoded.Subjects, func(i, j int) bool {
 		return encoded.Subjects[i].Key.CgroupID < encoded.Subjects[j].Key.CgroupID
 	})
@@ -217,12 +240,17 @@ func encodePolicyRuleKey(slot uint32, rule policy.Rule) (policyRuleKey, error) {
 	if rule.Port == 0 {
 		return policyRuleKey{}, errors.New("policy port must be non-zero")
 	}
+	if int(rule.PortWildcardBits) > bits.TrailingZeros16(rule.Port) {
+		return policyRuleKey{}, errors.New("policy port block must be aligned at port")
+	}
 
 	masked := rule.Peer.Masked()
 	address := masked.Addr().As4()
+	meta := (slot << 31) | (direction << ruleDirectionShift) | (uint32(rule.PortWildcardBits) << rulePortWildcardShift) |
+		(uint32(rule.Protocol) << 16) | uint32(rule.Port)
 	return policyRuleKey{
 		PrefixLength: uint32(96 + masked.Bits()), // #nosec G115 -- an IPv4 prefix produces a value in the fixed 96..128 range.
-		Meta:         (slot << 31) | (direction << 30) | (uint32(rule.Protocol) << 16) | uint32(rule.Port),
+		Meta:         meta,
 		CgroupID:     rule.CgroupID,
 		Peer:         address,
 	}, nil

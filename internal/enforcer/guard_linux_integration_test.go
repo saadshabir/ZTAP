@@ -79,7 +79,7 @@ func TestProductionGuardOwnerHelper(t *testing.T) {
 			}
 		}
 	}
-	engine, err := newPersistentLinuxEngineWithSpec(ctx, options, spec)
+	engine, err := newPersistentLinuxEngineWithSpec(ctx, options, spec, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,9 +194,16 @@ func TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			root := createTestCgroup(t)
 			parent := createSubCgroup(t, root, "kubepods.slice")
+			pins := createEngineTestBPFFSRoot(t)
+			relative, err := filepath.Rel("/sys/fs/cgroup", parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := InstallBootGuard(t.Context(), "/sys/fs/cgroup", pins, []string{relative}, ^uint64(0)); err != nil {
+				t.Fatalf("install guard before the runtime: %v", err)
+			}
 			known := createSubCgroup(t, parent, "known.scope")
 			bootstrap := createSubCgroup(t, parent, "agent.scope")
-			pins := createEngineTestBPFFSRoot(t)
 			read, write, err := os.Pipe()
 			if err != nil {
 				t.Fatal(err)
@@ -292,5 +299,102 @@ func TestLinuxProductionGuardBlocksNewWorkloadsAcrossOwnerLoss(t *testing.T) {
 			}
 			t.Logf("production-guard-v2 mode=%s cgroup=%d outage_ms=1500 ingress_unknown=0 egress_unknown=0 ingress_classified=%d egress_classified=%d", mode, unknownID, classified.IngressAllowed, traffic.Egress[0].Load())
 		})
+	}
+}
+
+func TestLinuxBootGuardPartialPublication(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+	if root := os.Getenv("ZTAP_BOOT_TEST_PARTIAL_ROOT"); root != "" {
+		_, err := NewLinuxEngine(t.Context(), LinuxEngineOptions{
+			BPFFSRoot: root,
+			ResolveCgroupPath: func(context.Context, uint64) (string, error) {
+				return "", fmt.Errorf("workload resolution is unavailable before the runtime")
+			},
+			ObserveCheckpoint: func(name string) {
+				if name == "durable-metadata-pinned" {
+					os.Exit(86)
+				}
+			},
+		})
+		t.Fatalf("engine exited before the publication checkpoint: %v", err)
+	}
+
+	const cgroupRoot = "/sys/fs/cgroup"
+	parent, err := filepath.Rel(cgroupRoot, createTestCgroup(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := createEngineTestBPFFSRoot(t)
+	child := exec.CommandContext(t.Context(), os.Args[0], "-test.run", "^TestLinuxBootGuardPartialPublication$")
+	child.Env = append(os.Environ(), "ZTAP_BOOT_TEST_PARTIAL_ROOT="+root)
+	if output, err := child.CombinedOutput(); child.ProcessState == nil || child.ProcessState.ExitCode() != 86 {
+		t.Fatalf("interrupt pin publication: %v, output %s", err, output)
+	}
+	parents := []string{parent}
+	if err := InstallBootGuard(t.Context(), cgroupRoot, root, parents, ^uint64(0)); err == nil || !strings.Contains(err.Error(), "validate map pin") {
+		t.Fatalf("retry with partially published maps: %v", err)
+	}
+	if err := RemoveEnforcement(t.Context(), root); err != nil {
+		t.Fatalf("clean up the interrupted installation: %v", err)
+	}
+	if err := InstallBootGuard(t.Context(), cgroupRoot, root, parents, ^uint64(0)); err != nil {
+		t.Fatalf("install after cleanup: %v", err)
+	}
+	for direction := range guardAttachTypes {
+		id := mustCgroupID(t, filepath.Join(cgroupRoot, parent))
+		if _, err := os.Stat(filepath.Join(root, "ztap", guardPinName(id, direction))); err != nil {
+			t.Fatalf("recovered guard link %d: %v", direction, err)
+		}
+	}
+}
+
+// TestLinuxBootGuardFirstTraffic is called by the VM's first runtime jobs.
+// The two jobs exercise both parent layouts, in host and private namespaces.
+func TestLinuxBootGuardFirstTraffic(t *testing.T) {
+	parent := os.Getenv("ZTAP_BOOT_TEST_PARENT")
+	if parent == "" {
+		t.Skip("requires the disposable systemd reboot fixture")
+	}
+	requireLinuxEBPFRoot(t)
+	private := os.Getenv("ZTAP_BOOT_TEST_PRIVATE") == "1"
+	parentID := mustCgroupID(t, parent)
+	for direction := range guardAttachTypes {
+		if _, err := os.Stat(filepath.Join("/sys/fs/bpf/ztap", guardPinName(parentID, direction))); err != nil {
+			t.Fatalf("runtime started before guard pin %d: %v", direction, err)
+		}
+	}
+	subject := createSubCgroup(t, parent, "ztap-reboot-probe.scope")
+	traffic := restartproof.Start(t, subject, "TestRestartTrafficHelper")
+	traffic.Begin()
+	time.Sleep(550 * time.Millisecond)
+	report := traffic.Snapshot()
+	if !private {
+		if report.IngressAllowed == 0 || report.IngressDenied == 0 || report.Replies == 0 || traffic.Egress[0].Load() == 0 || traffic.Egress[1].Load() == 0 {
+			t.Fatalf("host-network traffic did not bootstrap: %+v", report)
+		}
+		return
+	}
+	if report.IngressAllowed != 0 || report.IngressDenied != 0 || report.Replies != 0 || traffic.Egress[0].Load() != 0 || traffic.Egress[1].Load() != 0 {
+		t.Fatalf("ordinary workload traffic escaped the guard: %+v", report)
+	}
+	blocks, err := ebpf.LoadPinnedMap("/sys/fs/bpf/ztap/guard_blocks", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = blocks.Close() })
+	for direction := uint32(0); direction < 2; direction++ {
+		key := struct {
+			Cgroup, Epoch      uint64
+			Direction, Padding uint32
+		}{Cgroup: mustCgroupID(t, subject), Direction: direction}
+		var counters []uint64
+		if err := blocks.Lookup(&key, &counters); err != nil {
+			t.Fatalf("no pre-reconciliation blocks in direction %d: %v", direction, err)
+		}
+		blocked, err := sumCounterValues(counters)
+		if err != nil || blocked == 0 {
+			t.Fatalf("pre-reconciliation blocks in direction %d = %d, error %v", direction, blocked, err)
+		}
+		t.Logf("pre-reconciliation direction=%d blocked=%d", direction, blocked)
 	}
 }

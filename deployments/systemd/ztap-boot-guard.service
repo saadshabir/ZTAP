@@ -1,0 +1,11 @@
+[Unit]
+Description=Install ZTAP protection before Kubernetes workload startup
+Requires=kubepods.slice kubelet-kubepods.slice dbus.socket
+After=kubepods.slice kubelet-kubepods.slice dbus.socket
+Before=containerd.service kubelet.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sh -ec 'mountpoint -q /sys/fs/bpf || mount -t bpf bpffs /sys/fs/bpf'
+ExecStart=/usr/local/bin/ztap boot-guard

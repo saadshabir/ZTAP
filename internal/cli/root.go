@@ -66,6 +66,7 @@ compiles the supported subset, and enforces it with per-container eBPF programs.
 	root.PersistentFlags().String("log-format", "json", "Log format (json, text)")
 	root.AddCommand(
 		newAgentCmd(),
+		newBootGuardCmd(),
 		newCleanupCmd(),
 		newValidateCmd(),
 		newFlowsCmd(),

@@ -138,12 +138,12 @@ func trustedPinAt(directory *os.File, name string) (string, error) {
 }
 
 func newPersistentLinuxEngine(ctx context.Context, options LinuxEngineOptions) (_ *LinuxEngine, resultErr error) {
-	return newPersistentLinuxEngineWithSpec(ctx, options, nil)
+	return newPersistentLinuxEngineWithSpec(ctx, options, nil, false)
 }
 
 // A supplied spec is internal to the loader and Linux compatibility tests;
 // deployment never accepts arbitrary programs or a caller-supplied ABI.
-func newPersistentLinuxEngineWithSpec(ctx context.Context, options LinuxEngineOptions, spec *ebpf.CollectionSpec) (_ *LinuxEngine, resultErr error) {
+func newPersistentLinuxEngineWithSpec(ctx context.Context, options LinuxEngineOptions, spec *ebpf.CollectionSpec, beforeRuntime bool) (_ *LinuxEngine, resultErr error) {
 	if ctx == nil {
 		return nil, errors.New("engine context is nil")
 	}
@@ -294,7 +294,7 @@ func newPersistentLinuxEngineWithSpec(ctx context.Context, options LinuxEngineOp
 	if err := store.updateRecoveredLinks(links, candidates); err != nil {
 		return nil, err
 	}
-	if err := store.installGuard(ctx, options.Guard); err != nil {
+	if err := store.installGuard(ctx, options.Guard, beforeRuntime); err != nil {
 		return nil, err
 	}
 	if err := store.retirePrograms(links, candidates); err != nil {
@@ -352,6 +352,9 @@ func (s *linuxEngineStore) publishDurableMaps(spec *ebpf.CollectionSpec) error {
 		}
 		if err := s.maps[name].Pin(path); err != nil {
 			return fmt.Errorf("pin durable map %s: %w", name, err)
+		}
+		if name == durableMetadataPin {
+			s.ObserveCheckpoint("durable-metadata-pinned")
 		}
 	}
 	return nil
@@ -465,6 +468,7 @@ func (s *linuxEngineStore) recoverPolicySlots() (activeConfiguration, encodedPol
 	}
 	sets := [2]policy.PolicySet{}
 	subjectIndexes := [2]map[uint64]int{{}, {}}
+	portRangeMasks := make(map[uint64][2]uint16)
 	var sk subjectStateKey
 	var sv subjectStateValue
 	iter := s.maps["subject_state"].Iterate()
@@ -474,6 +478,9 @@ func (s *linuxEngineStore) recoverPolicySlots() (activeConfiguration, encodedPol
 		}
 		subjectIndexes[sk.Slot][sk.CgroupID] = len(sets[sk.Slot].Subjects)
 		sets[sk.Slot].Subjects = append(sets[sk.Slot].Subjects, policy.Subject{CgroupID: sk.CgroupID, Isolated: policy.Direction(sv.Isolated), Quarantined: policy.Direction(sv.Quarantined)})
+		if sk.Slot == config.ActiveSlot && sv.PortRangeMasks != [2]uint16{} {
+			portRangeMasks[sk.CgroupID] = sv.PortRangeMasks
+		}
 		s.slotCounts[sk.Slot].subjects++
 	}
 	if err := iter.Err(); err != nil {
@@ -523,14 +530,14 @@ func (s *linuxEngineStore) recoverPolicySlots() (activeConfiguration, encodedPol
 	iter = s.maps["policy_rules"].Iterate()
 	for iter.Next(&rk, &present) {
 		slot := rk.Meta >> 31
-		if rk.PrefixLength < 96 || rk.PrefixLength > 128 || present != 1 || rk.Meta&0x3f000000 != 0 {
+		if rk.PrefixLength < 96 || rk.PrefixLength > 128 || present != 1 || rk.Meta&0x30000000 != 0 {
 			return activeConfiguration{}, encodedPolicySet{}, errors.New("invalid durable policy rule")
 		}
-		direction := policy.DirectionEgress
-		if rk.Meta&(1<<30) != 0 {
-			direction = policy.DirectionIngress
-		}
-		sets[slot].Rules = append(sets[slot].Rules, policy.Rule{CgroupID: rk.CgroupID, Direction: direction, Peer: netip.PrefixFrom(netip.AddrFrom4(rk.Peer), int(rk.PrefixLength)-96), Protocol: uint8(rk.Meta >> 16), Port: uint16(rk.Meta)})
+		sets[slot].Rules = append(sets[slot].Rules, policy.Rule{
+			CgroupID: rk.CgroupID, Direction: policy.DirectionEgress << rk.directionIndex(),
+			Peer:     netip.PrefixFrom(netip.AddrFrom4(rk.Peer), int(rk.PrefixLength)-96),
+			Protocol: uint8(rk.Meta >> 16), Port: uint16(rk.Meta), PortWildcardBits: rk.portWildcardBits(),
+		})
 		s.slotCounts[slot].rules++
 	}
 	if err := iter.Err(); err != nil {
@@ -545,7 +552,15 @@ func (s *linuxEngineStore) recoverPolicySlots() (activeConfiguration, encodedPol
 		return activeConfiguration{}, encodedPolicySet{}, nil
 	}
 	encoded, err := encodePolicySet(0, sets[config.ActiveSlot])
-	return activeConfiguration{Slot: config.ActiveSlot, PolicyEpoch: config.PolicyEpoch}, encoded, err
+	if err != nil {
+		return activeConfiguration{}, encodedPolicySet{}, err
+	}
+	for _, subject := range encoded.Subjects {
+		if subject.Value.PortRangeMasks != portRangeMasks[subject.Key.CgroupID] {
+			return activeConfiguration{}, encodedPolicySet{}, errors.New("durable subject port range masks do not match committed rules")
+		}
+	}
+	return activeConfiguration{Slot: config.ActiveSlot, PolicyEpoch: config.PolicyEpoch}, encoded, nil
 }
 
 func ownerToDisk(owner WorkloadIdentity) (durableOwner, error) {
