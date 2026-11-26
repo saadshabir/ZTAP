@@ -27,7 +27,8 @@ subset, with explicit rejection of unsupported native features.
   and egress is selected when egress rules are present.
 - Policies combine additively. Empty directional rule lists implement
   default-deny for that direction.
-- TCP and UDP rules use numeric destination ports.
+- TCP and UDP rules use numeric destination ports, named destination ports,
+  or inclusive `endPort` ranges.
 - Explicit ClusterIP access must use an IPv4 `ipBlock` and numeric Service
   port; selector peers do not synthesize Service frontend access.
 
@@ -86,9 +87,9 @@ IPv6, or an unsupported protocol; ICMP is not an allowed policy protocol.
 | `podSelector` and `namespaceSelector` peers | Supported | Selector results are resolved into cluster-wide IPv4 Pod addresses; only enforced subjects are node-local. |
 | Ingress and egress isolation | Supported | Directions are independent and policies combine additively. |
 | Empty directional rule list | Supported | Implements default-deny for the selected direction. |
-| Numeric TCP/UDP destination ports | Supported | Omitted protocol defaults to TCP. |
+| Numeric TCP/UDP destination ports and `endPort` ranges | Supported | Both endpoints are inclusive. Omitted protocol defaults to TCP. |
 | Explicit IPv4 ClusterIP `ipBlock` | Supported | No Service or EndpointSlice frontend synthesis occurs. |
-| Named ports or `endPort` ranges | Rejected | Destination-Pod port resolution is outside the supported scope. |
+| Named TCP/UDP destination ports | Supported | Ingress resolves names on the selected Pod. Egress resolves them on each destination Pod. |
 | SCTP or IPv6 CIDRs | Rejected | Isolated unsupported traffic is denied. |
 | Selected IPv6 or dual-stack Pod | Quarantined | The selected directions are quarantined; IPv4 node/self exceptions still apply. |
 | Peerless or portless allow-all rule | Rejected | Broad implicit wildcards are not approximated. |
@@ -148,11 +149,11 @@ including server-generated metadata in exported objects, are rejected.
 | `1` | Invalid or unsupported policy content |
 | `2` | Input read/YAML decode failure or invalid command usage |
 
-For example, a named port is rejected with a field-specific error rather than
-being guessed:
+For example, combining a named port with `endPort` produces a field-specific
+error.
 
 ```text
-document 1 (default/web-to-db): spec.egress[0].ports[0].port: named ports are not supported
+document 1 (default/web-to-db): spec.egress[0].ports[0].endPort: requires a numeric port
 ```
 
 Duplicate YAML keys, unknown fields, malformed selectors, unrelated objects,
@@ -162,7 +163,7 @@ subjects while continuing unrelated accepted reconciliation.
 
 ## Deliberate limits
 
-Named ports, `endPort`, SCTP, IPv6 CIDRs, peerless "all peers" rules, and
+SCTP, IPv6 CIDRs, peerless "all peers" rules, and
 portless "all ports" rules are rejected. A selected IPv6 or dual-stack Pod
 is quarantined in the policy's selected directions. Automatic
 Service/EndpointSlice frontend expansion is not performed, and full local-node
@@ -172,7 +173,18 @@ contract. Host-networked Pods are node traffic rather than cgroup subjects.
 Each active snapshot is limited to 16,384 subject cgroups and 16,384 total
 rule entries, including node/self bypass entries. One `ipBlock` may expand to
 at most 1,024 IPv4 prefixes after exclusions. Counts are taken after
-deduplication; a broad selector can expand one YAML rule into many entries.
+deduplication. A broad selector can expand one YAML rule into many entries.
+A numeric range requires `1 <= port <= endPort <= 65535`. Each range is
+compiled into at most 30 aligned port blocks per peer prefix, subject cgroup,
+direction, and protocol. For example, `1–65535` uses 16 entries for each such
+combination.
+
+Named ports use the destination Pod's application containers and restartable
+init containers. A missing name or protocol match contributes no allow for
+that Pod. Egress names are tied to individual IPv4 Pod addresses, including
+when an `ipBlock` supplies the address constraint. An external address or
+Service frontend cannot supply a Pod port declaration. An ingress peer may
+be an `ipBlock` because the selected local Pod supplies the name.
 A capacity or kernel-apply failure retains the last committed snapshot. The
 parent guard blocks unclassified new containers in both directions until their
 verified identity, explicit classification, and any required subject links are

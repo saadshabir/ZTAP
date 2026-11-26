@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"math/bits"
 	"net/netip"
 	"slices"
 	"sort"
@@ -42,12 +43,15 @@ type Subject struct {
 }
 
 // Rule is one normalized IPv4 peer, protocol, and destination-port allow.
+// Port is the first port in an aligned block of 1 << PortWildcardBits ports.
+// A zero PortWildcardBits matches only Port.
 type Rule struct {
-	CgroupID  uint64
-	Direction Direction
-	Peer      netip.Prefix
-	Protocol  uint8
-	Port      uint16
+	CgroupID         uint64
+	Direction        Direction
+	Peer             netip.Prefix
+	Protocol         uint8
+	Port             uint16
+	PortWildcardBits uint8
 }
 
 // PolicySet is the complete candidate passed to the enforcement engine.
@@ -87,10 +91,17 @@ type ResolvedPod struct {
 	Name                    string
 	Labels                  map[string]string
 	PodIPs                  []netip.Addr
+	NamedPorts              map[NamedPort]uint16
 	CgroupIDs               []uint64
 	CgroupResolutionFailure CgroupResolutionFailure
 	Local                   bool
 	HostNetwork             bool
+}
+
+// NamedPort identifies a Pod's declared destination port by name and protocol.
+type NamedPort struct {
+	Name     string
+	Protocol uint8
 }
 
 // ResolutionInput is a point-in-time, kernel-neutral snapshot prepared by the
@@ -150,12 +161,13 @@ type subjectState struct {
 // ruleKey keeps deduplication keys free of netip.Prefix's IPv6 and zone state.
 // Peers have already been resolved to canonical IPv4 prefixes by addRules.
 type ruleKey struct {
-	cgroupID   uint64
-	peer       [4]byte
-	port       uint16
-	prefixBits uint8
-	direction  Direction
-	protocol   uint8
+	cgroupID         uint64
+	peer             [4]byte
+	port             uint16
+	prefixBits       uint8
+	direction        Direction
+	protocol         uint8
+	portWildcardBits uint8
 }
 
 type compileState struct {
@@ -423,49 +435,132 @@ func (s *compileState) addSelectedSubjects(pods []*ResolvedPod, isolated, quaran
 }
 
 func (s *compileState) addRules(policy *NativeNetworkPolicy, subjects []*ResolvedPod, direction Direction, peers []NativePeer, ports []NativePort) error {
-	prefixes, err := s.resolvePeers(policy, peers)
+	if len(subjects) == 0 {
+		return nil
+	}
+	namedEgress := direction == DirectionEgress && slices.ContainsFunc(ports, func(port NativePort) bool { return port.PortName != "" })
+	resolved, err := s.resolvePeers(policy, peers, namedEgress)
 	if err != nil {
 		return err
 	}
+	if len(resolved.prefixes) == 0 {
+		return nil
+	}
+	// Take the largest aligned block that fits at each step. A valid 16-bit
+	// interval takes at most 30 blocks, even when it spans almost every port.
+	for _, port := range ports {
+		protocol := ProtocolTCP
+		if port.Protocol == "UDP" {
+			protocol = ProtocolUDP
+		}
+		if port.PortName != "" {
+			name := NamedPort{Name: port.PortName, Protocol: protocol}
+			if err := s.addNamedPort(subjects, resolved, direction, name); err != nil {
+				return err
+			}
+			continue
+		}
+		end := port.Port
+		if port.EndPort != nil {
+			end = *port.EndPort
+		}
+		for start := port.Port; start <= end; {
+			// ValidateNativePolicy has already bounded both endpoints to 1..65535.
+			base := uint16(start) // #nosec G115 -- start is within the validated range.
+			wildcardBits := min(bits.TrailingZeros16(base), bits.Len(uint(end-start+1))-1)
+			rule := ruleKey{
+				direction: direction, protocol: protocol, port: base,
+				portWildcardBits: uint8(wildcardBits), // #nosec G115 -- a nonzero 16-bit base has at most 15 trailing zeros.
+			}
+			if err := s.addPortBlock(subjects, resolved.prefixes, rule); err != nil {
+				return err
+			}
+			start += 1 << wildcardBits
+		}
+	}
+	return nil
+}
+
+func (s *compileState) addNamedPort(subjects []*ResolvedPod, peers resolvedRulePeers, direction Direction, name NamedPort) error {
+	rule := ruleKey{direction: direction, protocol: name.Protocol}
+	if direction == DirectionIngress {
+		for _, pod := range subjects {
+			if rule.port = pod.NamedPorts[name]; rule.port != 0 {
+				if err := s.addPortBlock([]*ResolvedPod{pod}, peers.prefixes, rule); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	type destinationPort struct {
+		address netip.Prefix
+		port    uint16
+	}
+	seen := make(map[destinationPort]struct{})
+	for _, peer := range peers.namedDestinations {
+		rule.port = peer.ports[name]
+		if rule.port == 0 {
+			continue
+		}
+		destination := destinationPort{address: peer.address, port: rule.port}
+		if _, exists := seen[destination]; exists {
+			continue
+		}
+		seen[destination] = struct{}{}
+		if err := s.addPortBlock(subjects, []netip.Prefix{peer.address}, rule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *compileState) addPortBlock(subjects []*ResolvedPod, prefixes []netip.Prefix, rule ruleKey) error {
 	for _, pod := range subjects {
 		for _, cgroupID := range pod.CgroupIDs {
+			rule.cgroupID = cgroupID
 			for _, prefix := range prefixes {
-				for _, port := range ports {
-					if port.Port < 1 || port.Port > 65535 {
-						return fmt.Errorf("port %d is outside the valid TCP/UDP range", port.Port)
-					}
-					protocol := ProtocolTCP
-					if port.Protocol == "UDP" {
-						protocol = ProtocolUDP
-					}
-					rule := ruleKey{
-						cgroupID: cgroupID, direction: direction, peer: prefix.Addr().As4(),
-						prefixBits: uint8(prefix.Bits()), protocol: protocol, port: uint16(port.Port), // #nosec G115 -- prefixes are IPv4 and the port range is checked immediately above.
-					}
-					if _, exists := s.rules[rule]; exists {
-						continue
-					}
-					observed := s.ruleEntryCount() + 1
-					if observed > MaxPolicyRules {
-						return CapacityError{Resource: "rule", Observed: observed, Allowed: MaxPolicyRules}
-					}
-					s.rules[rule] = struct{}{}
+				rule.peer = prefix.Addr().As4()
+				rule.prefixBits = uint8(prefix.Bits()) // #nosec G115 -- resolved prefixes are IPv4.
+				if _, exists := s.rules[rule]; exists {
+					continue
 				}
+				observed := s.ruleEntryCount() + 1
+				if observed > MaxPolicyRules {
+					return CapacityError{Resource: "rule", Observed: observed, Allowed: MaxPolicyRules}
+				}
+				s.rules[rule] = struct{}{}
 			}
 		}
 	}
 	return nil
 }
 
-func (s *compileState) resolvePeers(policy *NativeNetworkPolicy, peers []NativePeer) ([]netip.Prefix, error) {
-	resolved := make([]netip.Prefix, 0)
+type namedDestination struct {
+	address netip.Prefix
+	ports   map[NamedPort]uint16
+}
+
+type resolvedRulePeers struct {
+	prefixes          []netip.Prefix
+	namedDestinations []namedDestination
+}
+
+func (s *compileState) resolvePeers(policy *NativeNetworkPolicy, peers []NativePeer, namedEgress bool) (resolvedRulePeers, error) {
+	var resolved resolvedRulePeers
+	cidrs := make(map[netip.Prefix]struct{})
 	for _, peer := range peers {
 		if peer.IPBlock != nil {
 			prefixes, err := ExpandNativeIPBlock(*peer.IPBlock)
 			if err != nil {
-				return nil, err
+				return resolvedRulePeers{}, err
 			}
-			resolved = append(resolved, prefixes...)
+			resolved.prefixes = append(resolved.prefixes, prefixes...)
+			if namedEgress {
+				for _, prefix := range prefixes {
+					cidrs[prefix] = struct{}{}
+				}
+			}
 			continue
 		}
 
@@ -475,13 +570,13 @@ func (s *compileState) resolvePeers(policy *NativeNetworkPolicy, peers []NativeP
 		if peer.PodSelector != nil {
 			podSelector, err = selectorForNative(peer.PodSelector)
 			if err != nil {
-				return nil, err
+				return resolvedRulePeers{}, err
 			}
 		}
 		if peer.NamespaceSelector != nil {
 			namespaceSelector, err = selectorForNative(peer.NamespaceSelector)
 			if err != nil {
-				return nil, err
+				return resolvedRulePeers{}, err
 			}
 		}
 
@@ -497,7 +592,7 @@ func (s *compileState) resolvePeers(policy *NativeNetworkPolicy, peers []NativeP
 			} else {
 				namespaceLabels, exists := s.namespaces[pod.Namespace]
 				if !exists {
-					return nil, ResolutionError{
+					return resolvedRulePeers{}, ResolutionError{
 						Field:   fmt.Sprintf("pods[%q].namespace", podKey(pod)),
 						Message: "has no matching namespace entry",
 					}
@@ -508,12 +603,42 @@ func (s *compileState) resolvePeers(policy *NativeNetworkPolicy, peers []NativeP
 			}
 			for _, address := range pod.PodIPs {
 				if address.Is4() {
-					resolved = append(resolved, netip.PrefixFrom(address, 32))
+					prefix := netip.PrefixFrom(address, 32)
+					resolved.prefixes = append(resolved.prefixes, prefix)
+					if namedEgress && len(pod.NamedPorts) != 0 {
+						resolved.namedDestinations = append(resolved.namedDestinations, namedDestination{address: prefix, ports: pod.NamedPorts})
+					}
 				}
 			}
 		}
 	}
-	return uniqueSortedPrefixes(resolved), nil
+	if len(cidrs) != 0 {
+		resolved.namedDestinations = s.appendNamedCIDRDestinations(resolved.namedDestinations, cidrs)
+	}
+	resolved.prefixes = uniqueSortedPrefixes(resolved.prefixes)
+	return resolved, nil
+}
+
+// An egress CIDR supplies the address constraint. Only an observed destination
+// Pod can supply the port number, so the resulting rule is scoped to its IP.
+func (s *compileState) appendNamedCIDRDestinations(destinations []namedDestination, cidrs map[netip.Prefix]struct{}) []namedDestination {
+	for _, pod := range s.input.Pods {
+		if pod.HostNetwork || len(pod.NamedPorts) == 0 {
+			continue
+		}
+		for _, address := range pod.PodIPs {
+			if !address.Is4() {
+				continue
+			}
+			for length := 32; length >= 0; length-- {
+				if _, matches := cidrs[netip.PrefixFrom(address, length).Masked()]; matches {
+					destinations = append(destinations, namedDestination{address: netip.PrefixFrom(address, 32), ports: pod.NamedPorts})
+					break
+				}
+			}
+		}
+	}
+	return destinations
 }
 
 func (s *compileState) addRejected(policy *NativeNetworkPolicy, err error) {
@@ -556,7 +681,7 @@ func (s *compileState) policySet() PolicySet {
 		set.Rules = append(set.Rules, Rule{
 			CgroupID: key.cgroupID, Direction: key.direction,
 			Peer:     netip.PrefixFrom(netip.AddrFrom4(key.peer), int(key.prefixBits)),
-			Protocol: key.protocol, Port: key.port,
+			Protocol: key.protocol, Port: key.port, PortWildcardBits: key.portWildcardBits,
 		})
 	}
 	sort.Slice(set.Subjects, func(i, j int) bool { return set.Subjects[i].CgroupID < set.Subjects[j].CgroupID })
@@ -641,6 +766,9 @@ func ValidatePolicySet(set PolicySet) error {
 		}
 		if rule.Port == 0 {
 			return invalid("port", "must be non-zero")
+		}
+		if int(rule.PortWildcardBits) > bits.TrailingZeros16(rule.Port) {
+			return invalid("portWildcardBits", "must describe a block aligned at port")
 		}
 	}
 	if len(set.Subjects) > MaxPolicySubjects {
@@ -772,5 +900,8 @@ func compareRules(left, right Rule) int {
 	if left.Protocol != right.Protocol {
 		return cmp.Compare(left.Protocol, right.Protocol)
 	}
-	return cmp.Compare(left.Port, right.Port)
+	if left.Port != right.Port {
+		return cmp.Compare(left.Port, right.Port)
+	}
+	return cmp.Compare(left.PortWildcardBits, right.PortWildcardBits)
 }

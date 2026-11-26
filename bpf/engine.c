@@ -132,7 +132,8 @@ struct udp_header {
 
 struct policy_rule_key {
     __u32 prefix_length;
-    // slot: bit 31; direction: bit 30; protocol: bits 23..16; port: bits 15..0.
+    // Slot: bit 31. Direction: bit 30. Port wildcard count: bits 27..24.
+    // Protocol: bits 23..16. Port block base: bits 15..0.
     __u32 meta;
     __u64 cgroup_id;
     __u8 peer[4];
@@ -148,7 +149,9 @@ struct subject_key {
 struct subject_value {
     __u8 isolated;
     __u8 quarantined;
-    __u8 _padding[6];
+    // Each direction records which port block sizes are present in this slot.
+    __u16 port_range_masks[2];
+    __u8 _padding[2];
 };
 
 struct node_key {
@@ -830,18 +833,33 @@ static __always_inline int allow_connection_state(struct connection_key packet_k
 }
 
 static __always_inline int rule_matches(__u32 slot, __u64 cgroup_id,
-                                        __u8 direction, const struct packet_info *packet)
+                                        __u8 direction, const struct packet_info *packet,
+                                        __u16 range_mask)
 {
     __u32 meta = (slot << 31) | ((__u32)direction << 30) |
-                 ((__u32)packet->protocol << 16) | packet->destination_port;
+                 ((__u32)packet->protocol << 16);
     struct policy_rule_key key = {
         .prefix_length = 128,
-        .meta = meta,
+        .meta = meta | packet->destination_port,
         .cgroup_id = cgroup_id,
     };
     const __u32 *peer = direction == DIR_EGRESS ? &packet->destination_ip[0] : &packet->source_ip[0];
     __builtin_memcpy(key.peer, peer, sizeof(key.peer));
-    return bpf_map_lookup_elem(&policy_rules, &key) != 0;
+    if (bpf_map_lookup_elem(&policy_rules, &key))
+        return 1;
+
+    // Match the peer CIDR independently for each active aligned port block.
+    // The port and wildcard count are part of the trie's fixed key prefix.
+#pragma clang loop unroll(disable)
+    for (__u32 wildcard_bits = 1; wildcard_bits <= 15 && range_mask; wildcard_bits++, range_mask >>= 1) {
+        if (!(range_mask & 1))
+            continue;
+        __u32 port_base = packet->destination_port & (0xffffU << wildcard_bits);
+        key.meta = meta | (wildcard_bits << 24) | port_base;
+        if (bpf_map_lookup_elem(&policy_rules, &key))
+            return 1;
+    }
+    return 0;
 }
 
 static __always_inline int enforce_packet(struct __sk_buff *skb, __u8 direction, __u64 cgroup_id)
@@ -961,7 +979,7 @@ static __always_inline int enforce_packet(struct __sk_buff *skb, __u8 direction,
         return result;
     }
 
-    if (rule_matches(slot, cgroup_id, direction, &packet)) {
+    if (rule_matches(slot, cgroup_id, direction, &packet, subject->port_range_masks[direction])) {
         remember_reverse_connection(packet_key, now, packet.tcp_flags);
         int result = decide(&packet, now, epoch, cgroup_id, direction,
                             ACTION_ALLOWED, REASON_RULE);

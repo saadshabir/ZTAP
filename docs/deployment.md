@@ -232,13 +232,113 @@ workloads or a maintenance traffic gate because that version detaches on exit.
 The persistent engine starts with an empty pin directory for a fresh install
 and requires valid durable ownership metadata to recover existing pins. Keep
 workload traffic gated until the guard is installed and classification
-completes. Persistence covers one kernel boot. A node reboot destroys these
-objects. Reboot continuity requires a separate host/runtime startup dependency
-that installs protection before workload traffic, plus a reboot test.
+completes. Persistent kernel objects cover one boot. The optional host startup
+gate below installs fresh protection after each reboot.
 
 The [restart evidence](performance.md#restart-continuity-results) records finite
 Linux and deployed-agent tests with zero observed prohibited traffic; it is not
 proof of every possible failure schedule.
+
+### Reboot protection on systemd nodes
+
+Install the [host units](../deployments/systemd/) on every protected node.
+Use Kubernetes with the supported containerd systemd cgroup layout and the
+packet-socket admission requirements above. The units cover `containerd.service`
+and `kubelet.service`. If the node starts either through a differently named
+service, adapt the corresponding drop-in. For a renamed kubelet unit, pass
+`--kubelet-unit=NAME.service` to both the guard's `ExecStart` and kubelet's
+guard check in `ExecStartPre`.
+
+The boot guard runs as a host service before either runtime service starts.
+It mounts bpffs when needed, verifies the kubelet command with systemd,
+checks that both supported Kubernetes cgroup parents are empty, and pins
+ingress, egress, and socket-namespace links. Kubelet repeats the command
+check on each service start during the boot. The check uses systemd's
+`busctl` with JSON output.
+Failure keeps the dependent services stopped. It uses the host socket
+namespace so newly created host-network sockets can bootstrap Kubernetes. The
+agent still authenticates its node bootstrap and adopts the pinned guard before
+publishing policy. Ordinary Pods start unclassified and receive and send
+ordinary traffic only after the synchronized agent commits their policy or
+unisolated classification. Plan for ordinary traffic to pause while Kubernetes
+or its API is unavailable after reboot.
+
+Drain an existing node before installing the gate and activate it on a
+planned reboot. Draining leaves DaemonSet and static Pods on the node, and
+containerd can leave their processes running when its service stops. The
+reboot empties both Kubernetes cgroup subtrees before the guard runs.
+
+Install the Linux binary and host units from the checkout. Merge the
+supplied slice settings into any existing site-managed units for the same
+names.
+
+```sh
+sudo install -m 0755 ./bin/ztap /usr/local/bin/ztap
+for unit in kubepods.slice kubelet-kubepods.slice ztap-boot-guard.service; do
+  sudo install -m 0644 "deployments/systemd/$unit" /etc/systemd/system/
+done
+for service in containerd kubelet; do
+  sudo install -D -m 0644 "deployments/systemd/$service.service.d/50-ztap-boot-guard.conf" \
+    "/etc/systemd/system/$service.service.d/50-ztap-boot-guard.conf"
+done
+```
+
+Use `systemctl cat kubelet.service` to find the unit's effective
+`ExecStart` line. In a later drop-in such as
+`/etc/systemd/system/kubelet.service.d/60-ztap-cgroups.conf`, clear
+`ExecStart`, copy the existing direct kubelet command with its absolute
+executable path and arguments, and append the three literal cgroup flags
+shown below. Keep them after any environment-expanded arguments so they
+take precedence over settings in kubelet configuration files and other
+arguments. Use `--cgroup-root=/` for `kubepods.slice` or
+`--cgroup-root=/kubelet` for `kubelet.slice/kubelet-kubepods.slice`,
+matching the node's existing configuration. This example uses kubeadm's
+arguments.
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS --cgroup-driver=systemd --cgroups-per-qos=true --cgroup-root=/
+```
+
+Reboot the node, then verify that the guard and both services are active
+before uncordoning it.
+
+```sh
+sudo systemctl reboot
+# After reconnecting:
+systemctl is-active ztap-boot-guard.service containerd.service kubelet.service
+```
+
+The runtime dependencies pull in the one-shot guard at each boot. After an
+installation failure, inspect `journalctl -b -u ztap-boot-guard.service`,
+correct the underlying error, and retry starting the runtime services.
+If a failed cold start left a durable ownership journal with missing map
+pins, run `sudo /usr/local/bin/ztap cleanup` while both runtime services
+are stopped, then retry starting them with
+`sudo systemctl start containerd.service kubelet.service`. Cleanup verifies
+ownership of the surviving pins. A reboot also clears incomplete pins.
+Keep the dependencies installed when upgrading the host binary and DaemonSet.
+If intentionally removing reboot protection, drain the node before removing
+the runtime drop-ins and follow the [enforcement removal procedure](#removal-and-rollback).
+
+The [reboot test](../deployments/systemd/tests/verify-reboot.sh) uses a
+disposable systemd VM with SSH, passwordless `sudo`, and `ip` and `unshare`
+installed. On that VM, put the exact line `ztap test VM` in
+`/etc/ztap-disposable-reboot-test`. The test installs runtime-service
+fixtures under the production unit names. It checks three new Linux boot
+IDs, first-packet isolation in both cgroup layouts, and host-network traffic.
+It verifies that an unsupported kubelet root and a partially published
+ownership journal each block both startup jobs. It then cleans up the pins
+and verifies protection on the same boot. Build both binaries for the guest
+architecture.
+
+```sh
+build_dir=$(mktemp -d)
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "$build_dir/ztap" ./cmd/ztap
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -tags=integration -c -o "$build_dir/enforcer.test" ./internal/enforcer
+deployments/systemd/tests/verify-reboot.sh REBOOT_TEST_VM "$build_dir/ztap" "$build_dir/enforcer.test"
+```
 
 ### Measured fail-open intervals
 
@@ -421,6 +521,12 @@ kubectl -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
 Only roll back to a persistence-aware image with compatible ABI and packet
 semantics. The historical process-owned image is not a supported live rollback.
 Drain or gate traffic before an incompatible migration.
+
+Before rolling back to an image that predates a port feature in use, replace
+the affected policies while the newer agent is running. For numeric ranges,
+verify that every affected node has reconciled and retired the old slot.
+Older images refuse to recover pinned slots containing range entries and
+leave the existing enforcement in place.
 
 Deleting the DaemonSets leaves enforcement active, including the unknown
 workload guard. Intentional removal has two steps:

@@ -11,7 +11,7 @@ within the current kernel boot. An inherited guard blocks new containers until
 their verified identity and classification are committed. Compatible replacements
 recover those objects before synchronizing Kubernetes caches. See
 [deployment boundaries](docs/deployment.md#upgrade), including first migration,
-explicit cleanup, and the separate reboot requirement.
+explicit cleanup, and the [systemd reboot gate](docs/deployment.md#reboot-protection-on-systemd-nodes).
 
 | Guide | Contents |
 | --- | --- |
@@ -55,6 +55,7 @@ claims.
 
 ```text
 ztap agent     reconcile Kubernetes NetworkPolicy on one Linux node
+ztap boot-guard install inherited protection before systemd starts the runtime
 ztap node-init authenticate node bootstrap identities and API endpoints
 ztap cleanup   intentionally remove owned enforcement under the node lock
 ztap preflight check cluster and node prerequisites before installation
@@ -135,7 +136,8 @@ scope, resource and flow results, and verification commands.
 
 The compiler accepts native `networking.k8s.io/v1` `NetworkPolicy` documents.
 The supported enforcement model is IPv4 TCP/UDP rules with numeric ports,
-pod and namespace selectors, and explicit `ipBlock` peers. The node-local
+inclusive ranges, named ports, Pod and namespace selectors, and explicit
+`ipBlock` peers. The node-local
 agent resolves cluster objects and attaches the compiled policy to local
 container cgroups. Unsupported or rejected policies are reported by the
 agent and do not silently become allow rules.

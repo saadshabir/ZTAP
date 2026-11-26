@@ -13,21 +13,28 @@ import (
 func TestNativePodUpdatesRetainEnforcementFacts(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "workload", Namespace: "apps", UID: "uid", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-a", Containers: []corev1.Container{{Name: "main", SecurityContext: benchmarkSecurityContext()}}, InitContainers: []corev1.Container{{Name: "init", SecurityContext: benchmarkSecurityContext()}}, EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debug", SecurityContext: benchmarkSecurityContext()}}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, QOSClass: corev1.PodQOSBurstable, PodIP: "10.0.0.1", PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}}, ContainerStatuses: []corev1.ContainerStatus{{ContainerID: "containerd://main", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}, InitContainerStatuses: []corev1.ContainerStatus{{ContainerID: "containerd://init"}}, EphemeralContainerStatuses: []corev1.ContainerStatus{{ContainerID: "containerd://debug"}}}}
 	relevant := map[string]func(*corev1.Pod){
-		"uid":              func(p *corev1.Pod) { p.UID = "replacement" },
-		"name":             func(p *corev1.Pod) { p.Name = "replacement" },
-		"namespace":        func(p *corev1.Pod) { p.Namespace = "peer" },
-		"labels":           func(p *corev1.Pod) { p.Labels["app"] = "db" },
-		"node":             func(p *corev1.Pod) { p.Spec.NodeName = "node-b" },
-		"host-network":     func(p *corev1.Pod) { p.Spec.HostNetwork = true },
-		"phase":            func(p *corev1.Pod) { p.Status.Phase = corev1.PodSucceeded },
-		"qos":              func(p *corev1.Pod) { p.Status.QOSClass = corev1.PodQOSGuaranteed },
-		"ip":               func(p *corev1.Pod) { p.Status.PodIP = "10.0.0.2" },
-		"ips":              func(p *corev1.Pod) { p.Status.PodIPs = append(p.Status.PodIPs, corev1.PodIP{IP: "2001:db8::1"}) },
-		"container-id":     func(p *corev1.Pod) { p.Status.ContainerStatuses[0].ContainerID = "" },
-		"running":          func(p *corev1.Pod) { p.Status.ContainerStatuses[0].State.Running = nil },
-		"init-running":     func(p *corev1.Pod) { p.Status.InitContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{} },
-		"ephemeral-id":     func(p *corev1.Pod) { p.Status.EphemeralContainerStatuses[0].ContainerID = "replacement" },
-		"containers":       func(p *corev1.Pod) { p.Spec.Containers = nil },
+		"uid":          func(p *corev1.Pod) { p.UID = "replacement" },
+		"name":         func(p *corev1.Pod) { p.Name = "replacement" },
+		"namespace":    func(p *corev1.Pod) { p.Namespace = "peer" },
+		"labels":       func(p *corev1.Pod) { p.Labels["app"] = "db" },
+		"node":         func(p *corev1.Pod) { p.Spec.NodeName = "node-b" },
+		"host-network": func(p *corev1.Pod) { p.Spec.HostNetwork = true },
+		"phase":        func(p *corev1.Pod) { p.Status.Phase = corev1.PodSucceeded },
+		"qos":          func(p *corev1.Pod) { p.Status.QOSClass = corev1.PodQOSGuaranteed },
+		"ip":           func(p *corev1.Pod) { p.Status.PodIP = "10.0.0.2" },
+		"ips":          func(p *corev1.Pod) { p.Status.PodIPs = append(p.Status.PodIPs, corev1.PodIP{IP: "2001:db8::1"}) },
+		"container-id": func(p *corev1.Pod) { p.Status.ContainerStatuses[0].ContainerID = "" },
+		"running":      func(p *corev1.Pod) { p.Status.ContainerStatuses[0].State.Running = nil },
+		"init-running": func(p *corev1.Pod) { p.Status.InitContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{} },
+		"ephemeral-id": func(p *corev1.Pod) { p.Status.EphemeralContainerStatuses[0].ContainerID = "replacement" },
+		"containers":   func(p *corev1.Pod) { p.Spec.Containers = nil },
+		"container-ports": func(p *corev1.Pod) {
+			p.Spec.Containers[0].Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}
+		},
+		"init-sidecar-policy": func(p *corev1.Pod) {
+			restart := corev1.ContainerRestartPolicyAlways
+			p.Spec.InitContainers[0].RestartPolicy = &restart
+		},
 		"security-missing": func(p *corev1.Pod) { p.Spec.Containers[0].SecurityContext = nil },
 		"escalation":       func(p *corev1.Pod) { *p.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation = true },
 		"privileged":       func(p *corev1.Pod) { v := true; p.Spec.Containers[0].SecurityContext.Privileged = &v },

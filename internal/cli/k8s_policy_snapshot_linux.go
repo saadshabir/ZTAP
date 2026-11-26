@@ -82,6 +82,7 @@ func (r *k8sSubjectResolver) buildResolutionSnapshot(nodeName string, node *core
 			Name:        pod.Name,
 			Labels:      copyStringMap(pod.Labels),
 			PodIPs:      podStatusIPs(pod),
+			NamedPorts:  podNamedPorts(pod),
 			Local:       local,
 			HostNetwork: pod.Spec.HostNetwork,
 		}
@@ -135,6 +136,42 @@ func (r *k8sSubjectResolver) buildResolutionSnapshot(nodeName string, node *core
 	r.pruneRunningObservations(activeContainers)
 	r.setUnresolvedRunning(unresolvedRunning)
 	return input, nil
+}
+
+func podNamedPorts(pod *corev1.Pod) map[policy.NamedPort]uint16 {
+	var ports map[policy.NamedPort]uint16
+	addContainerPorts := func(container corev1.Container) {
+		for _, port := range container.Ports {
+			if port.Name == "" || port.ContainerPort < 1 || port.ContainerPort > 65535 {
+				continue
+			}
+			var protocol uint8
+			switch port.Protocol {
+			case "", corev1.ProtocolTCP:
+				protocol = policy.ProtocolTCP
+			case corev1.ProtocolUDP:
+				protocol = policy.ProtocolUDP
+			default:
+				continue
+			}
+			if ports == nil {
+				ports = make(map[policy.NamedPort]uint16)
+			}
+			key := policy.NamedPort{Name: port.Name, Protocol: protocol}
+			if _, exists := ports[key]; !exists {
+				ports[key] = uint16(port.ContainerPort) // #nosec G115 -- the port is bounded above.
+			}
+		}
+	}
+	for _, container := range pod.Spec.Containers {
+		addContainerPorts(container)
+	}
+	for _, container := range pod.Spec.InitContainers {
+		if container.RestartPolicy != nil && *container.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			addContainerPorts(container)
+		}
+	}
+	return ports
 }
 
 // classificationObservations returns the first time each resolved cgroup was

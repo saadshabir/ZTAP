@@ -141,6 +141,96 @@ func TestCompileNativePoliciesPreservesDistinctRuleFields(t *testing.T) {
 	}
 }
 
+func TestCompileNativePoliciesCompactsInclusivePortRanges(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		start, end int
+		entries    int
+	}{
+		{"single port", 65535, 65535, 1},
+		{"unaligned endpoints", 1025, 1031, 3},
+		{"all numeric ports", 1, 65535, 16},
+		{"maximum block count", 1, 65534, 30},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			peer := NativePeer{IPBlock: &NativeIPBlock{CIDR: "0.0.0.0/0"}}
+			port := NativePort{Protocol: "UDP", Port: tt.start, EndPort: &tt.end}
+			policy := nativePolicy("default", "port-range", nil, []string{"Egress"}, nil, []NativeEgressRule{{
+				To: []NativePeer{peer}, Ports: []NativePort{port, port},
+			}})
+			input := basicResolutionInput(ResolvedPod{Namespace: "default", Name: "client", Local: true, CgroupIDs: []uint64{1}})
+			result, err := CompileNativePolicies([]NativeNetworkPolicy{policy}, input)
+			if err != nil || len(result.Rejected) != 0 {
+				t.Fatalf("compile port range: %v, rejected: %+v", err, result.Rejected)
+			}
+			if got := len(result.PolicySet.Rules); got != tt.entries {
+				t.Fatalf("compiled %d entries, want %d", got, tt.entries)
+			}
+			next := tt.start
+			for _, rule := range result.PolicySet.Rules {
+				if rule.Direction != DirectionEgress || rule.Protocol != ProtocolUDP || rule.Peer != mustPrefix("0.0.0.0/0") || int(rule.Port) != next {
+					t.Fatalf("rule = %+v, want egress UDP block starting at %d", rule, next)
+				}
+				next += 1 << rule.PortWildcardBits
+			}
+			if next != tt.end+1 {
+				t.Fatalf("blocks end at %d, want %d inclusive", next-1, tt.end)
+			}
+		})
+	}
+}
+
+func TestCompileNativePoliciesResolvesNamedPortsOnDestinations(t *testing.T) {
+	name := NamedPort{Name: "web", Protocol: ProtocolTCP}
+	makePod := func(podName, role, ip string, number uint16) ResolvedPod {
+		return ResolvedPod{Namespace: "default", Name: podName, Labels: map[string]string{"role": role},
+			PodIPs: []netip.Addr{mustAddr(ip)}, NamedPorts: map[NamedPort]uint16{name: number}}
+	}
+	first := makePod("client-a", "client", "10.0.0.1", 8443)
+	first.Local, first.CgroupIDs = true, []uint64{1}
+	second := makePod("client-b", "client", "10.0.0.2", 8444)
+	second.Local, second.CgroupIDs = true, []uint64{2}
+	wrongProtocol := makePod("udp-peer", "server", "10.0.0.12", 0)
+	wrongProtocol.NamedPorts = map[NamedPort]uint16{{Name: "web", Protocol: ProtocolUDP}: 9002}
+	input := basicResolutionInput(first, second, wrongProtocol,
+		makePod("server-a", "server", "10.0.0.10", 9000), makePod("server-b", "server", "10.0.0.11", 9001),
+		makePod("in-cidr", "other", "198.51.100.5", 9443), makePod("excluded", "other", "198.51.100.6", 9444),
+		makePod("outside", "other", "203.0.113.5", 9445),
+	)
+	port := NativePort{Protocol: "TCP", PortName: name.Name}
+	policy := nativePolicy("default", "per-destination", map[string]string{"role": "client"}, []string{"Ingress", "Egress"},
+		[]NativeIngressRule{{From: []NativePeer{{IPBlock: &NativeIPBlock{CIDR: "203.0.113.0/24"}}}, Ports: []NativePort{port}}},
+		[]NativeEgressRule{
+			{To: []NativePeer{
+				{PodSelector: &NativeLabelSelector{MatchLabels: map[string]string{"role": "server"}}},
+				{NamespaceSelector: &NativeLabelSelector{}, PodSelector: &NativeLabelSelector{MatchLabels: map[string]string{"role": "server"}}},
+				{IPBlock: &NativeIPBlock{CIDR: "10.0.0.10/32"}},
+			}, Ports: []NativePort{port, {Protocol: "TCP", Port: 80}}},
+			{To: []NativePeer{{IPBlock: &NativeIPBlock{CIDR: "198.51.100.0/24", Except: []string{"198.51.100.6/32"}}}}, Ports: []NativePort{port}},
+		},
+	)
+	result, err := CompileNativePolicies([]NativeNetworkPolicy{policy}, input)
+	if err != nil || len(result.Rejected) != 0 {
+		t.Fatalf("compile named ports: %v, rejected: %+v", err, result.Rejected)
+	}
+	if got := len(result.PolicySet.Rules); got != 14 {
+		t.Fatalf("rules = %+v, want 14 per-destination entries", result.PolicySet.Rules)
+	}
+	for _, subject := range []ResolvedPod{first, second} {
+		id := subject.CgroupIDs[0]
+		assertRulePresent(t, result.PolicySet, Rule{CgroupID: id, Direction: DirectionIngress, Peer: mustPrefix("203.0.113.0/24"), Protocol: ProtocolTCP, Port: subject.NamedPorts[name]})
+		for _, peer := range []struct {
+			cidr string
+			port uint16
+		}{
+			{"10.0.0.10/32", 9000}, {"10.0.0.11/32", 9001}, {"198.51.100.5/32", 9443},
+			{"10.0.0.10/32", 80}, {"10.0.0.11/32", 80}, {"10.0.0.12/32", 80},
+		} {
+			assertRulePresent(t, result.PolicySet, Rule{CgroupID: id, Direction: DirectionEgress, Peer: mustPrefix(peer.cidr), Protocol: ProtocolTCP, Port: peer.port})
+		}
+	}
+}
+
 func TestCompileNativePoliciesDeletionRemovesOnlyDeletedContribution(t *testing.T) {
 	dbPolicy := nativePolicy("default", "web-db", map[string]string{"app": "web"}, []string{"Egress"}, nil, []NativeEgressRule{{
 		To:    []NativePeer{{PodSelector: &NativeLabelSelector{MatchLabels: map[string]string{"app": "db"}}}},
@@ -262,7 +352,7 @@ func TestCompileNativePoliciesAllowsPendingAndUnselectedCgroupResolutionFailure(
 
 func TestCompileNativePoliciesQuarantinesOnlyRejectedLocalSubjects(t *testing.T) {
 	bad := nativePolicy("default", "bad-ingress", map[string]string{"app": "bad"}, []string{"Ingress"}, []NativeIngressRule{
-		{From: []NativePeer{{IPBlock: &NativeIPBlock{CIDR: "198.51.100.0/24"}}}, Ports: []NativePort{{Protocol: "TCP", PortName: "https"}}},
+		{From: []NativePeer{{IPBlock: &NativeIPBlock{CIDR: "198.51.100.0/24"}}}, Ports: []NativePort{{Protocol: "TCP", PortName: "invalid_port"}}},
 	}, nil)
 	bad.Metadata.Generation = 11
 	good := nativePolicy("default", "good-egress", map[string]string{"app": "good"}, []string{"Egress"}, nil, []NativeEgressRule{
@@ -457,7 +547,7 @@ func TestResolvePeersRejectsMissingNamespaceBeforeNegativeSelectorMatch(t *testi
 				}}},
 			}}
 
-			_, err := state.resolvePeers(&policy, peers)
+			_, err := state.resolvePeers(&policy, peers, false)
 			var resolutionErr ResolutionError
 			if !errors.As(err, &resolutionErr) || resolutionErr.Field != `pods["missing/server"].namespace` {
 				t.Fatalf("error = %T %v, want missing namespace ResolutionError", err, err)

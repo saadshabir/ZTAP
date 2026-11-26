@@ -427,6 +427,52 @@ func TestLinuxEngineIngressDirectionSpecificDeny(t *testing.T) {
 	assertEngineDecision(t, event, flow.ActionBlocked, flow.ReasonDefaultDeny, 1, cgroupID)
 }
 
+func TestLinuxEngineNamedDestinationPort(t *testing.T) {
+	requireLinuxEBPFRoot(t)
+	cgroup := createTestCgroup(t)
+	id := mustCgroupID(t, cgroup)
+	allowedListener, blockedListener := listenEngineTestUDP(t), listenEngineTestUDP(t)
+	allowed := uint16(allowedListener.LocalAddr().(*net.UDPAddr).Port)
+	blocked := uint16(blockedListener.LocalAddr().(*net.UDPAddr).Port)
+	ports := []policy.NativePort{{Protocol: "UDP", PortName: "dns"}}
+	policies := []policy.NativeNetworkPolicy{{
+		APIVersion: policy.NativeNetworkPolicyAPIVersion,
+		Kind:       policy.NativeNetworkPolicyKind,
+		Metadata:   &policy.NativeObjectMeta{Name: "dns"},
+		Spec: &policy.NativeNetworkPolicySpec{
+			PodSelector: &policy.NativeLabelSelector{MatchLabels: map[string]string{"app": "client"}},
+			Ingress:     []policy.NativeIngressRule{{From: []policy.NativePeer{{IPBlock: &policy.NativeIPBlock{CIDR: "127.0.0.0/8"}}}, Ports: ports}},
+			Egress:      []policy.NativeEgressRule{{To: []policy.NativePeer{{PodSelector: &policy.NativeLabelSelector{MatchLabels: map[string]string{"app": "server"}}}}, Ports: ports}},
+		},
+	}}
+	declaredPorts := map[policy.NamedPort]uint16{{Name: "dns", Protocol: policy.ProtocolUDP}: allowed}
+	input := policy.ResolutionInput{
+		NodeIPs:    []netip.Addr{netip.MustParseAddr("192.0.2.1")},
+		Namespaces: []policy.ResolvedNamespace{{Name: "default"}},
+		Pods: []policy.ResolvedPod{
+			{Name: "client", Local: true, CgroupIDs: []uint64{id}, Labels: map[string]string{"app": "client"}, NamedPorts: declaredPorts},
+			{Name: "server", PodIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Labels: map[string]string{"app": "server"}, NamedPorts: declaredPorts},
+		},
+	}
+	engine := newLinuxEngineForTest(t, map[uint64]string{id: cgroup})
+	result, err := ReconcileNativePolicySnapshot(t.Context(), engine, policies, input)
+	if err != nil || len(result.Rejected) != 0 {
+		t.Fatalf("apply named ports: %v, rejected: %+v", err, result.Rejected)
+	}
+	runUDPSendHelperInCgroup(t, cgroup, allowedListener.LocalAddr().String())
+	assertEngineUDPDelivery(t, allowedListener, true)
+	runUDPSendHelperInCgroup(t, cgroup, blockedListener.LocalAddr().String())
+	assertEngineUDPDelivery(t, blockedListener, false)
+	for _, listener := range []*net.UDPConn{allowedListener, blockedListener} {
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !runUDPReceiveHelperInCgroup(t, cgroup, int(allowed)) || runUDPReceiveHelperInCgroup(t, cgroup, int(blocked)) {
+		t.Fatal("ingress did not distinguish the declared port from the undeclared port")
+	}
+}
+
 func TestLinuxEngineRejectsIPv6ForIsolatedSubject(t *testing.T) {
 	requireLinuxEBPFRoot(t)
 
@@ -762,13 +808,21 @@ func TestLinuxEngineAllowsReplyTrafficWithinPolicyEpoch(t *testing.T) {
 
 func TestLinuxEngineAllowsTCPReplyTrafficWithoutReverseRule(t *testing.T) {
 	requireLinuxEBPFRoot(t)
+	t.Run("exact port", func(t *testing.T) { testLinuxEngineAllowsTCPReplyTraffic(t, 0) })
+	t.Run("port range", func(t *testing.T) { testLinuxEngineAllowsTCPReplyTraffic(t, 1) })
+}
 
+func testLinuxEngineAllowsTCPReplyTraffic(t *testing.T, wildcardBits uint8) {
+	t.Helper()
 	cgroup := createTestCgroup(t)
 	cgroupID := mustCgroupID(t, cgroup)
 	server := listenEngineTestTCP(t)
 	serverPort := uint16(server.Addr().(*net.TCPAddr).Port)
 	engine := newLinuxEngineForTest(t, map[uint64]string{cgroupID: cgroup})
-	if err := engine.Apply(context.Background(), engineTCPReplyPolicySet(t, cgroupID, serverPort)); err != nil {
+	set := engineTCPReplyPolicySet(t, cgroupID, serverPort)
+	set.Rules[0].Port &^= (1 << wildcardBits) - 1
+	set.Rules[0].PortWildcardBits = wildcardBits
+	if err := engine.Apply(context.Background(), set); err != nil {
 		t.Fatalf("apply TCP request policy: %v", err)
 	}
 	reader, err := ringbuf.NewReader(engine.FlowEventsMap())
@@ -803,7 +857,7 @@ func TestLinuxEngineAllowsTCPReplyTrafficWithoutReverseRule(t *testing.T) {
 	if string(request) != "request" {
 		t.Fatalf("TCP request = %q, want request", request)
 	}
-	if err := engine.Apply(context.Background(), engineTCPReplyPolicySet(t, cgroupID, serverPort)); err != nil {
+	if err := engine.Apply(context.Background(), set); err != nil {
 		t.Fatalf("reapply unchanged TCP policy: %v", err)
 	}
 	if engine.active.PolicyEpoch != 1 {

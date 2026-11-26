@@ -80,23 +80,23 @@ type NativePeer struct {
 	IPBlock           *NativeIPBlock
 }
 
-// NativePort is the normalized numeric TCP/UDP port accepted by the compiler.
+// NativePort describes a TCP/UDP destination port, port name, or inclusive range.
 type NativePort struct {
-	Protocol   string
-	Port       int
-	PortName   string
-	HasEndPort bool
+	Protocol string
+	Port     int
+	PortName string
+	EndPort  *int
 }
 
 // NativeIngressRule is an ingress rule after strict decoding. Every rule
-// must have at least one peer and one numeric port.
+// must have at least one peer and one port.
 type NativeIngressRule struct {
 	From  []NativePeer
 	Ports []NativePort
 }
 
 // NativeEgressRule is an egress rule after strict decoding. Every rule must
-// have at least one peer and one numeric port.
+// have at least one peer and one port.
 type NativeEgressRule struct {
 	To    []NativePeer
 	Ports []NativePort
@@ -790,13 +790,18 @@ func nativePortFromWire(port nativePortWire) NativePort {
 		protocol = "TCP"
 	}
 	value, name := nativePortValue(port.Port)
-	return NativePort{Protocol: protocol, Port: value, PortName: name, HasEndPort: port.EndPort.Kind != 0 && !nativeNullNode(&port.EndPort)}
+	result := NativePort{Protocol: protocol, Port: value, PortName: name}
+	if port.EndPort.Kind != 0 && !nativeNullNode(&port.EndPort) {
+		end, _ := nativePortValue(port.EndPort)
+		result.EndPort = &end
+	}
+	return result
 }
 
 func nativePortValue(node yaml.Node) (int, string) {
 	if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {
 		if node.Kind == yaml.ScalarNode && node.Tag == "!!str" {
-			return 0, strings.TrimSpace(node.Value)
+			return 0, node.Value
 		}
 		return 0, ""
 	}
@@ -1061,14 +1066,25 @@ func validateNativePort(port NativePort, field string) error {
 	if port.Protocol != "TCP" && port.Protocol != "UDP" {
 		return NativeValidationError{Field: field + ".protocol", Message: "must be TCP or UDP"}
 	}
-	if strings.TrimSpace(port.PortName) != "" {
-		return NativeValidationError{Field: field + ".port", Message: "named ports are not supported"}
-	}
-	if port.HasEndPort {
-		return NativeValidationError{Field: field + ".endPort", Message: "endPort is not supported"}
+	if port.PortName != "" {
+		if port.EndPort != nil {
+			return NativeValidationError{Field: field + ".endPort", Message: "requires a numeric port"}
+		}
+		if problems := utilvalidation.IsValidPortName(port.PortName); len(problems) != 0 {
+			return NativeValidationError{Field: field + ".port", Message: strings.Join(problems, ", ")}
+		}
+		return nil
 	}
 	if port.Port < 1 || port.Port > 65535 {
 		return NativeValidationError{Field: field + ".port", Message: "must be between 1 and 65535"}
+	}
+	if port.EndPort != nil {
+		if *port.EndPort < 1 || *port.EndPort > 65535 {
+			return NativeValidationError{Field: field + ".endPort", Message: "must be between 1 and 65535"}
+		}
+		if *port.EndPort < port.Port {
+			return NativeValidationError{Field: field + ".endPort", Message: "must be greater than or equal to port"}
+		}
 	}
 	return nil
 }

@@ -82,7 +82,7 @@ func TestNativeNetworkPolicyFromKubePreservesSupportedFields(t *testing.T) {
 		t.Fatalf("egress peers = %#v", got.Spec.Egress)
 	}
 	nativePort := got.Spec.Egress[0].Ports[0]
-	if nativePort.Protocol != "UDP" || nativePort.Port != 53 || !nativePort.HasEndPort {
+	if nativePort.Protocol != "UDP" || nativePort.Port != 53 || nativePort.EndPort == nil || *nativePort.EndPort != int(endPort) {
 		t.Fatalf("native port = %#v", nativePort)
 	}
 }

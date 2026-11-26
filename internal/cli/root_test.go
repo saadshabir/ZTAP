@@ -8,7 +8,7 @@ import (
 
 func TestNewRootCmdCommandSurface(t *testing.T) {
 	root := NewRootCmd("test-version")
-	want := []string{"agent", "cleanup", "flows", "node-init", "preflight", "validate", "version"}
+	want := []string{"agent", "boot-guard", "cleanup", "flows", "node-init", "preflight", "validate", "version"}
 	var visible []string
 	for _, command := range root.Commands() {
 		if !command.Hidden {
@@ -85,7 +85,7 @@ func TestRootHelpListsOnlyPrimaryCommands(t *testing.T) {
 		t.Fatalf("root help has no available commands section: %q", output.String())
 	}
 	commands := strings.SplitN(parts[1], "\n\n", 2)[0]
-	for _, line := range []string{"  agent ", "  cleanup ", "  flows ", "  preflight ", "  validate ", "  version "} {
+	for _, line := range []string{"  agent ", "  boot-guard ", "  cleanup ", "  flows ", "  preflight ", "  validate ", "  version "} {
 		if !strings.Contains(commands, line) {
 			t.Errorf("root help missing %q", line)
 		}

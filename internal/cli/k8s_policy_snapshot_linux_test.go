@@ -52,6 +52,37 @@ func subjectByCgroupID(t *testing.T, set policy.PolicySet, cgroupID uint64) poli
 	return policy.Subject{}
 }
 
+func TestResolutionSnapshotPreservesDestinationPortDeclarations(t *testing.T) {
+	restart := corev1.ContainerRestartPolicyAlways
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "peer"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "app", Ports: []corev1.ContainerPort{
+				{Name: "http", ContainerPort: 8080},
+				{Name: "dns", ContainerPort: 53, Protocol: corev1.ProtocolUDP},
+			}}},
+			InitContainers: []corev1.Container{
+				{Name: "init", Ports: []corev1.ContainerPort{{Name: "init", ContainerPort: 1234}}},
+				{Name: "sidecar", RestartPolicy: &restart, Ports: []corev1.ContainerPort{{Name: "proxy", ContainerPort: 8888}}},
+			},
+		},
+	}
+	resolver := newK8sSubjectResolver(t.TempDir())
+	input, err := resolver.BuildResolutionSnapshot("node-a", &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}},
+		[]corev1.Namespace{{ObjectMeta: metav1.ObjectMeta{Name: "default"}}}, []corev1.Pod{pod})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[policy.NamedPort]uint16{
+		{Name: "http", Protocol: policy.ProtocolTCP}:  8080,
+		{Name: "dns", Protocol: policy.ProtocolUDP}:   53,
+		{Name: "proxy", Protocol: policy.ProtocolTCP}: 8888,
+	}
+	if len(input.Pods) != 1 || !reflect.DeepEqual(input.Pods[0].NamedPorts, want) {
+		t.Fatalf("snapshot Pods = %+v, want peer with ports %+v", input.Pods, want)
+	}
+}
+
 func TestNativePolicySnapshotConvergesAcrossPolicyPodNamespaceAndNodeChanges(t *testing.T) {
 	cgroupRoot := t.TempDir()
 	containerID := strings.Repeat("a", 64)
@@ -312,7 +343,7 @@ func TestNativePolicySnapshotCorrectsAndDeletesRejectedPolicyWithoutRestart(t *t
 	addRunningPod("good", goodUID, goodContainerID, "good", "10.0.0.3")
 
 	protocol := corev1.ProtocolTCP
-	namedPort := intstr.FromString("https")
+	namedPort := intstr.FromString("invalid_port")
 	badPolicy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "bad", Generation: 1},
 		Spec: networkingv1.NetworkPolicySpec{

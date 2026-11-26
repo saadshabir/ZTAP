@@ -28,6 +28,8 @@ import (
 
 const nodeBootstrapFile = "node-bootstrap.json"
 
+var kubernetesParentPaths = [...]string{"kubepods.slice", "kubelet.slice/kubelet-kubepods.slice"}
+
 type nodeBootstrap struct {
 	Schema          uint32                      `json:"schema"`
 	Boot            string                      `json:"boot"`
@@ -179,7 +181,7 @@ func socketNetnsCookie() (uint64, error) {
 
 func kubernetesCgroupParents(cgroupRoot string) ([]string, error) {
 	var parents []string
-	for _, relative := range []string{"kubepods.slice", "kubelet.slice/kubelet-kubepods.slice"} {
+	for _, relative := range kubernetesParentPaths {
 		fd, err := openExistingDirectory(filepath.Join(cgroupRoot, relative), "Kubernetes parent")
 		if errors.Is(err, unix.ENOENT) {
 			continue

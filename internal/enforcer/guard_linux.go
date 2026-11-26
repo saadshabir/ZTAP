@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -40,6 +41,59 @@ type bootstrapPeerKey struct {
 
 var guardProgramNames = [3]string{"ztap_guard_egress", "ztap_guard_ingress", "ztap_socket_namespace"}
 var guardAttachTypes = [3]ebpf.AttachType{ebpf.AttachCGroupInetEgress, ebpf.AttachCGroupInetIngress, ebpf.AttachCGroupInetSockCreate}
+
+// InstallBootGuard installs the durable parent guard before the runtime can
+// create workloads. The host service keeps the runtime stopped until this
+// call succeeds. New host-network sockets are recognized by their namespace.
+func InstallBootGuard(ctx context.Context, cgroupRoot, bpffsRoot string, parents []string, hostNetnsCookie uint64) (resultErr error) {
+	if len(parents) == 0 || len(parents) > 2 || hostNetnsCookie == 0 {
+		return errors.New("boot guard requires Kubernetes parents and the host network namespace cookie")
+	}
+	if err := checkEmptyGuardParents(cgroupRoot, parents); err != nil {
+		return err
+	}
+	engine, err := newPersistentLinuxEngineWithSpec(ctx, LinuxEngineOptions{
+		CgroupRoot: cgroupRoot,
+		BPFFSRoot:  bpffsRoot,
+		ResolveCgroupPath: func(context.Context, uint64) (string, error) {
+			return "", errors.New("boot guard does not resolve workload identities")
+		},
+		Guard: &WorkloadGuardOptions{Parents: parents, HostNetnsCookie: hostNetnsCookie},
+	}, nil, true)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, engine.Close()) }()
+	return checkEmptyGuardParents(cgroupRoot, parents)
+}
+
+func checkEmptyGuardParents(root string, parents []string) error {
+	for _, parent := range parents {
+		path := filepath.Join(root, parent)
+		id, err := cgroupInodeID(path)
+		if err != nil {
+			return err
+		}
+		file, _, err := openValidatedCgroup(root, path, id)
+		if err != nil {
+			return err
+		}
+		fd, err := unix.Openat(int(file.Fd()), "cgroup.events", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		closeErr := file.Close()
+		if err != nil {
+			return errors.Join(err, closeErr)
+		}
+		events := os.NewFile(uintptr(fd), path+"/cgroup.events")
+		data, err := io.ReadAll(io.LimitReader(events, 4096))
+		if err := errors.Join(err, closeErr, events.Close()); err != nil {
+			return err
+		}
+		if !strings.Contains("\n"+string(data), "\npopulated 0\n") {
+			return fmt.Errorf("cannot install the boot guard while Kubernetes cgroup %q is populated", parent)
+		}
+	}
+	return nil
+}
 
 func guardPinName(id uint64, direction int) string {
 	return "guard_" + strconv.FormatUint(id, 10) + "_" + [3]string{"egress", "ingress", "socket"}[direction]
@@ -120,7 +174,7 @@ func (s *linuxEngineStore) recoverGuardLinks(spec *ebpf.CollectionSpec) error {
 	return iter.Err()
 }
 
-func (s *linuxEngineStore) installGuard(ctx context.Context, options *WorkloadGuardOptions) error {
+func (s *linuxEngineStore) installGuard(ctx context.Context, options *WorkloadGuardOptions, beforeRuntime bool) error {
 	if options == nil {
 		if len(s.guardOwners) != 0 {
 			return errors.New("existing workload guard requires verified node bootstrap configuration")
@@ -130,11 +184,8 @@ func (s *linuxEngineStore) installGuard(ctx context.Context, options *WorkloadGu
 	if err := s.pruneDeadHostOwners(); err != nil {
 		return err
 	}
-	if len(options.Parents) == 0 || len(options.Parents) > 2 || options.HostNetnsCookie == 0 || len(options.APIPeers) == 0 || len(options.APIPeers) > 32 {
+	if len(options.Parents) == 0 || len(options.Parents) > 2 || options.HostNetnsCookie == 0 {
 		return errors.New("incomplete node guard bootstrap configuration")
-	}
-	if err := s.validateBootstrapOwner(options.BootstrapIdentity); err != nil {
-		return err
 	}
 	zero := uint32(0)
 	var previous bpfGuardConfig
@@ -143,6 +194,56 @@ func (s *linuxEngineStore) installGuard(ctx context.Context, options *WorkloadGu
 	}
 	if previous.HostNetnsCookie != 0 && previous.HostNetnsCookie != options.HostNetnsCookie {
 		return errors.New("node network namespace changed within this boot")
+	}
+	config := previous
+	config.HostNetnsCookie = options.HostNetnsCookie
+	if !beforeRuntime {
+		if err := s.installBootstrapExceptions(options); err != nil {
+			return err
+		}
+		config.BootstrapCgroup = options.BootstrapIdentity.CgroupID
+	}
+	if err := s.maps["guard_config"].Put(&zero, &config); err != nil {
+		return err
+	}
+	seen := make(map[uint64]bool)
+	for _, relative := range options.Parents {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if filepath.IsAbs(relative) || filepath.Clean(relative) != relative || relative == "." || strings.HasPrefix(relative, "..") {
+			return errors.New("invalid Kubernetes parent guard path")
+		}
+		path := filepath.Join(s.cgroupRoot, relative)
+		id, err := cgroupInodeID(path)
+		if err != nil {
+			return err
+		}
+		file, _, err := openValidatedCgroup(s.cgroupRoot, path, id)
+		if err != nil {
+			return err
+		}
+		err = s.installParentGuard(file, id, relative)
+		closeErr := file.Close()
+		if err := errors.Join(err, closeErr); err != nil {
+			return err
+		}
+		seen[id] = true
+	}
+	for id := range s.guardOwners {
+		if !seen[id] {
+			return errors.New("committed Kubernetes guard parent missing from bootstrap configuration")
+		}
+	}
+	return nil
+}
+
+func (s *linuxEngineStore) installBootstrapExceptions(options *WorkloadGuardOptions) error {
+	if len(options.APIPeers) == 0 || len(options.APIPeers) > 32 {
+		return errors.New("incomplete node guard bootstrap configuration")
+	}
+	if err := s.validateBootstrapOwner(options.BootstrapIdentity); err != nil {
+		return err
 	}
 	// Narrow peers are established before granting the new exact cgroup ID.
 	var keys []bootstrapPeerKey
@@ -185,39 +286,6 @@ func (s *linuxEngineStore) installGuard(ctx context.Context, options *WorkloadGu
 		}
 		if err := s.maps["host_owners"].Put(&owner.CgroupID, &value); err != nil {
 			return err
-		}
-	}
-	config := bpfGuardConfig{HostNetnsCookie: options.HostNetnsCookie, BootstrapCgroup: options.BootstrapIdentity.CgroupID}
-	if err := s.maps["guard_config"].Put(&zero, &config); err != nil {
-		return err
-	}
-	seen := make(map[uint64]bool)
-	for _, relative := range options.Parents {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if filepath.IsAbs(relative) || filepath.Clean(relative) != relative || relative == "." || strings.HasPrefix(relative, "..") {
-			return errors.New("invalid Kubernetes parent guard path")
-		}
-		path := filepath.Join(s.cgroupRoot, relative)
-		id, err := cgroupInodeID(path)
-		if err != nil {
-			return err
-		}
-		file, _, err := openValidatedCgroup(s.cgroupRoot, path, id)
-		if err != nil {
-			return err
-		}
-		err = s.installParentGuard(file, id, relative)
-		closeErr := file.Close()
-		if err := errors.Join(err, closeErr); err != nil {
-			return err
-		}
-		seen[id] = true
-	}
-	for id := range s.guardOwners {
-		if !seen[id] {
-			return errors.New("committed Kubernetes guard parent missing from bootstrap configuration")
 		}
 	}
 	return nil

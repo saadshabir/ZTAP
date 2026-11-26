@@ -757,7 +757,10 @@ func nativePorts(ports []networkingv1.NetworkPolicyPort) []policy.NativePort {
 				native.PortName = port.Port.StrVal
 			}
 		}
-		native.HasEndPort = port.EndPort != nil
+		if port.EndPort != nil {
+			end := int(*port.EndPort)
+			native.EndPort = &end
+		}
 		result = append(result, native)
 	}
 	return result
