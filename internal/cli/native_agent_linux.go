@@ -107,6 +107,7 @@ func runNativeKubernetesAgent(ctx context.Context, client nativeKubernetesClient
 	// are still unavailable. Cache sync failure must only release local handles.
 	resolver := newK8sSubjectResolver(options.CgroupRoot)
 	var engine enforcer.Engine
+	var linuxEngine *enforcer.LinuxEngine
 	if options.DryRun {
 		engine = nativeDryRunEngine{}
 	} else {
@@ -117,7 +118,7 @@ func runNativeKubernetesAgent(ctx context.Context, client nativeKubernetesClient
 				return fmt.Errorf("verify workload guard bootstrap: %w", err)
 			}
 		}
-		engine, err = enforcer.NewLinuxEngine(ctx, enforcer.LinuxEngineOptions{
+		linuxEngine, err = enforcer.NewLinuxEngine(ctx, enforcer.LinuxEngineOptions{
 			CgroupRoot:        options.CgroupRoot,
 			BPFFSRoot:         options.BPFFSRoot,
 			ResolveCgroupPath: resolver.ResolveCgroupPath,
@@ -131,9 +132,14 @@ func runNativeKubernetesAgent(ctx context.Context, client nativeKubernetesClient
 			}
 			return fmt.Errorf("create linux enforcement engine: %w", err)
 		}
+		engine = linuxEngine
 	}
+	var stopFlows func()
 	defer func() {
 		status.markStopping()
+		if stopFlows != nil {
+			stopFlows()
+		}
 		if closeErr := engine.Close(); closeErr != nil && returnErr == nil {
 			returnErr = fmt.Errorf("close native enforcement engine: %w", closeErr)
 		}
@@ -143,6 +149,13 @@ func runNativeKubernetesAgent(ctx context.Context, client nativeKubernetesClient
 		defer status.setEngineMetricsProvider(nil)
 		stopMetrics := status.startEngineMetricsPolling(ctx)
 		defer stopMetrics()
+	}
+	var decisionHistory *flowDecisionHistory
+	var flowReady chan struct{}
+	if options.OTLPFlowLogs && linuxEngine != nil {
+		decisionHistory = &flowDecisionHistory{}
+		flowReady = make(chan struct{})
+		stopFlows = startNativeFlowTelemetry(ctx, flowReady, options, status.registry, decisionHistory)
 	}
 
 	informers := newNativeAgentInformers(client, strings.TrimSpace(options.NodeName))
@@ -187,7 +200,15 @@ func runNativeKubernetesAgent(ctx context.Context, client nativeKubernetesClient
 		if err != nil {
 			return policy.CompileResult{}, 0, telemetry, err
 		}
-		result, err := enforcer.ReconcileNativePolicySnapshot(ctx, engine, policies, input)
+		applyEngine := engine
+		if decisionHistory != nil {
+			applyEngine = flowAttributingEngine{LinuxEngine: linuxEngine, history: decisionHistory, subjects: flowSubjects(input.Pods)}
+		}
+		result, err := enforcer.ReconcileNativePolicySnapshot(ctx, applyEngine, policies, input)
+		if err == nil && flowReady != nil {
+			close(flowReady)
+			flowReady = nil
+		}
 		return result, len(policies), telemetry, err
 	}
 	return runNativeAgentReconciliation(ctx, dirty, status.errorsCh(), status, options, reconcile)

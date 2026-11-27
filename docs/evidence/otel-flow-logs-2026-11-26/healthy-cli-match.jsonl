@@ -1,0 +1,1 @@
+{"timestamp":"2026-11-26T20:07:47.700450722Z","policy_epoch":20,"cgroup_id":38161,"direction":"egress","protocol":"TCP","src_ip":"10.244.0.11","src_port":44152,"dst_ip":"10.244.2.18","dst_port":8080,"action":"allowed","reason":"rule","schema_version":1}

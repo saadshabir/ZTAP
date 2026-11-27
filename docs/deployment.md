@@ -462,12 +462,15 @@ kubectl -n ztap-system exec -i "$POD" -- \
 ```
 
 On the Linux node itself, use `ztap flows` with its default `/sys/fs/bpf` root
-and `/run/ztap` lock directory, with permission to read the pinned maps.
-When overriding agent paths, give the reader the same bpffs and run-directory
-locations. Only one flow reader may run per node; filters apply after reading
-and do not create independent subscriptions. Stop it with Ctrl-C and start it
-again after an agent restart: shutdown, a stale heartbeat, or an agent-epoch
-change ends the stream.
+and `/run/ztap` directory. With export disabled, one CLI session per node
+can read the pinned maps directly. Give it permission to read the maps and
+the same bpffs and run-directory locations as the agent. With export enabled,
+the agent reads the ring and serves up to 16 root-only CLI subscriptions on
+`flows.sock` inside the shared run directory. Its absolute socket path must
+fit within Linux's 107-byte limit. Each subscription applies its own filters.
+Cancel with Ctrl-C to end the command successfully. Agent shutdown, a stale
+heartbeat, or an agent restart closes the connection and the CLI reports the
+interruption.
 
 `--output` accepts `table` (default) or `json`. Filters accept `--action`
 (`allowed`, `blocked`), `--protocol` (`TCP`, `UDP`), and `--direction`
@@ -480,6 +483,55 @@ Inspect `ztap_packet_decisions_total` (labels `action`, `direction`, `reason`)
 and `ztap_flow_events_dropped_total` (`reason` is `rate_limited` or `ring_full`)
 for packet decisions and suppressed events. An empty stream alone does not prove that
 no packets were allowed or blocked; event loss does not change enforcement.
+
+### Cluster-wide OpenTelemetry logs
+
+Set `--otlp-flow-logs` on each node agent to send `ztap.policy.decision` logs
+over OTLP/HTTP with protobuf. Use the
+[Collector and Loki example](../examples/otel-flow-logs/) to try central queries
+with the shipped DaemonSet and mutual TLS.
+
+| Setting | Value |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Full logs URL such as `https://collector.example:4318/v1/logs`. `OTEL_EXPORTER_OTLP_ENDPOINT` is the base URL fallback and receives the `/v1/logs` suffix. The local default is `http://localhost:4318/v1/logs`. |
+| `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE` | Optional PEM CA file for the receiver. System roots apply by default. |
+| `OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY` | PEM client credentials for mTLS. Mount both through a Secret. |
+| `OTEL_EXPORTER_OTLP_LOGS_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_TIMEOUT` | Optional comma-separated `key=value` headers and per-attempt timeout in milliseconds. Default timeout is 3,000 ms. |
+| `ZTAP_CLUSTER_NAME` | Optional cluster name. Set it consistently on every agent if the backend aggregates multiple clusters. |
+| `--otlp-flow-queue-capacity` | Waiting records per node, default 2,048. Up to 256 records can be in the worker's batch, which flushes after at most one second when the worker is idle. |
+| `--otlp-flow-exclude-namespace` | Optional comma-separated subject namespaces to omit from export. Use this for an isolated in-cluster telemetry receiver to prevent its traffic from feeding back into the export stream. |
+
+OTLP client settings use their unsuffixed signal fallback such as
+`OTEL_EXPORTER_OTLP_CERTIFICATE` when the logs-specific value is empty. The
+total retry budget is 15 seconds per batch. Graceful agent shutdown gives the
+worker up to 5 seconds to flush. A receiver's `Retry-After` also pauses later
+batches until that interval expires. Retries following a lost acknowledgement
+may deliver duplicates.
+
+The log resource identifies the agent, node, and configured cluster. Each log
+includes the kernel decision time and the agent observation time. Attributes
+include the action, direction, reason, packet tuple when parsed, local policy
+epoch, cgroup ID, and raw event schema version. Policy epoch and cgroup ID are
+decimal strings for full unsigned 64-bit precision. A resolved subject has Pod
+UID, namespace, and name under `ztap.subject.k8s.*`. The subject is the workload
+whose cgroup made the decision, including the receiving Pod on ingress. The
+agent retains identity maps for eight recent committed epochs. A record with
+no verified subject identity keeps the raw cgroup ID. The `rule` reason
+identifies a compiled allow match.
+Kernel packet counters cover packet decisions before event rate limiting.
+The ancestor workload guard reports blocks through its own counters outside
+this event path.
+
+Use the agent's existing `/metrics` endpoint to distinguish loss stages.
+
+| Metric | Interpretation |
+| --- | --- |
+| `ztap_flow_reader_active`, `ztap_flow_reader_lock_busy`, `ztap_flow_export_config_valid` | A direct reader can hold the lock until its CLI session ends. The agent waits in the background. An invalid exporter configuration appears in the agent log. |
+| `ztap_flow_userspace_dropped_total` | Decode errors, reader or export channel saturation, queue saturation, and shutdown discards. `cli_slow` counts loss on local CLI subscriptions independently. |
+| `ztap_flow_export_queue_depth`, `ztap_flow_export_queue_capacity`, `ztap_flow_export_queue_high_water` | Current waiting records, configured capacity, and peak observed queue depth since startup. |
+| `ztap_flow_export_records_total` | Receiver-acknowledged, confirmed rejected, exhausted retry, and unknown-delivery records. Acknowledgement covers the immediate receiver. |
+| `ztap_flow_export_retries_total`, `ztap_flow_export_last_ack_timestamp_seconds` | Retry attempts and the most recent acknowledgement that accepted at least one record. |
+| `ztap_flow_export_filtered_total` | Records deliberately omitted from export by the subject namespace filter. |
 
 ## Migration warning
 

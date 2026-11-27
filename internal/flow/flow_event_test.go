@@ -8,6 +8,14 @@ import (
 	"unsafe"
 )
 
+func TestObservedFlowTimestampPreservesRingDelay(t *testing.T) {
+	observed := time.Unix(100, 0)
+	event := observeFlowEvent(RawFlowEvent{TimestampNs: uint64(11 * time.Second)}, time.Unix(0, 0), observed, int64(13*time.Second))
+	if !event.Timestamp.Equal(observed.Add(-2*time.Second)) || !event.ObservedAt.Equal(observed) {
+		t.Fatalf("timestamp = %s, observed = %s", event.Timestamp, event.ObservedAt)
+	}
+}
+
 func TestParseEngineFlowEvent(t *testing.T) {
 	data := make([]byte, engineRawEventSize)
 	binary.LittleEndian.PutUint64(data[0:8], 123)

@@ -1,0 +1,39 @@
+{
+  "timestamp_utc": "2026-11-26T20:13:25.095113452Z",
+  "run_id": "local-otel-repeat-20261126",
+  "go_version": "go1.27.4",
+  "goos": "linux",
+  "goarch": "arm64",
+  "cpus": 2,
+  "subjects": 250,
+  "policies": 25,
+  "rules": 2500,
+  "samples": 3,
+  "round_trips_per_sample": 10000,
+  "tcp_bytes_per_sample": 8589934592,
+  "baseline_latency_p99_us": [
+    5.583,
+    4.959,
+    5.083
+  ],
+  "enforced_latency_p99_us": [
+    4.5,
+    5.458,
+    6.459
+  ],
+  "latency_delta_p99_us": 1.3759999999999994,
+  "latency_budget_us": 10,
+  "baseline_tcp_mbps": [
+    87707.92958432676,
+    91668.71911628057,
+    90470.32624494466
+  ],
+  "enforced_tcp_mbps": [
+    87909.57302755136,
+    85198.57095368639,
+    88230.83322537535
+  ],
+  "max_throughput_regression_percent": 7.058185414794423,
+  "throughput_budget_percent": 10,
+  "scope": "full 250-subject/2,500-rule real-cgroup fixture with loopback UDP round trips and TCP transfers from one selected subject, cgroup eBPF detached versus attached"
+}

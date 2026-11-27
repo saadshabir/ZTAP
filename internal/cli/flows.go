@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"runtime"
@@ -27,7 +28,7 @@ func newFlowsCmd() *cobra.Command {
 	This command requires:
 	  - Linux with eBPF support
 	  - An active Linux Kubernetes agent started with 'ztap agent'
-	  - Permission to read the agent's pinned flow map
+	  - Permission to use the agent's local stream or read its pinned flow map
 
 Examples:
 	  ztap flows                    # Stream all live flows
@@ -42,7 +43,7 @@ Examples:
 	c.Flags().String("protocol", "", "Filter by protocol (TCP, UDP)")
 	c.Flags().String("direction", "", "Filter by direction (egress, ingress)")
 	c.Flags().String("output", "table", "Output format (table, json)")
-	c.Flags().String("run-dir", "/run/ztap", "Directory containing the flow-reader lock")
+	c.Flags().String("run-dir", "/run/ztap", "Directory containing the flow-reader lock and agent socket")
 	c.Flags().String("bpffs-root", "/sys/fs/bpf", "Mounted bpffs root containing the agent's pinned maps")
 	return c
 }
@@ -93,8 +94,22 @@ func streamFlows(parent context.Context, filter flow.FlowFilter, output, runDir,
 	if err := parent.Err(); err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if stream, err := openAgentFlowSocket(ctx, runDir); err != nil {
+		return err
+	} else if stream != nil {
+		return streamAgentFlows(ctx, stream, filter, output)
+	}
 	unlock, err := acquireFlowReaderLock(runDir)
 	if err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			if stream, socketErr := openAgentFlowSocket(ctx, runDir); socketErr != nil {
+				return socketErr
+			} else if stream != nil {
+				return streamAgentFlows(ctx, stream, filter, output)
+			}
+		}
 		return fmt.Errorf("acquire flow reader lock: %w", err)
 	}
 	defer func() {
@@ -103,8 +118,6 @@ func streamFlows(parent context.Context, filter flow.FlowFilter, output, runDir,
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -136,15 +149,56 @@ func streamFlows(parent context.Context, filter flow.FlowFilter, output, runDir,
 				}
 				return nil
 			}
-			if !filter.Matches(event) {
-				continue
+			printFilteredFlow(event, filter, output)
+		}
+	}
+}
+
+type agentFlowMessage struct {
+	Ready bool            `json:"ready,omitempty"`
+	Event *flow.FlowEvent `json:"event,omitempty"`
+	Error string          `json:"error,omitempty"`
+}
+
+func streamAgentFlows(ctx context.Context, stream io.ReadCloser, filter flow.FlowFilter, output string) error {
+	defer func() { _ = stream.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	defer stop()
+	decoder := json.NewDecoder(stream)
+	ready := false
+	for {
+		var message agentFlowMessage
+		if err := decoder.Decode(&message); err != nil {
+			if ctx.Err() != nil {
+				return nil
 			}
-			switch output {
-			case "json":
-				printFlowJSON(event)
-			default:
-				printFlowRow(event)
+			if errors.Is(err, io.EOF) {
+				return errors.New("agent flow stream closed unexpectedly")
 			}
+			return fmt.Errorf("read agent flow stream: %w", err)
+		}
+		switch {
+		case message.Error != "":
+			return fmt.Errorf("agent flow stream: %s", message.Error)
+		case !ready && message.Ready:
+			ready = true
+			if output == "table" {
+				printFlowHeader()
+			}
+		case ready && message.Event != nil:
+			printFilteredFlow(*message.Event, filter, output)
+		default:
+			return errors.New("invalid agent flow stream message")
+		}
+	}
+}
+
+func printFilteredFlow(event flow.FlowEvent, filter flow.FlowFilter, output string) {
+	if filter.Matches(event) {
+		if output == "json" {
+			printFlowJSON(event)
+		} else {
+			printFlowRow(event)
 		}
 	}
 }

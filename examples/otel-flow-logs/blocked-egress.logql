@@ -1,0 +1,4 @@
+{service_name="ztap-agent"}
+  | ztap_decision_action="blocked"
+  | ztap_decision_direction="egress"
+  | ztap_decision_reason="default_deny"

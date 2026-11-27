@@ -80,6 +80,7 @@ func (r *k8sSubjectResolver) buildResolutionSnapshot(nodeName string, node *core
 		resolved := policy.ResolvedPod{
 			Namespace:   pod.Namespace,
 			Name:        pod.Name,
+			UID:         string(pod.UID),
 			Labels:      copyStringMap(pod.Labels),
 			PodIPs:      podStatusIPs(pod),
 			NamedPorts:  podNamedPorts(pod),

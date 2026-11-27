@@ -1,0 +1,26 @@
+# Strategic merge patch for the shipped ZTAP DaemonSet. Its args array replaces
+# the base array, so carry over any installation-specific flag overrides.
+spec:
+  template:
+    spec:
+      containers:
+        - name: agent
+          args:
+            - agent
+            - --node-name=$(NODE_NAME)
+            - --cgroup-root=/host/sys/fs/cgroup
+            - --bpffs-root=/host/sys/fs/bpf
+            - --run-dir=/run/ztap
+            - --otlp-flow-logs
+            - --otlp-flow-exclude-namespace=ztap-telemetry,ztap-system
+          env:
+            - {name: ZTAP_CLUSTER_NAME, value: ztap-example}
+            - {name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, value: "https://otel-collector.ztap-telemetry.svc:4318/v1/logs"}
+            - {name: OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE, value: /otel-tls/ca.crt}
+            - {name: OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE, value: /otel-tls/tls.crt}
+            - {name: OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY, value: /otel-tls/tls.key}
+          volumeMounts:
+            - {name: otel-tls, mountPath: /otel-tls, readOnly: true}
+      volumes:
+        - name: otel-tls
+          secret: {secretName: ztap-otel-client, defaultMode: 0400}

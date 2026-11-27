@@ -51,6 +51,9 @@ const (
 // FlowEvent is the user-facing view of a Linux eBPF flow event.
 type FlowEvent struct {
 	Timestamp     time.Time // Event timestamp
+	ObservedAt    time.Time // Userspace observation timestamp
+	KernelTimeNS  uint64    // CLOCK_MONOTONIC timestamp used by the kernel
+	AddressFamily uint8     // 4 for IPv4, 6 for IPv6, 0 if unavailable
 	PolicyEpoch   uint64    // Active policy generation that decided the packet
 	CgroupID      uint64    // Subject cgroup that handled the packet
 	SourceIP      net.IP    // Source IP address
@@ -90,7 +93,9 @@ func (r *RawFlowEvent) ToFlowEvent(bootTime time.Time) FlowEvent {
 		ns = uint64(maxInt64)
 	}
 	return FlowEvent{
-		Timestamp:     bootTime.Add(time.Duration(int64(ns))), // #nosec G115 -- ns is clamped to max int64 above
+		Timestamp:     bootTime.Add(time.Duration(int64(ns))), // #nosec G115 -- ns is clamped above
+		KernelTimeNS:  r.TimestampNs,
+		AddressFamily: r.Family,
 		PolicyEpoch:   r.PolicyEpoch,
 		CgroupID:      r.CgroupID,
 		SourceIP:      uint32ArrayToIP(r.SrcIP, r.Family),

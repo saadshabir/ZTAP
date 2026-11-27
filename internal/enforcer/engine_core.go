@@ -65,6 +65,13 @@ func newEngineCore(store enginePolicyStore, linker subjectLinker, logger *slog.L
 }
 
 func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error {
+	return e.ApplyWithPolicyEpoch(ctx, desired, nil)
+}
+
+// ApplyWithPolicyEpoch lets a caller publish metadata atomically with the
+// slot flip. The callback must call and return commit's result. A nil commit
+// means the validated snapshot already matches the active policy epoch.
+func (e *engineCore) ApplyWithPolicyEpoch(ctx context.Context, desired policy.PolicySet, publish func(epoch uint64, commit func() error) error) error {
 	if ctx == nil {
 		return errors.New("apply context is nil")
 	}
@@ -114,6 +121,11 @@ func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error 
 			return err
 		}
 		e.closeRemovedLinks(encoded.Subjects)
+		if publish != nil {
+			if err := publish(e.active.PolicyEpoch, nil); err != nil {
+				return err
+			}
+		}
 		return e.markEnforcing()
 	}
 	if e.active.PolicyEpoch == math.MaxUint64 {
@@ -181,9 +193,15 @@ func (e *engineCore) Apply(ctx context.Context, desired policy.PolicySet) error 
 		return e.rollbackCandidate(candidate.Slot, newLinks, err)
 	}
 	e.observeCheckpoint("candidate-links-pinned")
-	if err := e.store.Flip(candidate); err != nil {
+	var flipErr error
+	if publish == nil {
+		flipErr = e.store.Flip(candidate)
+	} else {
+		flipErr = publish(candidate.PolicyEpoch, func() error { return e.store.Flip(candidate) })
+	}
+	if flipErr != nil {
 		return e.rollbackCandidate(candidate.Slot, newLinks,
-			fmt.Errorf("commit active slot %d at epoch %d: %w", candidate.Slot, candidate.PolicyEpoch, err))
+			fmt.Errorf("commit active slot %d at epoch %d: %w", candidate.Slot, candidate.PolicyEpoch, flipErr))
 	}
 	e.observeCheckpoint("active-config-committed")
 

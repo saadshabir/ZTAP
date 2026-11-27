@@ -7,9 +7,17 @@ nodes=()
 cni_configs=()
 for node in $(kind get nodes --name "${KIND_CLUSTER_NAME:-ztap}"); do
   nodes+=("$node")
-  cni_config="$(docker exec "$node" find /etc/cni/net.d -maxdepth 1 -type f \
-    \( -name '*.conf' -o -name '*.conflist' \) -print -quit)"
-  test -n "$cni_config"
+  cni_config=
+  for ((attempt = 0; attempt < 30; attempt++)); do
+    cni_config="$(docker exec "$node" find /etc/cni/net.d -maxdepth 1 -type f \
+      \( -name '*.conf' -o -name '*.conflist' \) -print -quit)"
+    if [ -n "$cni_config" ]; then break; fi
+    sleep 1
+  done
+  if [ -z "$cni_config" ]; then
+    printf 'kindnet CNI configuration did not appear on %s\n' "$node" >&2
+    exit 1
+  fi
   cni_configs+=("$cni_config")
 done
 test "${#nodes[@]}" -gt 0

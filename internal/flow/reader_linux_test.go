@@ -5,6 +5,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -121,5 +122,37 @@ func TestLinuxReaderContextCancellationClosesBlockedRingReader(t *testing.T) {
 	case <-ringReader.closed:
 	default:
 		t.Fatal("context cancellation did not close the ring reader")
+	}
+}
+
+type sampleRingReader struct{ records [][]byte }
+
+func (r *sampleRingReader) Read() (ringbuf.Record, error) {
+	if len(r.records) == 0 {
+		return ringbuf.Record{}, ringbuf.ErrClosed
+	}
+	sample := r.records[0]
+	r.records = r.records[1:]
+	return ringbuf.Record{RawSample: sample}, nil
+}
+
+func (*sampleRingReader) Close() error { return nil }
+
+func TestLinuxReaderDistinguishesDecodeAndChannelLoss(t *testing.T) {
+	valid := make([]byte, engineRawEventSize)
+	valid[65] = engineEventSchema
+	ring := &sampleRingReader{records: [][]byte{nil, valid, valid}}
+	reader := &LinuxReader{
+		flowMap: &ebpf.Map{}, stopCh: make(chan struct{}),
+		newReader: func(*ebpf.Map) (linuxRingReader, error) { return ring, nil },
+	}
+	var reasons []string
+	reader.SetDropObserver(func(reason string) { reasons = append(reasons, reason) })
+	events := make(chan RawFlowEvent, 1)
+	if err := reader.Start(t.Context(), events); !errors.Is(err, ringbuf.ErrClosed) {
+		t.Fatalf("ring exhaustion returned %v", err)
+	}
+	if len(events) != 1 || !slices.Equal(reasons, []string{"decode", "reader_full"}) {
+		t.Fatalf("delivered=%d, losses=%v", len(events), reasons)
 	}
 }

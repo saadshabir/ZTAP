@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/saadshabir/ZTAP/internal/telemetry"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -17,6 +18,9 @@ import (
 // deliberately the only production path from Kubernetes objects to the
 // instance-owned enforcement engine.
 func newAgentCmd() *cobra.Command {
+	var exportFlows bool
+	var flowQueueSize int
+	var flowExcludeNamespaces []string
 	c := &cobra.Command{
 		Use:   "agent",
 		Short: "Run ZTAP node agent for Kubernetes enforcement",
@@ -53,6 +57,9 @@ func newAgentCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if exportFlows && dryRun {
+				return errors.New("--otlp-flow-logs requires active enforcement; remove --dry-run")
+			}
 
 			config, err := loadAgentConfig(kubeconfig)
 			if err != nil {
@@ -66,15 +73,18 @@ func newAgentCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			return runNativeKubernetesAgent(ctx, clientset, NativeAgentOptions{
-				NodeName:      nodeName,
-				Kubeconfig:    kubeconfig,
-				CgroupRoot:    cgroupRoot,
-				BPFFSRoot:     bpffsRoot,
-				RunDir:        runDir,
-				Listen:        listen,
-				DryRun:        dryRun,
-				WorkloadGuard: true,
-				PodUID:        os.Getenv("POD_UID"),
+				NodeName:              nodeName,
+				Kubeconfig:            kubeconfig,
+				CgroupRoot:            cgroupRoot,
+				BPFFSRoot:             bpffsRoot,
+				RunDir:                runDir,
+				Listen:                listen,
+				DryRun:                dryRun,
+				WorkloadGuard:         true,
+				PodUID:                os.Getenv("POD_UID"),
+				OTLPFlowLogs:          exportFlows,
+				FlowQueueSize:         flowQueueSize,
+				FlowExcludeNamespaces: flowExcludeNamespaces,
 			})
 		},
 	}
@@ -85,6 +95,9 @@ func newAgentCmd() *cobra.Command {
 	c.Flags().String("run-dir", "/run/ztap", "Directory containing the node-agent lock")
 	c.Flags().String("listen", ":9090", "Local health, readiness, and metrics listen address")
 	c.Flags().Bool("dry-run", false, "Compile snapshots without loading or attaching eBPF")
+	c.Flags().BoolVar(&exportFlows, "otlp-flow-logs", false, "Export eBPF packet decisions as OTLP/HTTP logs")
+	c.Flags().IntVar(&flowQueueSize, "otlp-flow-queue-capacity", telemetry.DefaultQueueCapacity, "Maximum flow records waiting for OTLP export")
+	c.Flags().StringSliceVar(&flowExcludeNamespaces, "otlp-flow-exclude-namespace", nil, "Exclude resolved subjects in these namespaces from OTLP export")
 	return c
 }
 

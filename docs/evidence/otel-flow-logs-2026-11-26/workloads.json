@@ -1,0 +1,14 @@
+[
+  {
+    "role": "client",
+    "uid": "41ec30e8-44f9-4529-93c4-b31ab0492cb9",
+    "node": "ztap-control-plane",
+    "ip": "10.244.0.11"
+  },
+  {
+    "role": "server",
+    "uid": "85341049-ff02-4fbb-a007-5d684750fb2e",
+    "node": "ztap-worker",
+    "ip": "10.244.2.18"
+  }
+]

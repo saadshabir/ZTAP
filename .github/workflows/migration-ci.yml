@@ -572,6 +572,11 @@ jobs:
       - name: Verify cross-node enforcement and availability under sustained churn
         run: bash .github/scripts/verify-multinode-churn.sh
 
+      - name: Verify OpenTelemetry decisions and Collector outage recovery
+        env:
+          ZTAP_TELEMETRY_EVIDENCE_DIR: churn-evidence/flow-telemetry
+        run: bash .github/scripts/verify-flow-telemetry.sh
+
       - name: Capture multi-node diagnostics
         if: always()
         run: |
@@ -584,6 +589,8 @@ jobs:
             for pod in $(kubectl -n ztap-system get pods -l app=ztap-agent -o name); do
               kubectl -n ztap-system logs "$pod" --all-containers=true --tail=500 || true
             done
+            kubectl -n ztap-telemetry logs deployment/otel-collector --tail=250 || true
+            kubectl -n ztap-telemetry logs deployment/loki --tail=250 || true
             for node in $(kind get nodes --name ztap); do
               docker exec "$node" mount -t bpf || true
             done

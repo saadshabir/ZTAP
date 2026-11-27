@@ -87,6 +87,7 @@ yarn-error.log*
 # Caches and test artifacts
 .cache/
 /churn-evidence/
+/flow-telemetry-evidence/
 .mypy_cache/
 .pytest_cache/
 /STREAMLINING_PLAN.md
