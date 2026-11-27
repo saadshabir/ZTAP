@@ -128,7 +128,9 @@ func TestAgentFlowSocketFanOutAndRestart(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		serveAgentFlows(ctx, listener, monitor, func() {})
+		if err := serveAgentFlows(ctx, listener, monitor, func() {}); err != nil {
+			t.Error(err)
+		}
 	}()
 	stream, err := openAgentFlowSocket(ctx, runDir)
 	if err != nil || stream == nil {
@@ -231,5 +233,76 @@ func TestAgentFlowStreamUnexpectedEOF(t *testing.T) {
 	cancel()
 	if err := streamAgentFlows(ctx, reader, flow.FlowFilter{}, "json"); err != nil {
 		t.Fatalf("caller cancellation returned %v", err)
+	}
+}
+
+type interruptedFlowListener struct {
+	*net.UnixListener
+	attempts int
+}
+
+func (l *interruptedFlowListener) AcceptUnix() (*net.UnixConn, error) {
+	l.attempts++
+	if l.attempts == 1 {
+		return nil, &net.OpError{Op: "accept", Net: "unix", Err: unix.EMFILE}
+	}
+	return nil, net.ErrClosed
+}
+
+func TestFlowSocketRetriesTransientAccept(t *testing.T) {
+	socket, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(t.TempDir(), "flow.sock"), Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &interruptedFlowListener{UnixListener: socket}
+	err = serveAgentFlows(t.Context(), listener, nil, nil)
+	if !errors.Is(err, net.ErrClosed) || listener.attempts != 2 {
+		t.Fatalf("accept attempts = %d, terminal error = %v", listener.attempts, err)
+	}
+}
+
+func TestFlowClientTimeoutCountsPendingRecords(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	raw := make(chan flow.RawFlowEvent)
+	monitor := flow.NewMonitor(socketTestReader{send: raw})
+	observed := monitor.SubscribeBeforeStart(ctx)
+	if err := monitor.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = monitor.Stop() }()
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	var lost atomic.Int32
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveAgentFlowClient(ctx, server, monitor, func() { lost.Add(1) })
+	}()
+	var ready agentFlowMessage
+	if err := json.NewDecoder(client).Decode(&ready); err != nil || !ready.Ready {
+		t.Fatalf("ready = %v, err = %v", ready.Ready, err)
+	}
+	// Leave the first event blocked on the pipe and queue the rest.
+	const count = 5
+	for range count {
+		select {
+		case raw <- flow.RawFlowEvent{}:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		select {
+		case <-observed:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if got := lost.Load(); got != count {
+		t.Fatalf("lost = %d, want %d", got, count)
 	}
 }

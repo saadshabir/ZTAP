@@ -499,7 +499,7 @@ with the shipped DaemonSet and mutual TLS.
 | `OTEL_EXPORTER_OTLP_LOGS_HEADERS`, `OTEL_EXPORTER_OTLP_LOGS_TIMEOUT` | Optional comma-separated `key=value` headers and per-attempt timeout in milliseconds. Default timeout is 3,000 ms. |
 | `ZTAP_CLUSTER_NAME` | Optional cluster name. Set it consistently on every agent if the backend aggregates multiple clusters. |
 | `--otlp-flow-queue-capacity` | Waiting records per node, default 2,048. Up to 256 records can be in the worker's batch, which flushes after at most one second when the worker is idle. |
-| `--otlp-flow-exclude-namespace` | Optional comma-separated subject namespaces to omit from export. Use this for an isolated in-cluster telemetry receiver to prevent its traffic from feeding back into the export stream. |
+| `--otlp-flow-exclude-namespace` | Optional comma-separated subject namespaces to omit from export. When set, the agent also omits records whose subject namespace it cannot verify, including buffered records from before recovery. Use this for an isolated in-cluster telemetry receiver to prevent its traffic from feeding back into the export stream. |
 
 OTLP client settings use their unsuffixed signal fallback such as
 `OTEL_EXPORTER_OTLP_CERTIFICATE` when the logs-specific value is empty. The
@@ -516,8 +516,8 @@ decimal strings for full unsigned 64-bit precision. A resolved subject has Pod
 UID, namespace, and name under `ztap.subject.k8s.*`. The subject is the workload
 whose cgroup made the decision, including the receiving Pod on ingress. The
 agent retains identity maps for eight recent committed epochs. A record with
-no verified subject identity keeps the raw cgroup ID. The `rule` reason
-identifies a compiled allow match.
+no verified subject identity keeps the raw cgroup ID when namespace exclusions
+are disabled. The `rule` reason identifies a compiled allow match.
 Kernel packet counters cover packet decisions before event rate limiting.
 The ancestor workload guard reports blocks through its own counters outside
 this event path.

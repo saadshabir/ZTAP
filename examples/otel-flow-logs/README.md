@@ -27,7 +27,8 @@ Restart the Collector and the agents after replacing the Secrets so they read
 the new files.
 
 The patch excludes the backend and agent namespaces from export to prevent
-decisions about telemetry uploads from generating more uploads. Those local
+decisions about telemetry uploads from generating more uploads. It also omits
+records whose subject namespace the agent cannot verify. Those local
 decisions still appear in `ztap flows` and the kernel counters.
 
 Generate traffic that a ZTAP NetworkPolicy denies in the egress direction, then

@@ -97,7 +97,7 @@ func newAgentCmd() *cobra.Command {
 	c.Flags().Bool("dry-run", false, "Compile snapshots without loading or attaching eBPF")
 	c.Flags().BoolVar(&exportFlows, "otlp-flow-logs", false, "Export eBPF packet decisions as OTLP/HTTP logs")
 	c.Flags().IntVar(&flowQueueSize, "otlp-flow-queue-capacity", telemetry.DefaultQueueCapacity, "Maximum flow records waiting for OTLP export")
-	c.Flags().StringSliceVar(&flowExcludeNamespaces, "otlp-flow-exclude-namespace", nil, "Exclude resolved subjects in these namespaces from OTLP export")
+	c.Flags().StringSliceVar(&flowExcludeNamespaces, "otlp-flow-exclude-namespace", nil, "Exclude these namespaces and subjects with unknown namespace identity from OTLP export")
 	return c
 }
 

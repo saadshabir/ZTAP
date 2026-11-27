@@ -113,7 +113,12 @@ func listenAgentFlows(runDir string) (*net.UnixListener, error) {
 	return listener, nil
 }
 
-func serveAgentFlows(ctx context.Context, listener *net.UnixListener, monitor *flow.Monitor, onDrop func()) {
+type flowSocketListener interface {
+	AcceptUnix() (*net.UnixConn, error)
+	Close() error
+}
+
+func serveAgentFlows(ctx context.Context, listener flowSocketListener, monitor *flow.Monitor, onDrop func()) error {
 	ctx, cancel := context.WithCancel(ctx)
 	var clients sync.WaitGroup
 	defer func() {
@@ -125,11 +130,26 @@ func serveAgentFlows(ctx context.Context, listener *net.UnixListener, monitor *f
 	defer func() { _ = listener.Close() }()
 
 	slots := make(chan struct{}, maxFlowClients)
+	const initialDelay = 10 * time.Millisecond
+	delay := initialDelay
 	for {
 		conn, err := listener.AcceptUnix()
 		if err != nil {
-			return
+			if ctx.Err() != nil {
+				return nil
+			}
+			if !retryFlowAccept(err) {
+				return fmt.Errorf("accept local flow subscription: %w", err)
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(delay):
+			}
+			delay = min(2*delay, time.Second)
+			continue
 		}
+		delay = initialDelay
 		if err := requireRootFlowPeer(conn); err != nil {
 			_ = conn.Close()
 			continue
@@ -147,7 +167,13 @@ func serveAgentFlows(ctx context.Context, listener *net.UnixListener, monitor *f
 	}
 }
 
-func serveAgentFlowClient(ctx context.Context, conn *net.UnixConn, monitor *flow.Monitor, onDrop func()) {
+func retryFlowAccept(err error) bool {
+	return errors.Is(err, unix.EMFILE) || errors.Is(err, unix.ENFILE) ||
+		errors.Is(err, unix.ENOMEM) || errors.Is(err, unix.ENOBUFS) ||
+		errors.Is(err, unix.EINTR) || errors.Is(err, unix.ECONNABORTED)
+}
+
+func serveAgentFlowClient(ctx context.Context, conn net.Conn, monitor *flow.Monitor, onDrop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer func() { _ = conn.Close() }()
@@ -162,14 +188,26 @@ func serveAgentFlowClient(ctx context.Context, conn *net.UnixConn, monitor *flow
 	}()
 	encoder := json.NewEncoder(conn)
 	events := monitor.SubscribeWithDrops(ctx, false, onDrop)
-	if err := writeAgentFlow(conn, encoder, agentFlowMessage{Ready: true}); err != nil {
+	write := func(message agentFlowMessage) error {
+		err := writeAgentFlow(conn, encoder, message)
+		if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() && onDrop != nil {
+			cancel()
+			if message.Event != nil {
+				onDrop()
+			}
+			// Unsubscription closes events under the fan-out lock. Drain through
+			// closure to include records queued concurrently with the timeout.
+			for range events {
+				onDrop()
+			}
+		}
+		return err
+	}
+	if err := write(agentFlowMessage{Ready: true}); err != nil {
 		return
 	}
 	for event := range events {
-		if err := writeAgentFlow(conn, encoder, agentFlowMessage{Event: &event}); err != nil {
-			if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() && onDrop != nil {
-				onDrop()
-			}
+		if err := write(agentFlowMessage{Event: &event}); err != nil {
 			return
 		}
 	}
@@ -178,7 +216,7 @@ func serveAgentFlowClient(ctx context.Context, conn *net.UnixConn, monitor *flow
 	}
 }
 
-func writeAgentFlow(conn *net.UnixConn, encoder *json.Encoder, message agentFlowMessage) error {
+func writeAgentFlow(conn net.Conn, encoder *json.Encoder, message agentFlowMessage) error {
 	if err := conn.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		return err
 	}
