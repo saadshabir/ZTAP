@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/saadshabir/ZTAP/internal/flow"
 	collectorpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	"google.golang.org/protobuf/proto"
@@ -155,10 +155,10 @@ func TestExporterBoundsQueueAndShutdown(t *testing.T) {
 	defer cancel()
 	exporter.Close(flush)
 	requireCounter(t, metrics, "unknown", 1)
-	if got := testutil.ToFloat64(metrics.Losses.WithLabelValues("export_queue_full")); got != 1 {
+	if got := metricValue(t, metrics.Losses.WithLabelValues("export_queue_full")); got != 1 {
 		t.Errorf("queue losses = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(metrics.Losses.WithLabelValues("shutdown")); got != 1 {
+	if got := metricValue(t, metrics.Losses.WithLabelValues("shutdown")); got != 1 {
 		t.Errorf("shutdown losses = %v, want 1", got)
 	}
 }
@@ -174,7 +174,7 @@ func TestExporterDoesNotReplayMalformedSuccess(t *testing.T) {
 	exporter.Close(t.Context())
 	requireCounter(t, metrics, "unknown", 1)
 	requireCounter(t, metrics, "acknowledged", 0)
-	if got := testutil.ToFloat64(metrics.retries); got != 0 {
+	if got := metricValue(t, metrics.retries); got != 0 {
 		t.Errorf("unexpected retries: %v", got)
 	}
 }
@@ -189,7 +189,7 @@ func TestExporterDoesNotAcknowledgeHeaderlessOK(t *testing.T) {
 	exporter.Close(t.Context())
 	requireCounter(t, metrics, "unknown", 1)
 	requireCounter(t, metrics, "acknowledged", 0)
-	if got := testutil.ToFloat64(metrics.lastAck); got != 0 {
+	if got := metricValue(t, metrics.lastAck); got != 0 {
 		t.Fatalf("last acknowledgement advanced to %v", got)
 	}
 }
@@ -236,9 +236,25 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 
 func requireCounter(t *testing.T, metrics *Metrics, label string, want float64) {
 	t.Helper()
-	if got := testutil.ToFloat64(metrics.outcomes.WithLabelValues(label)); got != want {
+	if got := metricValue(t, metrics.outcomes.WithLabelValues(label)); got != want {
 		t.Errorf("%s = %v, want %v", label, got, want)
 	}
+}
+
+func metricValue(t *testing.T, metric prometheus.Metric) float64 {
+	t.Helper()
+	var sample dto.Metric
+	if err := metric.Write(&sample); err != nil {
+		t.Fatal(err)
+	}
+	if counter := sample.GetCounter(); counter != nil {
+		return counter.GetValue()
+	}
+	if gauge := sample.GetGauge(); gauge != nil {
+		return gauge.GetValue()
+	}
+	t.Fatal("expected a counter or gauge")
+	return 0
 }
 
 func testExporter(server *httptest.Server, capacity int) (*Exporter, *Metrics) {
