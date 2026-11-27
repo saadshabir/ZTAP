@@ -264,3 +264,15 @@ func testExporter(server *httptest.Server, capacity int) (*Exporter, *Metrics) {
 		AgentResource{NodeName: "test-node"}, metrics, registry)
 	return exporter, metrics
 }
+
+func TestCertificateFailurePrecedesDelivery(t *testing.T) {
+	receiver := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("unexpected HTTP request after certificate verification failure")
+	}))
+	defer receiver.Close()
+	exporter := &Exporter{config: Config{endpoint: receiver.URL, client: &http.Client{}, headers: make(http.Header)}}
+	result := exporter.send(t.Context(), nil, 1)
+	if result.acknowledged || result.uncertain || !result.retry {
+		t.Fatalf("unexpected certificate failure outcome: %+v", result)
+	}
+}

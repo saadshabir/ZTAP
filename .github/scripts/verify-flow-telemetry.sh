@@ -372,6 +372,7 @@ spec:
 YAML
 wait_epoch "$metrics_a" "$agent_epoch_a" >/dev/null
 wait_epoch "$metrics_b" "$agent_epoch_b" >/dev/null
+filter_since="$(now_ns)"
 measure disabled 9081
 
 bash "$example/install-backend.sh" > "$evidence/backend-install.log" 2>&1
@@ -403,7 +404,7 @@ filtered_a="$(metric "$metrics_a" ztap_flow_export_filtered_total)"
 filtered_b="$(metric "$metrics_b" ztap_flow_export_filtered_total)"
 awk -v a="$filtered_a" -v b="$filtered_b" 'BEGIN {exit !(a+b>0)}'
 measure healthy 9082
-query_logs '{service_name="ztap-agent"} | ztap_subject_k8s_namespace_name="ztap-system"' "$allowed_since" \
+query_logs '{service_name="ztap-agent"} | ztap_subject_k8s_namespace_name=~"ztap-system|ztap-telemetry" or ztap_subject_identity_status="unresolved"' "$filter_since" \
   | jq -e '.status == "success" and (.data.result | length == 0)' > "$evidence/agent-export-filter.txt"
 
 epoch_a="$(epoch "$metrics_a")"

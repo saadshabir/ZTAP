@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"math/rand/v2"
@@ -248,9 +249,11 @@ func (e *Exporter) send(ctx context.Context, body []byte, count int64) exportRes
 	request.Header.Set("Content-Type", protobufMediaType)
 	response, err := e.config.client.Do(request) // #nosec G704 -- destination is operator-configured
 	if err != nil {
-		// A dial failure happens before the request can reach the receiver.
-		netErr, dialFailure := errors.AsType[*net.OpError](err)
-		return exportResult{retry: true, uncertain: !dialFailure || netErr.Op != "dial"}
+		// Dial and server certificate verification failures precede the POST.
+		netErr, isNetOp := errors.AsType[*net.OpError](err)
+		_, certificateFailure := errors.AsType[*tls.CertificateVerificationError](err)
+		beforeRequest := certificateFailure || (isNetOp && netErr.Op == "dial")
+		return exportResult{retry: true, uncertain: !beforeRequest}
 	}
 	defer func() { _ = response.Body.Close() }()
 	const maxReply = 64 << 10

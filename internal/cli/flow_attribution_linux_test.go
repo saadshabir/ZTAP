@@ -68,3 +68,23 @@ func requireFlowUID(t *testing.T, history *flowDecisionHistory, epoch, ns uint64
 		t.Errorf("epoch %d at %d: subject = %q, want %q", epoch, ns, got, want)
 	}
 }
+
+func TestFlowNamespaceExclusionsAfterRecovery(t *testing.T) {
+	history := &flowDecisionHistory{}
+	subject := telemetry.PodIdentity{UID: "agent-pod", Namespace: "ztap-system"}
+	before, err := monotonicNowNS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := history.publish(5, nil, map[uint64]telemetry.PodIdentity{41: subject}); err != nil {
+		t.Fatal(err)
+	}
+	buffered := history.subject(flow.FlowEvent{PolicyEpoch: 5, CgroupID: 41, KernelTimeNS: before})
+	exclusions := []string{subject.Namespace}
+	if !excludeFlowSubject(buffered, exclusions) || !excludeFlowSubject(subject, exclusions) {
+		t.Fatal("namespace filter must omit both unresolved and excluded subjects")
+	}
+	if excludeFlowSubject(buffered, nil) || excludeFlowSubject(subject, []string{"another-namespace"}) {
+		t.Fatal("unexpectedly excluded an eligible record")
+	}
+}

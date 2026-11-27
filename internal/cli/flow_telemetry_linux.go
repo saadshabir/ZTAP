@@ -113,23 +113,28 @@ func readNativeFlowTelemetry(ctx context.Context, options NativeAgentOptions, hi
 	metrics.ReaderActive.Set(1)
 	defer metrics.ReaderActive.Set(0)
 	cliDrops := metrics.Losses.WithLabelValues("cli_slow")
-	socketDone := make(chan struct{})
+	socketDone := make(chan error, 1)
 	go func() {
-		defer close(socketDone)
-		serveAgentFlows(readCtx, listener, monitor, cliDrops.Inc)
+		socketDone <- serveAgentFlows(readCtx, listener, monitor, cliDrops.Inc)
+		// Reopen the reader and listener together after a terminal accept error.
+		stopRead()
 	}()
 	defer func() {
 		stopRead()
-		<-socketDone
+		resultErr = errors.Join(resultErr, <-socketDone)
 	}()
 
 	for event := range events {
 		subject := history.subject(event)
-		if subject.UID != "" && slices.Contains(options.FlowExcludeNamespaces, subject.Namespace) {
+		if excludeFlowSubject(subject, options.FlowExcludeNamespaces) {
 			metrics.Filtered.Inc()
 			continue
 		}
 		exporter.Enqueue(event, subject)
 	}
 	return monitor.Err()
+}
+
+func excludeFlowSubject(subject telemetry.PodIdentity, namespaces []string) bool {
+	return len(namespaces) > 0 && (subject.UID == "" || subject.Namespace == "" || slices.Contains(namespaces, subject.Namespace))
 }
