@@ -593,6 +593,39 @@ type lifecycleFakeStore struct {
 	stopCalls int
 }
 
+func TestPolicyEpochObserverSeesCommittedFlipEvenWhenStatusFails(t *testing.T) {
+	statusErr := errors.New("status publication failed")
+	store := &lifecycleFakeStore{fakePolicyStore: newFakePolicyStore(), markErr: statusErr}
+	engine := newEngineCore(store, newFakeLinker(nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	lastCommitted := uint64(0)
+	var observedNoop bool
+	observe := func(epoch uint64, flip func() error) error {
+		if flip != nil {
+			if err := flip(); err != nil {
+				return err
+			}
+			lastCommitted = epoch
+		} else {
+			observedNoop = epoch == lastCommitted
+		}
+		if store.active.PolicyEpoch != epoch {
+			t.Errorf("observed epoch %d, kernel store contains %d", epoch, store.active.PolicyEpoch)
+		}
+		return nil
+	}
+	if err := engine.ApplyWithPolicyEpoch(t.Context(), testPolicySet(10), observe); !errors.Is(err, statusErr) || lastCommitted != 1 {
+		t.Fatalf("apply returned %v with committed epoch %d", err, lastCommitted)
+	}
+	store.markErr = nil
+	if err := engine.ApplyWithPolicyEpoch(t.Context(), testPolicySet(10), observe); err != nil || !observedNoop {
+		t.Fatalf("no-op retry returned %v, observed=%t", err, observedNoop)
+	}
+	store.flipErr = errors.New("injected flip failure")
+	if err := engine.ApplyWithPolicyEpoch(t.Context(), testPolicySet(20), observe); !errors.Is(err, store.flipErr) || lastCommitted != 1 {
+		t.Fatalf("failed flip returned %v with committed epoch %d", err, lastCommitted)
+	}
+}
+
 func (s *lifecycleFakeStore) MarkEnforcing() error {
 	s.markCalls++
 	return s.markErr

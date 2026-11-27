@@ -1,0 +1,242 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ztap-telemetry
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+  namespace: ztap-telemetry
+data:
+  collector.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+            tls:
+              cert_file: /tls/tls.crt
+              key_file: /tls/tls.key
+              client_ca_file: /tls/ca.crt
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 128
+        spike_limit_mib: 32
+      batch:
+        timeout: 500ms
+        send_batch_size: 512
+        send_batch_max_size: 512
+    exporters:
+      otlp_http/loki:
+        endpoint: http://loki.ztap-telemetry.svc:3100/otlp
+        timeout: 3s
+        sending_queue:
+          num_consumers: 2
+          queue_size: 64
+        retry_on_failure:
+          initial_interval: 500ms
+          max_interval: 3s
+          max_elapsed_time: 15s
+    service:
+      extensions: [health_check]
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/loki]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: ztap-telemetry
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ztap-otel-collector}
+  template:
+    metadata:
+      labels: {app: ztap-otel-collector}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: collector
+          image: docker.io/otel/opentelemetry-collector:0.165.0@sha256:34b24b740c3c88d3467740e8642a397c13898ef76d7295c5425164c482ed1b73
+          args: [--config=/config/collector.yaml]
+          ports: [{name: otlp-http, containerPort: 4318}, {name: health, containerPort: 13133}]
+          readinessProbe:
+            httpGet: {port: health, path: /}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /config, readOnly: true}
+            - {name: tls, mountPath: /tls, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: otel-collector}
+        - name: tls
+          secret: {secretName: otel-collector-tls, defaultMode: 0440}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: ztap-telemetry
+spec:
+  type: ClusterIP
+  selector: {app: ztap-otel-collector}
+  ports: [{name: otlp-http, port: 4318, targetPort: otlp-http}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki
+  namespace: ztap-telemetry
+data:
+  loki.yaml: |
+    auth_enabled: false
+    analytics:
+      reporting_enabled: false
+    server:
+      http_listen_port: 3100
+      grpc_listen_address: 127.0.0.1
+    common:
+      instance_addr: 127.0.0.1
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+    schema_config:
+      configs:
+        - from: 2024-04-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      allow_structured_metadata: true
+      otlp_config:
+        resource_attributes:
+          ignore_defaults: true
+          attributes_config:
+            - action: index_label
+              attributes: [service.name]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: ztap-telemetry
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ztap-loki}
+  template:
+    metadata:
+      labels: {app: ztap-loki}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: loki
+          image: docker.io/grafana/loki:3.7.10@sha256:b43c257ccfc925d4a50b8717cac61a3b51df8c48d01847936057e5c4075a24a7
+          args: [-config.file=/config/loki.yaml]
+          ports: [{name: http, containerPort: 3100}]
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /config, readOnly: true}
+            - {name: data, mountPath: /loki}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: loki}
+        - name: data
+          emptyDir: {sizeLimit: 2Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: ztap-telemetry
+spec:
+  clusterIP: None
+  selector: {app: ztap-loki}
+  ports: [{name: http, port: 3100, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: collector
+  namespace: ztap-telemetry
+spec:
+  podSelector: {matchLabels: {app: ztap-otel-collector}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ztap-system}}
+          podSelector: {matchLabels: {app: ztap-agent}}
+      ports: [{port: 4318, protocol: TCP}]
+    - from:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports: [{port: 13133, protocol: TCP}]
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app: ztap-loki}}
+      ports: [{port: 3100, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki
+  namespace: ztap-telemetry
+spec:
+  podSelector: {matchLabels: {app: ztap-loki}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: ztap-otel-collector}}
+      ports: [{port: 3100, protocol: TCP}]
+    # Loki's single-process gRPC calls and kubectl port-forward use loopback.
+    - from:
+        - ipBlock: {cidr: 127.0.0.1/32}
+      ports: [{port: 9095, protocol: TCP}, {port: 3100, protocol: TCP}]
+  egress:
+    - to:
+        - ipBlock: {cidr: 127.0.0.1/32}
+      ports: [{port: 9095, protocol: TCP}]

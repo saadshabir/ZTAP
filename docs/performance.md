@@ -6,6 +6,7 @@ kernel-path performance or Kubernetes availability.
 
 - [Historical reference results](#historical-reference-results)
 - [Restart continuity results](#restart-continuity-results)
+- [OpenTelemetry decision logs](#opentelemetry-decision-logs)
 - [Run measurements](#run-measurements)
 - [Evidence contract](#evidence-contract)
 - [CI acceptance](#ci-acceptance)
@@ -93,6 +94,43 @@ Revalidate the recorded restart bundle with:
 ```sh
 go run ./tools/phase5verify -restart-dir=docs/evidence/restart-continuity-2026-10-09
 ```
+
+## OpenTelemetry decision logs
+
+On November 26, 2026, the two-node kind fixture ran on arm64 Linux
+`7.2.12-orbstack-00394-gbecdd6130068`, containerd `2.3.4`, Kubernetes
+`1.36.4`, and Go `1.27.4`. Both kind nodes shared the same Linux VM.
+Each row records a three-second TCP transfer and 1,500 UDP round trips between
+the same Pods. CPU and RSS describe the client node's agent process. Policy
+convergence includes the API update, reconciliation, and metrics polling.
+The enabled scenarios used a 64-record queue to exercise saturation.
+
+| Export | TCP GiB/s | UDP p99 (µs) | Agent CPU cores | Agent RSS (MiB) | Queue high-water | API update to epoch (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Disabled | 8.94 | 18.04 | 0.0032 | 20.4 | — | 304 |
+| Healthy | 9.21 | 18.54 | 0.0097 | 43.2 | 64 | 306 |
+| Collector offline | 9.31 | 40.34 | 0.0065 | 41.6 | 64 | 298 |
+
+The client agent counted 2,915 additional queue drops while the Collector was
+offline. Both agents stayed Ready, and the node-local CLI showed the new
+egress deny. Loki returned a fresh deny after recovery with the same agent
+instances. The selected decision-to-query samples were 1.27 and 1.33 seconds
+for allowed egress and ingress, 1.42 seconds for egress revocation, 20.39
+seconds for ingress revocation, and 8.79 seconds for the post-recovery deny.
+These samples characterize this run, including buffering and query polling.
+[Decision and performance evidence](evidence/otel-flow-logs-2026-11-26/) ·
+[Reproduction steps](development.md#test-layers)
+
+The separate Linux Phase 5 gates passed on a repeat run with CPUs 0 and 1
+after the kind cluster was shut down. The detached-versus-attached packet
+gate measured a maximum TCP regression of 7.06% against its 10% threshold.
+The first run measured 14.57%, and the base revision measured 2.36% in the
+same two-CPU environment after the kind shutdown. The repeat reconciler,
+resource, and continuity checks passed, and all 60,095 flow decisions were
+accounted for. `make verify-performance` validated the repeat bundle.
+[First packet run](evidence/otel-flow-logs-2026-11-26/phase5-packet-first.json) ·
+[Base revision](evidence/otel-flow-logs-2026-11-26/phase5-packet-base.json) ·
+[Repeat packet run](evidence/otel-flow-logs-2026-11-26/phase5-packet-repeat.json)
 
 ## Run measurements
 

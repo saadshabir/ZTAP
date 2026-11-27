@@ -1,0 +1,16 @@
+[
+  {
+    "name": "ztap-control-plane",
+    "kernel": "7.2.12-orbstack-00394-gbecdd6130068",
+    "arch": "arm64",
+    "k8s": "v1.36.4",
+    "runtime": "containerd://2.3.4"
+  },
+  {
+    "name": "ztap-worker",
+    "kernel": "7.2.12-orbstack-00394-gbecdd6130068",
+    "arch": "arm64",
+    "k8s": "v1.36.4",
+    "runtime": "containerd://2.3.4"
+  }
+]

@@ -1,0 +1,21 @@
+{
+  "timestamp_utc": "2026-11-26T20:14:28.606449297Z",
+  "run_id": "local-otel-repeat-20261126",
+  "go_version": "go1.27.4",
+  "goos": "linux",
+  "goarch": "arm64",
+  "cpus": 2,
+  "subjects": 250,
+  "policies": 25,
+  "rules": 2500,
+  "requested_decisions_per_second": 1000,
+  "traffic_pattern": "one alternating allowed/blocked UDP decision per millisecond",
+  "duration_seconds": 60.101248252,
+  "decisions": 60095,
+  "delivered_events": 9762,
+  "rate_limited_events": 50333,
+  "ring_full_events": 0,
+  "accounting_total": 60095,
+  "accounting_balanced": true,
+  "scope": "full 250-subject/2,500-rule real-cgroup fixture with one selected subject generating alternating allowed/blocked UDP decisions"
+}

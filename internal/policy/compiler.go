@@ -83,12 +83,13 @@ const (
 	CgroupResolutionFailureUnsupportedRuntime
 )
 
-// ResolvedPod contains only the pod facts needed by policy compilation. Pods
+// ResolvedPod contains point-in-time pod facts for policy and flow attribution. Pods
 // from the whole cluster participate in peer resolution; Local identifies pods
 // scheduled to this node, whose resolved cgroups can become subjects.
 type ResolvedPod struct {
 	Namespace               string
 	Name                    string
+	UID                     string
 	Labels                  map[string]string
 	PodIPs                  []netip.Addr
 	NamedPorts              map[NamedPort]uint16

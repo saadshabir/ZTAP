@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -37,11 +38,11 @@ func testServer(t *testing.T, handle func(net.Conn)) string {
 
 func TestCheckRequiresLiveEchoAndTimeoutDenial(t *testing.T) {
 	address := testServer(t, echo)
-	if err := check(address, false); err != nil {
-		t.Fatal(err)
+	if port, err := check(address, false); err != nil || port < 1 || port > 65535 {
+		t.Fatalf("live echo returned source port %d, err %v", port, err)
 	}
-	if err := check(address, true); err == nil {
-		t.Fatal("accepted a prohibited handshake")
+	if _, err := check(address, true); !errors.Is(err, errProhibitedHandshake) {
+		t.Fatalf("expected a prohibited handshake error, got %v", err)
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -49,11 +50,11 @@ func TestCheckRequiresLiveEchoAndTimeoutDenial(t *testing.T) {
 	}
 	closed := listener.Addr().String()
 	_ = listener.Close()
-	if err := check(closed, true); err == nil {
+	if _, err := check(closed, true); err == nil || errors.Is(err, errProhibitedHandshake) {
 		t.Fatal("connection refusal was mistaken for an enforced drop")
 	}
 	wrong := testServer(t, func(conn net.Conn) { defer func() { _ = conn.Close() }(); _, _ = fmt.Fprintln(conn, "wrong") })
-	if err := check(wrong, false); err == nil {
+	if _, err := check(wrong, false); err == nil {
 		t.Fatal("accepted the wrong echo")
 	}
 }

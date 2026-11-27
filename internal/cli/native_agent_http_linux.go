@@ -23,6 +23,7 @@ import (
 
 type nativeAgentHTTP struct {
 	server              *http.Server
+	registry            *prometheus.Registry
 	listener            net.Listener
 	errors              chan error
 	stateMu             sync.RWMutex
@@ -82,6 +83,7 @@ func startNativeAgentHTTPWithListener(listen string, supplied net.Listener) (*na
 	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	registry.MustRegister(collectors.NewGoCollector())
 	agent := &nativeAgentHTTP{
+		registry:            registry,
 		listener:            listener,
 		errors:              make(chan error, 1),
 		reason:              "starting",

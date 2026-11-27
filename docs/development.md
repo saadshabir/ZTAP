@@ -180,6 +180,7 @@ bash .github/scripts/disable-kindnet-policy.sh
 export ZTAP_KINDNET_NETWORKPOLICY_DISABLED=1
 bash .github/scripts/install-kind-agent.sh
 bash .github/scripts/verify-multinode-churn.sh
+bash .github/scripts/verify-flow-telemetry.sh
 kind delete cluster --name ztap
 ```
 
@@ -190,6 +191,17 @@ the run; their minimums remain 120 seconds and six cycles. The stream deadline
 is 15 minutes, and evidence defaults to `churn-evidence/` (override with
 `ZTAP_CHURN_EVIDENCE_DIR`). The evidence directory must be empty and the three
 `ztap-churn-*` fixture namespaces must not already exist.
+
+The telemetry fixture uses the same two nodes. It starts with export disabled,
+installs the Collector and Loki example, then enables export on the agents.
+The test requires Python 3 and OpenSSL. It checks Loki results for allowed
+traffic and directional denies. During a Collector outage it checks policy
+changes with real TCP probes, verifies local CLI visibility and queue losses,
+and requires a fresh Loki result after restoring the Collector. The fixture
+also compares cross-node TCP throughput, UDP p99, agent CPU and memory, queue
+depth, and policy convergence with export disabled, healthy, and disconnected.
+Local evidence defaults to `flow-telemetry-evidence/` and can be moved with
+`ZTAP_TELEMETRY_EVIDENCE_DIR`. CI includes it in the multi-node evidence bundle.
 
 The fixed-size binary flow-event decoder has a fuzz target that rejects
 unknown sizes and schemas before decoding and exercises conversion of valid

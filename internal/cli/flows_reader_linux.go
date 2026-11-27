@@ -175,6 +175,10 @@ func (r *mapOwningReader) Available() bool {
 }
 
 func openPinnedFlowReader(bpffsRoot string) (result flow.FlowReader, resultErr error) {
+	return openObservedPinnedFlowReader(bpffsRoot, nil)
+}
+
+func openObservedPinnedFlowReader(bpffsRoot string, onDrop func(string)) (result flow.FlowReader, resultErr error) {
 	if bpffsRoot == "" {
 		bpffsRoot = "/sys/fs/bpf"
 	}
@@ -230,7 +234,7 @@ func openPinnedFlowReader(bpffsRoot string) (result flow.FlowReader, resultErr e
 		return nil, err
 	}
 
-	reader, err := flow.CreateFlowReader(m)
+	reader, err := flow.NewLinuxReader(m)
 	if err != nil {
 		_ = statusMap.Close()
 		if closeErr := m.Close(); closeErr != nil {
@@ -239,6 +243,7 @@ func openPinnedFlowReader(bpffsRoot string) (result flow.FlowReader, resultErr e
 		return nil, fmt.Errorf("creating linux flow reader: %w", err)
 	}
 
+	reader.SetDropObserver(onDrop)
 	return &mapOwningReader{inner: reader, flowMap: m, statusMap: statusMap}, nil
 }
 

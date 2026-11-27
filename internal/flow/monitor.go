@@ -12,6 +12,7 @@ import (
 type subscriber struct {
 	id     uint64
 	ch     chan FlowEvent
+	onDrop func()
 	closed bool
 }
 
@@ -32,7 +33,12 @@ type Monitor struct {
 	readerDone    chan struct{}
 	readerCancel  context.CancelFunc
 	runGeneration uint64
+	onDiscard     func(int)
 }
+
+// SetDiscardObserver reports buffered raw records discarded when stopping.
+// Configure it before starting the monitor.
+func (m *Monitor) SetDiscardObserver(observer func(int)) { m.onDiscard = observer }
 
 // FlowReader is the platform-specific interface for reading flow events.
 type FlowReader interface {
@@ -224,7 +230,7 @@ func (m *Monitor) Err() error {
 // already be running; use SubscribeBeforeStart when a subscriber must be
 // registered before the reader is started.
 func (m *Monitor) Subscribe(ctx context.Context) <-chan FlowEvent {
-	return m.subscribe(ctx, false)
+	return m.SubscribeWithDrops(ctx, false, nil)
 }
 
 // SubscribeBeforeStart registers a subscriber before Start launches the
@@ -232,10 +238,12 @@ func (m *Monitor) Subscribe(ctx context.Context) <-chan FlowEvent {
 // Start and a subsequent Subscribe call. It is closed if the monitor has
 // already been stopped.
 func (m *Monitor) SubscribeBeforeStart(ctx context.Context) <-chan FlowEvent {
-	return m.subscribe(ctx, true)
+	return m.SubscribeWithDrops(ctx, true, nil)
 }
 
-func (m *Monitor) subscribe(ctx context.Context, allowBeforeStart bool) <-chan FlowEvent {
+// SubscribeWithDrops observes full-channel losses for one consumer. onDrop
+// runs during fan-out and must return immediately.
+func (m *Monitor) SubscribeWithDrops(ctx context.Context, allowBeforeStart bool, onDrop func()) <-chan FlowEvent {
 	ch := make(chan FlowEvent, 100)
 	if ctx == nil {
 		// A nil context cannot express cancellation. Do not create an
@@ -252,7 +260,7 @@ func (m *Monitor) subscribe(ctx context.Context, allowBeforeStart bool) <-chan F
 		return ch
 	}
 	m.nextSubID++
-	sub := &subscriber{id: m.nextSubID, ch: ch}
+	sub := &subscriber{id: m.nextSubID, ch: ch, onDrop: onDrop}
 	m.subscribers[sub.id] = sub
 	m.mu.Unlock()
 
@@ -307,6 +315,17 @@ func (m *Monitor) IsRunning() bool {
 
 // processEvents converts raw events and distributes to subscribers.
 func (m *Monitor) processEvents(ctx context.Context, rawEvents <-chan RawFlowEvent, bootTime time.Time, stopCh <-chan struct{}, runGeneration uint64) {
+	discarded := 0
+	if m.onDiscard != nil {
+		defer func() {
+			for range rawEvents {
+				discarded++
+			}
+			if discarded > 0 {
+				m.onDiscard(discarded)
+			}
+		}()
+	}
 	for {
 		select {
 		case <-stopCh:
@@ -335,7 +354,7 @@ func (m *Monitor) processEvents(ctx context.Context, rawEvents <-chan RawFlowEve
 				return
 			}
 
-			event := raw.ToFlowEvent(bootTime)
+			event := observeFlowEvent(raw, bootTime, time.Now(), uptimeNsFunc())
 
 			// Keep the generation check, stats update, and non-blocking
 			// broadcast under one lock. A stale processor from a previous
@@ -343,6 +362,7 @@ func (m *Monitor) processEvents(ctx context.Context, rawEvents <-chan RawFlowEve
 			m.mu.Lock()
 			if !m.running || m.stopCh != stopCh || m.runGeneration != runGeneration {
 				m.mu.Unlock()
+				discarded++
 				return
 			}
 			m.stats.TotalEvents++
@@ -362,13 +382,27 @@ func (m *Monitor) processEvents(ctx context.Context, rawEvents <-chan RawFlowEve
 					select {
 					case sub.ch <- event:
 					default:
-						// Drop event if subscriber is slow
+						if sub.onDrop != nil {
+							sub.onDrop()
+						}
 					}
 				}
 			}
 			m.mu.Unlock()
 		}
 	}
+}
+
+func observeFlowEvent(raw RawFlowEvent, bootTime, observedAt time.Time, observedNS int64) FlowEvent {
+	// Sample the wall and monotonic clocks together. The difference between
+	// two monotonic readings preserves time spent waiting in the ring or in
+	// the reader channel, and CLOCK_MONOTONIC excludes suspend like BPF ktime.
+	if observedNS > 0 && raw.TimestampNs <= uint64(observedNS) { // #nosec G115 -- observedNS is positive
+		bootTime = observedAt.Add(-time.Duration(observedNS))
+	}
+	event := raw.ToFlowEvent(bootTime)
+	event.ObservedAt = observedAt
+	return event
 }
 
 func (m *Monitor) closeSubscribersLocked() {
@@ -381,11 +415,8 @@ func (m *Monitor) closeSubscribersLocked() {
 	m.subscribers = make(map[uint64]*subscriber)
 }
 
-// getBootTime returns the system boot time for converting kernel timestamps.
+// getBootTime anchors records from readers without a per-record clock sample.
 func getBootTime() time.Time {
-	// Kernel timestamps from bpf_ktime_get_ns() are nanoseconds since boot.
-	// We need the boot time to convert to wall clock time.
-	// This is a simplified approach - on Linux we could read /proc/uptime.
 	return time.Now().Add(-time.Duration(uptimeNsFunc()))
 }
 

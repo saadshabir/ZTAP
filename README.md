@@ -114,8 +114,9 @@ sudo ./bin/ztap flows --output json
 sudo ./bin/ztap flows --action blocked --direction egress
 ```
 
-For reading flows inside the DaemonSet, see
-[live flow diagnostics](docs/deployment.md#live-flow-diagnostics).
+For node-local commands and cluster-wide decision logs, see
+[live flow diagnostics](docs/deployment.md#live-flow-diagnostics) and the
+[OpenTelemetry Collector and Loki example](examples/otel-flow-logs/).
 
 ## Measured Linux reference results
 

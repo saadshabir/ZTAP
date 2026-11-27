@@ -21,7 +21,7 @@ func acquireFlowReaderLock(runDir string) (func() error, error) {
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) {
-			return nil, fmt.Errorf("another ZTAP flow reader already holds %s", lockPath)
+			return nil, fmt.Errorf("another ZTAP flow reader already holds %s: %w", lockPath, unix.EWOULDBLOCK)
 		}
 		return nil, fmt.Errorf("lock flow reader run %q: %w", lockPath, err)
 	}

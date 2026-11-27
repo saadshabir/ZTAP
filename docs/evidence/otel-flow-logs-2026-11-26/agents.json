@@ -1,0 +1,14 @@
+[
+  {
+    "name": "ztap-agent-6vn5c",
+    "uid": "721e2bd4-b766-4372-8fd1-f81a001fe12f",
+    "image_id": "docker.io/library/import-2026-11-26@sha256:434c17e2b104e06681017fa76d882ce5085ac2337480ddbcf536515ea5c97b57",
+    "restart_count": 0
+  },
+  {
+    "name": "ztap-agent-mmrbq",
+    "uid": "aadd527a-45e5-4245-86e1-13f9156f6097",
+    "image_id": "docker.io/library/import-2026-11-26@sha256:434c17e2b104e06681017fa76d882ce5085ac2337480ddbcf536515ea5c97b57",
+    "restart_count": 0
+  }
+]

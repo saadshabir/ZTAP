@@ -18,10 +18,11 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "check", "serve, check, stream, or reply-state")
+	mode := flag.String("mode", "check", "serve, serve-flow, check, stream, reply-state, or measure-flow")
 	address := flag.String("address", "", "TCP target (serve listens on 8080 and 8081)")
 	denied := flag.String("denied-address", "", "stream: address that must never accept TCP")
 	deny := flag.Bool("deny", false, "check: require a failed TCP handshake")
+	printSourcePort := flag.Bool("print-source-port", false, "check: print the local TCP port after a successful echo")
 	stop := flag.String("stop-file", "", "stream: finish after this marker appears")
 	revoke := flag.String("revoke-file", "", "stream: marker written after policy revocation converges")
 	revoking := flag.String("revoking-file", "", "stream: end availability measurement before deliberate revocation")
@@ -32,9 +33,17 @@ func main() {
 	var err error
 	switch *mode {
 	case "serve":
-		err = serve()
+		err = serve(false)
+	case "serve-flow":
+		err = serve(true)
+	case "measure-flow":
+		err = measureFlow(*address, *duration, os.Stdout)
 	case "check":
-		err = check(*address, *deny)
+		var sourcePort int
+		sourcePort, err = check(*address, *deny)
+		if err == nil && *printSourcePort && sourcePort != 0 {
+			fmt.Println(sourcePort)
+		}
 	case "stream":
 		err = stream(context.Background(), streamOptions{
 			address: *address, denied: *denied, stopFile: *stop, revokeFile: *revoke, revokingFile: *revoking,
@@ -47,12 +56,23 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if errors.Is(err, errProhibitedHandshake) {
+			os.Exit(3)
+		}
 		os.Exit(1)
 	}
 }
 
-func serve() error {
-	errorsCh := make(chan error, 2)
+func serve(withUDP bool) error {
+	errorsCh := make(chan error, 3)
+	if withUDP {
+		udp, err := net.ListenPacket("udp4", ":8081")
+		if err != nil {
+			return err
+		}
+		defer func() { _ = udp.Close() }()
+		go func() { errorsCh <- echoUDP(udp) }()
+	}
 	for _, port := range []string{":8080", ":8081"} {
 		listener, err := net.Listen("tcp4", port)
 		if err != nil {
@@ -77,8 +97,12 @@ func echo(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
-		if scanner.Text() == "push" {
+		switch scanner.Text() {
+		case "push":
 			push(conn)
+			return
+		case "bulk":
+			bulk(conn)
 			return
 		}
 		if _, err := fmt.Fprintln(conn, scanner.Text()); err != nil {
@@ -98,7 +122,9 @@ func push(conn net.Conn) {
 	}
 }
 
-func check(address string, deny bool) error {
+var errProhibitedHandshake = errors.New("prohibited TCP handshake succeeded")
+
+func check(address string, deny bool) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp4", address)
@@ -106,28 +132,28 @@ func check(address string, deny bool) error {
 		// Refusals and routing/DNS errors are broken controls, not proof of
 		// enforcement. A policy drop must time out the handshake.
 		if deny && isTimeout(err) {
-			return nil
+			return 0, nil
 		}
-		return err
+		return 0, err
 	}
 	defer func() { _ = conn.Close() }()
 	if deny {
-		return errors.New("prohibited TCP handshake succeeded")
+		return 0, errProhibitedHandshake
 	}
 	if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
-		return err
+		return 0, err
 	}
 	if _, err := io.WriteString(conn, "probe\n"); err != nil {
-		return err
+		return 0, err
 	}
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if line != "probe\n" {
-		return fmt.Errorf("unexpected echo %q", line)
+		return 0, fmt.Errorf("unexpected echo %q", line)
 	}
-	return nil
+	return conn.LocalAddr().(*net.TCPAddr).Port, nil
 }
 
 type streamOptions struct {

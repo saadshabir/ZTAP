@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
+	"golang.org/x/sys/unix"
 )
 
 // LinuxReader reads flow events from the eBPF ring buffer on Linux.
@@ -23,7 +23,11 @@ type LinuxReader struct {
 	newReader func(*ebpf.Map) (linuxRingReader, error)
 	running   bool
 	stopCh    chan struct{}
+	onDrop    func(string)
 }
+
+// SetDropObserver configures loss reporting before the reader starts.
+func (r *LinuxReader) SetDropObserver(observer func(string)) { r.onDrop = observer }
 
 type linuxRingReader interface {
 	Read() (ringbuf.Record, error)
@@ -152,15 +156,20 @@ func (r *LinuxReader) Start(ctx context.Context, eventCh chan<- RawFlowEvent) er
 			// Parse the raw event
 			event, err := parseRawEvent(record.RawSample)
 			if err != nil {
-				slog.Default().Warn("failed to parse flow event", "error", err)
+				if r.onDrop != nil {
+					r.onDrop("decode")
+				} else {
+					slog.Default().Warn("failed to parse flow event", "error", err)
+				}
 				continue
 			}
-
 			// Send to channel (non-blocking)
 			select {
 			case eventCh <- event:
 			default:
-				// Drop if channel is full
+				if r.onDrop != nil {
+					r.onDrop("reader_full")
+				}
 			}
 		}
 	}
@@ -212,19 +221,14 @@ func CreateFlowReader(flowEventsMap *ebpf.Map) (FlowReader, error) {
 	return NewLinuxReader(flowEventsMap)
 }
 
-// GetLinuxUptimeNs returns uptime in nanoseconds on Linux.
-func GetLinuxUptimeNs() int64 {
-	data, err := os.ReadFile("/proc/uptime")
-	if err != nil {
+func linuxMonotonicNS() int64 {
+	var now unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &now); err != nil {
 		return 0
 	}
-	var uptime float64
-	if _, err := fmt.Sscanf(string(data), "%f", &uptime); err != nil {
-		return 0
-	}
-	return int64(uptime * 1e9)
+	return now.Nano()
 }
 
 func init() {
-	uptimeNsFunc = GetLinuxUptimeNs
+	uptimeNsFunc = linuxMonotonicNS
 }
