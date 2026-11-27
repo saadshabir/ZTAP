@@ -54,8 +54,9 @@ ID. Keep both DaemonSets and their downward-API `POD_UID` environment values.
 
 ## Preflight
 
-From the workstation you will install from, use the same kubeconfig and
-context for preflight and `kubectl apply`.
+From the installation workstation, replace `YOUR_CONTEXT` throughout this
+guide with the kubeconfig context for the target cluster. Use that same
+kubeconfig and context through upgrade, rollback, and removal.
 
 ```sh
 make build
@@ -201,13 +202,15 @@ Replace both instances of `ztap:dev` in `ztap-agent.yaml` with
 
 ## Upgrade
 
-Build and push the updated source image, then update your prepared manifest
-to the new immutable digest. Apply that file:
+Keep the current digest-pinned manifest for rollback. Build and push the
+updated image, set both DaemonSet images to the new digest in a copy of the
+manifest, and check both rollouts.
 
 ```sh
-kubectl apply -f ztap-agent.yaml
-kubectl -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
-kubectl -n ztap-system get pods -l app=ztap-agent -o wide
+kubectl --context YOUR_CONTEXT apply -f ztap-agent.yaml
+kubectl --context YOUR_CONTEXT -n ztap-system rollout status daemonset/ztap-node-init --timeout=5m
+kubectl --context YOUR_CONTEXT -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
+kubectl --context YOUR_CONTEXT -n ztap-system get pods -l app=ztap-agent -o wide
 ```
 
 The rolling update uses `maxUnavailable: 1` and `maxSurge: 0`. Normal exit,
@@ -386,12 +389,20 @@ ztap agent \
 | Flag | Default | Purpose |
 | --- | --- | --- |
 | `--node-name` | Required | Exact Kubernetes node name; supplied by the Downward API in the manifest |
-| `--kubeconfig` | Empty | Uses in-cluster credentials; pass a file path for a node-local development run |
+| `--kubeconfig` | Empty | Uses in-cluster credentials by default. A file path selects credentials and cluster for Kubernetes API access. |
 | `--cgroup-root` | `/sys/fs/cgroup` | Cgroup v2 root; manifest overrides it to `/host/sys/fs/cgroup` |
 | `--bpffs-root` | `/sys/fs/bpf` | Mounted bpffs root; manifest overrides it to `/host/sys/fs/bpf` |
 | `--run-dir` | `/run/ztap` | Shared node-agent and flow-reader lock directory |
 | `--listen` | `:9090` | Health, readiness, and metrics listener |
 | `--dry-run` | `false` | Compiles snapshots without loading or attaching eBPF; never reports enforcement readiness |
+
+Run enforcement in the agent DaemonSet. At startup the agent reads the
+initializer's bootstrap record and verifies its own process against the
+container cgroup for its Downward API `POD_UID`. For development from a
+Linux node shell, use `--dry-run` with a kubeconfig for the target cluster
+and that node's Kubernetes name. A dry run still takes the agent lock and
+opens the status listener. Give it a separate protected `--run-dir` and
+an unused `--listen` address if the DaemonSet is running there.
 
 The status listener has no authentication. Restrict access through the cluster
 network configuration or choose a narrower listen address for development.
@@ -409,10 +420,10 @@ Allowed`. During graceful shutdown, `/readyz` changes to HTTP 503 with reason
 
 The manifest annotates the Pod for a Prometheus-compatible scraper. Port
 forward the agent Pod when diagnosing a local installation. Set `POD` to
-an agent name from `kubectl -n ztap-system get pods -o wide`:
+an agent name from `kubectl --context YOUR_CONTEXT -n ztap-system get pods -o wide`:
 
 ```sh
-kubectl -n ztap-system port-forward "pod/$POD" 9090:9090
+kubectl --context YOUR_CONTEXT -n ztap-system port-forward "pod/$POD" 9090:9090
 ```
 
 Keep port forwarding running, and use a second terminal:
@@ -455,9 +466,9 @@ Select the agent Pod on the workload's node using `get pods -o wide`, set
 `POD` to its name, and invoke the binary directly inside the scratch image:
 
 ```sh
-kubectl -n ztap-system exec -i "$POD" -- \
+kubectl --context YOUR_CONTEXT -n ztap-system exec -i "$POD" -- \
   /ztap flows --bpffs-root=/host/sys/fs/bpf --output json
-kubectl -n ztap-system exec -i "$POD" -- \
+kubectl --context YOUR_CONTEXT -n ztap-system exec -i "$POD" -- \
   /ztap flows --bpffs-root=/host/sys/fs/bpf --action blocked --direction egress
 ```
 
@@ -535,11 +546,21 @@ Use the agent's existing `/metrics` endpoint to distinguish loss stages.
 
 ## Migration warning
 
-The old `ZtapNetworkPolicy` CRD and operator are not consumed by this agent.
-Export any objects that need translation before deleting the CRD: CRD deletion
-removes its stored custom resources. Stop the old operator and agent before
-starting this DaemonSet, then apply native `NetworkPolicy` objects and verify
-readiness on every node.
+The new agent reads native `NetworkPolicy` objects. It can report Ready
+after applying an empty snapshot, which leaves ordinary workloads unisolated.
+
+1. Export the old `ZtapNetworkPolicy` objects while the CRD still exists.
+   Translate them into native policies and run `ztap validate --file` on
+   each file. Deleting the CRD also deletes its stored objects.
+2. Drain the affected workloads or gate their traffic independently of ZTAP
+   before stopping the old operator and agent. Keep that protection in place
+   throughout the cutover.
+3. Apply the translated policies with `kubectl --context YOUR_CONTEXT apply -f <policy-file>`.
+   Install both DaemonSets and verify rollout and agent readiness on every
+   affected node using the [install procedure](#install).
+4. From representative Pods selected by the translated policies, verify an
+   expected allow and an expected deny for each affected traffic direction.
+   Keep ordinary workload traffic gated until these checks pass, then restore it.
 
 ## Troubleshooting
 
@@ -562,14 +583,6 @@ readiness on every node.
 
 ## Removal and rollback
 
-To roll back an image or flag change, apply the previous digest-pinned
-manifest, or use the retained DaemonSet revision:
-
-```sh
-kubectl -n ztap-system rollout undo daemonset/ztap-agent
-kubectl -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
-```
-
 Only roll back to a persistence-aware image with compatible ABI and packet
 semantics. The historical process-owned image is not a supported live rollback.
 Drain or gate traffic before an incompatible migration.
@@ -580,12 +593,50 @@ verify that every affected node has reconciled and retired the old slot.
 Older images refuse to recover pinned slots containing range entries and
 leave the existing enforcement in place.
 
-Deleting the DaemonSets leaves enforcement active, including the unknown
-workload guard. Intentional removal has two steps:
+For an image rollback, apply the saved manifest containing the previous
+digest for both the bootstrap initializer and the agent. Use the path to
+your saved manifest in the first command.
 
 ```sh
-kubectl -n ztap-system delete daemonset ztap-agent ztap-node-init
-kubectl -n ztap-system wait --for=delete pod -l app=ztap-agent --timeout=5m
+kubectl --context YOUR_CONTEXT apply -f ztap-agent.previous.yaml
+kubectl --context YOUR_CONTEXT -n ztap-system rollout status daemonset/ztap-node-init --timeout=5m
+kubectl --context YOUR_CONTEXT -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
+```
+
+If the last rollout changed only agent flags, restore the preceding agent
+revision and check its rollout.
+
+```sh
+kubectl --context YOUR_CONTEXT -n ztap-system rollout undo daemonset/ztap-agent
+kubectl --context YOUR_CONTEXT -n ztap-system rollout status daemonset/ztap-agent --timeout=5m
+```
+
+### Full uninstall
+
+On each node using the [systemd reboot guard](#reboot-protection-on-systemd-nodes),
+drain the node before removing the guard dependencies. Otherwise the next
+boot reinstalls the guard after its agent is gone, leaving ordinary Pods
+blocked. For the supplied units, remove the two ZTAP drop-ins and the guard
+service, then reload systemd. Use the actual unit names if you customized
+the installation.
+
+```sh
+sudo rm -f /etc/systemd/system/containerd.service.d/50-ztap-boot-guard.conf \
+  /etc/systemd/system/kubelet.service.d/50-ztap-boot-guard.conf \
+  /etc/systemd/system/ztap-boot-guard.service
+sudo systemctl daemon-reload
+systemctl cat containerd.service kubelet.service
+```
+
+Check that neither effective runtime unit still requires or invokes the
+guard. Preserve site-managed slice and kubelet settings, and keep the
+matching ZTAP binary available for cleanup. The pinned guard continues
+enforcing during the current boot.
+
+Delete both DaemonSets and wait for their Pods to exit.
+
+```sh
+kubectl --context YOUR_CONTEXT -n ztap-system delete daemonset ztap-agent ztap-node-init --cascade=foreground --timeout=5m
 ```
 
 Then run the matching Linux binary with administrator privileges on **each**
@@ -598,17 +649,15 @@ sudo /path/to/ztap cleanup --bpffs-root=/sys/fs/bpf --run-dir=/run/ztap
 Cleanup acquires the agent lock, refuses a competing agent, verifies ownership
 before mutation, preserves unrelated objects, and supports retry after partial
 removal. Run it before deleting the deployment's RBAC and admission resources.
-For a complete uninstall, then delete the manifest you installed:
+After cleanup succeeds on every node, delete the remaining objects using
+the manifest you installed. This deletes `ztap-system` and all resources in
+that namespace. For a registry-backed installation, substitute the path to
+your digest-pinned manifest.
 
 ```sh
-kubectl delete -f deployments/kubernetes/ztap-agent.yaml
+kubectl --context YOUR_CONTEXT delete --ignore-not-found -f deployments/kubernetes/ztap-agent.yaml
 ```
 
-If you installed a registry-backed copy, use `kubectl delete -f ztap-agent.yaml`
-with that same file instead.
-
-This also deletes `ztap-system` and any other resources in that namespace.
-Deleting ZTAP does not delete your `NetworkPolicy` objects in other namespaces;
-they remain stored. After explicit node cleanup they have no ZTAP enforcement.
-The manifest is the complete shipped deployment surface; both DaemonSets use
-the same runtime image.
+The `NetworkPolicy` objects in other namespaces remain stored. After node
+cleanup, ZTAP no longer enforces them. Return drained nodes to service when
+they are ready for the intended post-uninstall network policy.
